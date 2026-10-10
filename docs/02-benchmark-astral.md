@@ -114,3 +114,44 @@ External check against DIA-NN 1.7.12's 1% FDR apexes (`scripts/validate_calibrat
 - Traces with self-calibration vs DIA-NN on run 01: MS2 median r = 1.000000 (91.5% of traces r > 0.9),
   MS1 0.9986 — unchanged from the DIA-NN-anchored configuration.
 - Full library (3.49 M precursors), self-calibrated: 98.7 s, 3.2 GiB peak RSS on run 01.
+
+## Shared recalibrated library (all three tools on one DIALibGen library) — `scripts/benchmark_refined.sh`
+
+Per run: DIA-NN 1.7.12 searches the predicted DIALibGen human library (round 1); `DIALibGen -mode refine`
+writes the observed RT of its 1% FDR identifications into the library (`-q_global 1 -q_protein 1`; the 1.7.12
+report is converted to Parquet with a `Decoy = 0` column, since 1.7.12 reports targets only); that refined
+library (RT in observed run minutes) is the single input of all three tools:
+DIA-NN 1.7.12 round 2 (`--xic 60`), DIATraceExtractor (`-rt_mode minutes`, ±60 s, all fragments,
+tolerance = DIA-NN's optimised mass accuracy), OpenSwathWorkflow (RT in seconds, identity, `-rt_extraction_window 120`,
+full width = 2 × tolerance). Extractor A = DIA-NN rules (max, mass offsets measured from the run via
+`-mass_calibration auto`); B = OpenSWATH rules (sum, no correction, unit isotope spacing).
+
+| run | refined library | DIA-NN round 2 IDs (1%) | tolerance | extractor mass offsets MS2 / MS1 |
+|---|---|---|---|---|
+| 01 | 84,076 | 83,933 | ±5.94 ppm | −2.73 / +1.20 ppm |
+| 02 | 83,211 | 82,868 | ±6.95 ppm | −1.91 / +1.10 ppm |
+| 03 | 83,907 | 83,724 | ±5.75 ppm | −1.59 / +1.26 ppm |
+
+Agreement (median over traces):
+
+| pair | level | run 01 | run 02 | run 03 |
+|---|---|---|---|---|
+| extractor A vs DIA-NN, Pearson r (L1) | MS2 | **1.000000** (0.00002) | **1.000000** (0.00002) | **1.000000** (0.00002) |
+| extractor A vs DIA-NN, Pearson r | MS1 M+0 | 0.994 | 0.955 | 0.997 |
+| extractor B vs OpenSWATH, Pearson r (L1) | MS2 | **0.99988** (0.021) | **0.99988** (0.020) | **0.99988** (0.020) |
+| extractor B vs OpenSWATH, Pearson r | MS1 M+0..2 | 0.99979 | 0.99979 | 0.99979 |
+| DIA-NN vs OpenSWATH (own rules), Pearson r (L1) | MS2 | 0.973 (0.23) | 0.998 (0.054) | 0.994 (0.094) |
+
+Cost per run on the refined library (64 threads; wall / peak RSS):
+
+| run | DIATraceExtractor A | DIA-NN 1.7.12 round 2 (search) | OpenSwathWorkflow (extraction + scoring) |
+|---|---|---|---|
+| 01 | 42 s / 2.2 GiB | 34 s / 3.2 GiB | 190 s / 14.1 GiB |
+| 02 | 38 s / 2.2 GiB | 61 s / 3.1 GiB | 188 s / 13.9 GiB |
+| 03 | 37 s / 2.1 GiB | 27 s / 3.2 GiB | 188 s / 14.0 GiB |
+
+Of the extractor's ~38 s, ~34 s is the serial mzML parse; library load and extraction of ~84 K precursors
+(1.2 M traces) take ~3 s. MS1 vs DIA-NN is lower than MS2 because DIA-NN 1.7.12 extracts MS1 at the
+uncorrected precursor m/z (`ms1_XIC` queries `mz`, not the corrected `query_mz`) while extractor A applies the
+measured MS1 offset (largest on run 02 with the widest tolerance); with OpenSWATH's rules the extractor
+reproduces OpenSWATH's MS1 traces to 0.9998.

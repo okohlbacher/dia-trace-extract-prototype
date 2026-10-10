@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Three-way trace benchmark for one ProteoBench Astral run:
 #   DIA-NN 1.7.12 (patched --xic export) search -> RT anchors + IDs + reference traces
-#   DIATraceExtractor: mass-offset scan, DIA-NN-matched extraction (A), OpenSWATH-matched extraction (B)
+#   DIATraceExtractor: mass-offset scan, DIA-NN-matched extraction (A), OpenSWATH-matched extraction (B),
+#   self-calibrated extraction (C: no DIA-NN anchors or offsets)
 #   OpenSwathWorkflow on identical coordinates -> .xic -> trace layout
 #   compare_traces.py for A (vs DIA-NN and OpenSWATH) and B (vs OpenSWATH)
 # Usage: benchmark_run.sh 01|02|03 [threads]
@@ -70,6 +71,12 @@ echo "DIA-NN optimised mass accuracy: $ACC ppm" | tee -a $C/mass_offsets.txt
 /usr/bin/time -v $X $COMMON -top_fragments 0 -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -aggregation sum \
     -ms1_isotope_spacing unit -threads $THREADS -out $C/odiaB.parquet -out_stats $C/odiaB.json > $C/odiaB.log 2>&1
 
+# 4c. (C) self-calibrated: RT map and mass offsets from the run itself (panel from the whole library),
+#     DIA-NN-matched rules; the DIA-NN IDs only select which precursors to export.
+/usr/bin/time -v $X -in $MZML -lib $LIB -ids $D17/ids.txt -top_fragments 0 -rt_mode auto -mass_calibration auto \
+    -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -aggregation max -threads $THREADS \
+    -out $C/odiaC.parquet -out_stats $C/odiaC.json -out_calibration $C/odiaC_anchors.tsv > $C/odiaC.log 2>&1
+
 # 5. OpenSWATH on identical coordinates (library built from the extractor's traces)
 FULL=$($PY -c "print(2*float('$ACC'))")
 $PY $P/scripts/traces_to_openswath_tsv.py $C/odiaB.parquet $C/osw_lib.tsv
@@ -85,4 +92,10 @@ $PY $P/scripts/compare_traces.py --odia $C/odiaA.parquet --axes $C/odiaA.axes.pa
     --openswath $C/osw_traces.parquet --out $C/cmpA.tsv > $C/cmpA.out 2>&1
 $PY $P/scripts/compare_traces.py --odia $C/odiaB.parquet --axes $C/odiaB.axes.parquet \
     --openswath $C/osw_traces.parquet --out $C/cmpB.tsv > $C/cmpB.out 2>&1
-echo "== run $RUN"; cat $C/mass_offsets.txt; tail -7 $C/cmpA.out; tail -3 $C/cmpB.out
+$PY $P/scripts/compare_traces.py --odia $C/odiaC.parquet --axes $C/odiaC.axes.parquet --diann $D17/diann_xic.parquet \
+    --out $C/cmpC.tsv > $C/cmpC.out 2>&1
+$PY $P/scripts/validate_calibration.py $D17/report.tsv $C/odiaC.parquet $C/odiaC_anchors.tsv > $C/calC.out 2>&1
+echo "== run $RUN"; cat $C/mass_offsets.txt; grep Calibration $C/odiaC.log | cut -c1-200
+echo "-- A (DIA-NN anchors + offsets) vs DIA-NN and OpenSWATH"; tail -7 $C/cmpA.out
+echo "-- B (OpenSWATH rules) vs OpenSWATH"; tail -3 $C/cmpB.out
+echo "-- C (self-calibrated) vs DIA-NN"; tail -3 $C/cmpC.out; cat $C/calC.out
