@@ -17,6 +17,7 @@ find_package(OpenMS CONFIG REQUIRED)
 find_package(Arrow CONFIG REQUIRED)
 find_package(Parquet CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(ZLIB REQUIRED)
 message(STATUS "OpenMS ${OpenMS_VERSION} (${OpenMS_DIR}); Arrow ${Arrow_VERSION}")
 
 if(TARGET Arrow::arrow_shared)
@@ -32,6 +33,7 @@ endif()
 
 add_library(odia_traces STATIC
   src/Library.cpp
+  src/MzMLFast.cpp
   src/RtMap.cpp
   src/RunGrid.cpp
   src/ArrowPool.cpp
@@ -49,7 +51,7 @@ if(NOT NLOHMANN_JSON_INCLUDE_DIR)
   message(FATAL_ERROR "nlohmann/json.hpp not found; set NLOHMANN_JSON_INCLUDE_DIR")
 endif()
 target_include_directories(odia_traces SYSTEM PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
-target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX)
+target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX ZLIB::ZLIB)
 target_compile_options(odia_traces PRIVATE -Wall -Wextra)
 
 add_executable(DIATraceExtractor src/DIATraceExtractor.cpp)

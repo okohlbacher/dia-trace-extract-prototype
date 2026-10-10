@@ -26,6 +26,17 @@ namespace ODIA
   {
   }
 
+  std::pair<std::size_t, std::size_t> Extractor::ms1Range_(double rt_center, std::size_t lo, std::size_t hi) const
+  {
+    if (!opt_.ms1_scan_axis) { return {lo, hi}; }
+    const auto& t = grid_.ms1.rt;
+    if (hi <= lo || t.empty()) { return {0, 0}; }
+    if (opt_.rt_half_window <= 0.0) { return {0, t.size()}; }
+    const auto b = std::lower_bound(t.begin(), t.end(), rt_center - opt_.rt_half_window) - t.begin();
+    const auto e = std::upper_bound(t.begin(), t.end(), rt_center + opt_.rt_half_window) - t.begin();
+    return {static_cast<std::size_t>(b), static_cast<std::size_t>(std::max(b, e))};
+  }
+
   Extractor::Plan Extractor::plan(const Library& lib) const
   {
     Plan plan;
@@ -69,7 +80,8 @@ namespace ODIA
         for (std::size_t k = b; k < e; ++k)
         {
           const auto [lo, hi] = cycleRange_(assignments[k].rt_center);
-          runs.push_back(hi > lo ? (lib.fragmentsOf(assignments[k].precursor) + n_iso) * (hi - lo) : 0);
+          const auto [m0, m1] = ms1Range_(assignments[k].rt_center, lo, hi);
+          runs.push_back(hi > lo ? lib.fragmentsOf(assignments[k].precursor) * (hi - lo) + n_iso * (m1 - m0) : 0);
         }
         unit.blocks = TraceArena::blocksFor(runs, opt_.block_floats);
       }
@@ -145,7 +157,11 @@ namespace ODIA
         continue;
       }
       const std::size_t T = r.cycles;
-      float* v = r.values = out.arena.alloc((r.fragments + r.isotopes) * T);
+      const auto [m0, m1] = ms1Range_(as.rt_center, lo, hi);
+      r.ms1_begin = static_cast<std::uint32_t>(m0);
+      r.ms1_count = static_cast<std::uint32_t>(m1 - m0);
+      const std::size_t M = r.ms1_count;
+      float* v = r.values = out.arena.alloc(r.fragments * T + r.isotopes * M);
 
       // --- MS2: one tile, F x T, gathered cell by cell from this window's lane.
       frag.clear();
@@ -166,9 +182,30 @@ namespace ODIA
         lookups += frag.size();
       }
 
-      // --- MS1: isotopes at the MS1 scans bracketing the cycle range, interpolated linearly
-      // onto the global axis (MS1 is not acquired once per cycle).
-      if (n_iso > 0 && !ms1.rt.empty())
+      // --- MS1 isotopes. Scan axis: the raw value at every MS1 scan in the window. Otherwise: the MS1 scans
+      // bracketing the cycle range, interpolated linearly onto the global axis (MS1 is not acquired once per
+      // cycle).
+      float* v1 = v + static_cast<std::size_t>(r.fragments) * T;
+      if (n_iso > 0 && !ms1.rt.empty() && M > 0 && opt_.ms1_scan_axis)
+      {
+        const double z = opt_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib.charge[p]);
+        iso.clear();
+        for (int i = 0; i < n_iso; ++i)
+        {
+          iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
+        }
+        for (std::size_t j = m0; j < m1; ++j)
+        {
+          const std::size_t a = ms1.peaks.offset[j], b = ms1.peaks.offset[j + 1];
+          std::size_t pos = a;
+          for (int i = 0; i < n_iso; ++i)
+          {
+            v1[i * M + (j - m0)] = aggregate_(ms1.peaks.mz.data(), ms1.peaks.intensity.data(), a, b, iso[i].lo, iso[i].hi, pos);
+          }
+          lookups += n_iso;
+        }
+      }
+      else if (n_iso > 0 && !ms1.rt.empty())
       {
         const double t0 = grid_.cycle_rt[lo], t1 = grid_.cycle_rt[hi - 1];
         auto j0 = static_cast<std::size_t>(std::upper_bound(ms1.rt.begin(), ms1.rt.end(), t0) - ms1.rt.begin());
@@ -205,7 +242,7 @@ namespace ODIA
           for (int i = 0; i < n_iso; ++i)
           {
             const float ya = ms1_at[(ja - j0) * n_iso + i], yb = ms1_at[(jb - j0) * n_iso + i];
-            v[(r.fragments + i) * T + (c - lo)] = static_cast<float>(ya + w * (yb - ya));
+            v1[i * M + (c - lo)] = static_cast<float>(ya + w * (yb - ya));
           }
         }
       }
@@ -220,7 +257,7 @@ namespace ODIA
     {
       stats_.traces += r.fragments + r.isotopes;
       stats_.ms2_points += static_cast<std::uint64_t>(r.fragments) * r.cycles;
-      stats_.ms1_points += static_cast<std::uint64_t>(r.isotopes) * r.cycles;
+      stats_.ms1_points += static_cast<std::uint64_t>(r.isotopes) * r.ms1_count;
       stats_.empty_range += r.cycles == 0;
     }
   }

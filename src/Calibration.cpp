@@ -43,8 +43,38 @@ namespace ODIA
       return sxx > 0 && syy > 0 ? sxy / std::sqrt(sxx * syy) : std::numeric_limits<double>::quiet_NaN();
     }
 
+    /// Median and MAD-based sigma, unweighted (the intensities are ignored), plus 5 x the 70th percentile of
+    /// the absolute residuals around the median.
+    struct Centre { double median = 0, sigma = 0, accuracy = 0; };
+    Centre robustCentre(std::vector<std::pair<double, double>> v)
+    {
+      Centre c;
+      if (v.empty()) { return c; }
+      std::vector<double> x;
+      x.reserve(v.size());
+      for (const auto& [val, w] : v) { x.push_back(val); }
+      std::sort(x.begin(), x.end());
+      const auto q = [](const std::vector<double>& s, double f) { return s[static_cast<std::size_t>(f * (s.size() - 1) + 0.5)]; };
+      c.median = q(x, 0.5);
+      for (auto& val : x) { val = std::fabs(val - c.median); }
+      std::sort(x.begin(), x.end());
+      c.sigma = 1.4826 * q(x, 0.5);
+      c.accuracy = 5.0 * q(x, 0.7);
+      return c;
+    }
+
+    /// Quantile of |value| (values already centred).
+    double robustAbsQuantile(const std::vector<std::pair<double, double>>& v, double f)
+    {
+      std::vector<double> x;
+      for (const auto& [val, w] : v) { x.push_back(std::fabs(val)); }
+      if (x.empty()) { return 0.0; }
+      std::sort(x.begin(), x.end());
+      return x[static_cast<std::size_t>(f * (x.size() - 1) + 0.5)];
+    }
+
     /// Weighted median and weighted MAD-based sigma.
-    std::pair<double, double> weightedCentre(std::vector<std::pair<double, double>> v)
+    [[maybe_unused]] std::pair<double, double> weightedCentre(std::vector<std::pair<double, double>> v)
     {
       if (v.empty()) { return {0.0, 0.0}; }
       auto wmedian = [](std::vector<std::pair<double, double>>& x) {
@@ -187,13 +217,22 @@ namespace ODIA
       }
       if (!out.accepted) { return out; }
 
-      // Mass errors at the apex: observed m/z of the most intense centroid per fragment.
+      // Mass errors at the apex: observed m/z of the most intense centroid per fragment, for fragments with at
+      // least 10% of the anchor's strongest apex signal (a weak "fragment" is often a random centroid inside the
+      // wide search window, which would inflate the residual quantiles behind the measured accuracy).
       const std::size_t c = out.anchor.apex_cycle;
       const std::size_t a = lane.peaks.offset[c], b = lane.peaks.offset[c + 1];
+      std::vector<std::pair<float, MzFixed>> apex(F);
+      float strongest = 0;
       for (std::size_t f = 0; f < F; ++f)
       {
-        const auto [v, m] = maxPeak(lane.peaks, a, b, bounds[f].first, bounds[f].second);
-        if (v <= 0) { continue; }
+        apex[f] = maxPeak(lane.peaks, a, b, bounds[f].first, bounds[f].second);
+        strongest = std::max(strongest, apex[f].first);
+      }
+      for (std::size_t f = 0; f < F; ++f)
+      {
+        const auto [v, m] = apex[f];
+        if (v <= 0 || v < 0.1f * strongest) { continue; }
         const double t = lib.fragment_mz[f0 + f];
         out.ms2_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v});
       }
@@ -370,19 +409,40 @@ namespace ODIA
     if (res.anchors.size() < 50) { throw std::runtime_error("calibration: too few stage-2 anchors"); }
     double sigma2 = 0;
     res.rt_map = robustFit(res.anchors, opt, sigma2);
+    // Mass errors from anchors that fit the RT model. The accuracy (spread) is taken from the anchors that also
+    // pass the strict co-elution criteria when there are enough of them: with a full predicted library some
+    // relaxed anchors are false (a co-eluting peak matched to an absent peptide), and their mass errors spread
+    // over the whole search window -- harmless for the median offset, not for the 70th percentile.
+    std::vector<std::pair<double, double>> ms2_strict, ms1_strict;
     for (std::size_t i = 0; i < stage2.size(); ++i)
     {
-      if (!res.anchors[i].used) { continue; }   // mass errors from anchors that fit the RT model
+      if (!res.anchors[i].used) { continue; }
       ms2_ppm.insert(ms2_ppm.end(), stage2[i].ms2_ppm.begin(), stage2[i].ms2_ppm.end());
       if (stage2[i].ms1_ppm.second > 0) { ms1_ppm.push_back(stage2[i].ms1_ppm); }
+      if (res.anchors[i].correlation >= opt.strict_min_correlation && res.anchors[i].cosine >= opt.strict_min_cosine)
+      {
+        ms2_strict.insert(ms2_strict.end(), stage2[i].ms2_ppm.begin(), stage2[i].ms2_ppm.end());
+        if (stage2[i].ms1_ppm.second > 0) { ms1_strict.push_back(stage2[i].ms1_ppm); }
+      }
     }
     std::vector<double> absres;
     for (const auto& a : res.anchors) { if (a.used) { absres.push_back(std::fabs(a.residual)); ++res.used; } }
     res.rt_residual_p50 = quantile(absres, 0.50);
     res.rt_residual_p95 = quantile(absres, 0.95);
     res.rt_residual_p99 = quantile(absres, 0.99);
-    std::tie(res.ms2_offset_ppm, res.ms2_sigma_ppm) = weightedCentre(ms2_ppm);
-    std::tie(res.ms1_offset_ppm, res.ms1_sigma_ppm) = weightedCentre(ms1_ppm);
+    const Centre c2 = robustCentre(ms2_ppm), c1 = robustCentre(ms1_ppm);
+    res.ms2_offset_ppm = c2.median; res.ms2_sigma_ppm = c2.sigma; res.ms2_accuracy_ppm = c2.accuracy;
+    res.ms1_offset_ppm = c1.median; res.ms1_sigma_ppm = c1.sigma; res.ms1_accuracy_ppm = c1.accuracy;
+    constexpr std::size_t min_strict = 200;
+    if (ms1_strict.size() >= min_strict)
+    {
+      // spread around the offset of all anchors
+      for (auto& e : ms2_strict) { e.first -= res.ms2_offset_ppm; }
+      for (auto& e : ms1_strict) { e.first -= res.ms1_offset_ppm; }
+      res.ms2_accuracy_ppm = 5.0 * robustAbsQuantile(ms2_strict, 0.7);
+      res.ms1_accuracy_ppm = 5.0 * robustAbsQuantile(ms1_strict, 0.7);
+      res.strict_mass_anchors = ms1_strict.size();
+    }
     res.ms2_mass_points = ms2_ppm.size();
     res.ms1_mass_points = ms1_ppm.size();
     res.time = stageClock() - t0;

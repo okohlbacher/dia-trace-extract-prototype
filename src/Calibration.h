@@ -56,13 +56,19 @@ namespace ODIA
     double stage2_window_s = 0;
     double rt_residual_p50 = 0, rt_residual_p95 = 0, rt_residual_p99 = 0;  ///< |residual|, s, used anchors
     double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;
+    /// Extraction accuracy (half width) from the residuals around the offset: 5 x their 70th percentile
+    /// (DIA-NN's rule for its MS1 accuracy).
+    double ms2_accuracy_ppm = 0, ms1_accuracy_ppm = 0;
+    std::size_t strict_mass_anchors = 0;   ///< anchors the accuracies come from (0 = all used anchors)
     std::uint64_t ms2_mass_points = 0, ms1_mass_points = 0;
     StageTime time;
   };
 
   /// Derive the library-RT -> run-RT map and systematic m/z offsets from the run itself:
   /// whole-run extraction of a stratified panel, co-elution apex picking, robust model fit,
-  /// intensity-weighted mass errors at the apexes. Heuristic calibration -- not identification.
+  /// median mass errors at the apexes (unweighted: strong centroids drift upward on Astral, about +1.45 ppm
+  /// per decade above 6e4, which biased an intensity-weighted median by ~0.55 ppm). Heuristic
+  /// calibration -- not identification.
   CalibrationResult calibrate(const Library& lib, const RunGrid& grid, const CalibrationOptions& opt);
 
   /// Anchors as TSV (library_rt, run_rt, ...): usable as -rt_anchors input.

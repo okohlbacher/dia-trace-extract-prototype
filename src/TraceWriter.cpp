@@ -52,7 +52,8 @@ namespace ODIA
                      ->memory_pool(arrowPool())
                      ->build();
       // Column encoding/compression stays on the calling worker: the scheduler parallelises across sinks.
-      auto arrow_props = parquet::ArrowWriterProperties::Builder().set_use_threads(false)->build();
+      // store_schema(): without it the schema's key-value metadata (odia.*) is not written to the footer.
+      auto arrow_props = parquet::ArrowWriterProperties::Builder().set_use_threads(false)->store_schema()->build();
       return check(parquet::arrow::FileWriter::Open(schema, arrowPool(), out, props, arrow_props));
     }
   }
@@ -100,7 +101,11 @@ namespace ODIA
     if (cfg_.expand_rt) { f.push_back(arrow::field("rt", arrow::binary())); }
     auto md = std::make_shared<arrow::KeyValueMetadata>();
     md->Append("odia.format", "odia-traces-v1");
-    md->Append("odia.axis", "global DIA cycle axis; point i of a row is at axes[lane=-1, cycle=cycle_begin+i].rt");
+    md->Append("odia.axis", cfg_.ms1_scan_axis
+      ? "MS2 rows: global DIA cycle axis, point i at axes[lane=-1, cycle=cycle_begin+i].rt; MS1 rows: MS1 scans, "
+        "point i at axes[lane=-2, cycle=cycle_begin+i].rt (raw values)"
+      : "global DIA cycle axis; point i of a row is at axes[lane=-1, cycle=cycle_begin+i].rt (MS1 interpolated)");
+    md->Append("odia.ms1_axis", cfg_.ms1_scan_axis ? "ms1_scans" : "cycles");
     md->Append("odia.encoding", cfg_.log8 ? "log8" : "float32");
     md->Append("odia.array_layout", "intensity/rt are binary blobs: little-endian float32[n] (intensity_log8: uint8[n]), "
                                     "n = point count; decode e.g. numpy.frombuffer(b, '<f4')");
@@ -231,14 +236,20 @@ namespace ODIA
     for (const auto& r : block.records)
     {
       const std::uint32_t p = r.precursor;
-      const std::size_t T = r.cycles;
       const std::size_t n_traces = static_cast<std::size_t>(r.fragments) + r.isotopes;
       for (std::size_t k = 0; k < n_traces; ++k)
       {
         const bool ms2 = k < r.fragments;
         const std::size_t f = ms2 ? lib.fragment_begin[p] + k : 0;
         const int isotope = ms2 ? -1 : static_cast<int>(k - r.fragments);
-        const float* v = r.values + k * T;
+        // MS2 on the cycle axis; MS1 on its own range (MS1 scans, or the cycle range when interpolated).
+        const std::size_t T = ms2 ? r.cycles : r.ms1_count;
+        const std::uint32_t begin = ms2 ? r.cycle_begin : r.ms1_begin;
+        const float* v = ms2 ? r.values + k * r.cycles
+                             : r.values + static_cast<std::size_t>(r.fragments) * r.cycles + static_cast<std::size_t>(isotope) * r.ms1_count;
+        const auto time_of = [&](std::size_t i) {
+          return (!ms2 && cfg_.ms1_scan_axis) ? grid_.ms1.rt[begin + i] : grid_.cycle_rt[begin + i];
+        };
         float vmax = 0.0f;
         for (std::size_t i = 0; i < T; ++i) { vmax = std::max(vmax, v[i]); }
         if (cfg_.skip_empty && vmax <= 0.0f) { continue; }
@@ -275,7 +286,7 @@ namespace ODIA
           }
           check(tmz.Append(target));
           check(rtc.Append(r.rt_center));
-          check(cycle_begin.Append(r.cycle_begin));
+          check(cycle_begin.Append(begin));
           if (cfg_.log8)
           {
             check(scale.Append(vmax));
@@ -300,7 +311,7 @@ namespace ODIA
           if (cfg_.expand_rt)
           {
             rtbuf.resize(T);
-            for (std::size_t i = 0; i < T; ++i) { rtbuf[i] = static_cast<float>(grid_.cycle_rt[r.cycle_begin + i]); }
+            for (std::size_t i = 0; i < T; ++i) { rtbuf[i] = static_cast<float>(time_of(i)); }
             check(rtl.Append(reinterpret_cast<const std::uint8_t*>(rtbuf.data()), static_cast<std::int32_t>(T * sizeof(float))));
           }
         }
@@ -316,8 +327,8 @@ namespace ODIA
             b += ms2 ? '2' : '1'; b += '\t';
             b += a; b += '\t';
             b.append(num, std::to_chars(num, num + sizeof num, target).ptr); b += '\t';
-            b.append(num, std::to_chars(num, num + sizeof num, r.cycle_begin + i).ptr); b += '\t';
-            b.append(num, std::to_chars(num, num + sizeof num, grid_.cycle_rt[r.cycle_begin + i]).ptr); b += '\t';
+            b.append(num, std::to_chars(num, num + sizeof num, begin + i).ptr); b += '\t';
+            b.append(num, std::to_chars(num, num + sizeof num, time_of(i)).ptr); b += '\t';
             b.append(num, std::to_chars(num, num + sizeof num, v[i]).ptr); b += '\n';
           }
         }

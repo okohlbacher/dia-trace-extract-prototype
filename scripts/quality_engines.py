@@ -43,8 +43,17 @@ def ours(path, ms1_only=False):
     if ms1_only: t = t[t.annotation == "M+0"]
     else: t = t[(t.ms_level == 2) | (t.annotation == "M+0")]
     return t
+def ms1_axis_rt(path):
+    """Times of MS1 rows: MS1 scans (axes lane -2) when odia.ms1_axis = ms1_scans, else the cycle axis."""
+    import glob as _glob, pyarrow.parquet as _pq
+    first = sorted(_glob.glob(os.path.join(path, "*.parquet")))[0] if os.path.isdir(path) else path
+    md = _pq.read_schema(first).metadata or {}   # (pyarrow.dataset drops the footer metadata)
+    return axes[axes.lane == -2].sort_values("cycle").rt.to_numpy() if md.get(b"odia.ms1_axis") == b"ms1_scans" else cycle_rt
 A = ours(R + "/odiaA.parquet"); B = ours(R + "/odiaB.parquet")
-VT = ours(V + "/v_tol.parquet", True); VD = ours(V + "/v_dnn.parquet", True)
+VT = ours(V + "/v_tol.parquet", True) if os.path.exists(V + "/v_tol.parquet") else A.iloc[:0]
+VD = ours(V + "/v_dnn.parquet", True) if os.path.exists(V + "/v_dnn.parquet") else A.iloc[:0]
+RT1 = {"A": ms1_axis_rt(R + "/odiaA.parquet"), "B": ms1_axis_rt(R + "/odiaB.parquet"),
+       "VT": ms1_axis_rt(V + "/v_tol.parquet") if len(VT) else cycle_rt, "VD": ms1_axis_rt(V + "/v_dnn.parquet") if len(VD) else cycle_rt}
 d = pq.read_table(R + "/diann/diann_xic.parquet", columns=["precursor_id", "ms_level", "annotation", "rt", "intensity"]).to_pandas()
 d["precursor_id"] = d.precursor_id.map(from_unimod)
 o = pq.read_table(R + "/osw_traces.parquet").to_pandas()
@@ -84,15 +93,15 @@ def per_precursor(p):
     def ours_ms2(g):
         g2 = g[g.ms_level == 2].set_index("annotation")
         return np.array([np.frombuffer(g2.intensity.loc[an], "<f4").astype(float)[m] for an in frags])
-    def ours_ms1(g):
+    def ours_ms1(g, axis):
         r = g[g.annotation == "M+0"].iloc[0]; y = np.frombuffer(r.intensity, "<f4").astype(float)
-        return np.interp(tg, cycle_rt[int(r.cycle_begin):int(r.cycle_begin) + len(y)], y)
+        return np.interp(tg, axis[int(r.cycle_begin):int(r.cycle_begin) + len(y)], y)
     FA, FB = ours_ms2(ga), ours_ms2(gb)
     FD = np.array([snap(*dd[an]) for an in frags]); FO = np.array([snap(*oo[an]) for an in frags])
     eng = {"DIA-NN": (FD, interp(*dd["M+0"])), "OSW": (FO, interp(*oo["M+0"]) if "M+0" in oo else None),
-           "ours A": (FA, ours_ms1(ga)), "ours B": (FB, ours_ms1(gb))}
-    if p in GVT: eng["ours A, MS1 v_tol"] = (FA, ours_ms1(GVT[p]))
-    if p in GVD: eng["ours A, MS1 v_dnn"] = (FA, ours_ms1(GVD[p]))
+           "ours A": (FA, ours_ms1(ga, RT1["A"])), "ours B": (FB, ours_ms1(gb, RT1["B"]))}
+    if p in GVT: eng["ours A, MS1 v_tol"] = (FA, ours_ms1(GVT[p], RT1["VT"]))
+    if p in GVD: eng["ours A, MS1 v_dnn"] = (FA, ours_ms1(GVD[p], RT1["VD"]))
     out = []
     for e, (F, M1) in eng.items():
         r = shape_metrics(F, lib, M1)

@@ -40,6 +40,7 @@ namespace ODIA
       bool expand_rt = false;
       bool skip_empty = false;
       bool isotope_unit_spacing = false;
+      bool ms1_scan_axis = true;   ///< MS1 rows index the MS1 scans (axes lane -2) instead of the cycle axis
       std::int64_t rows_per_group = 1 << 17;
       /// Parquet part files (unit u goes to part u % shards). 1 = a single file at `parquet`; > 1 =
       /// `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not derived from the

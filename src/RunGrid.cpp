@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- compact grid representation of a DIA run on ONE global RT axis.
 #include "RunGrid.h"
+#include "MzMLFast.h"
 
 #include "Pipeline.h"
 
@@ -62,16 +63,7 @@ namespace ODIA
     }
 
     /// A decoded spectrum on its way from the parser to the router.
-    struct Decoded
-    {
-      std::uint32_t index = 0;
-      double rt = 0;
-      int ms_level = 0;
-      double target = 0, lower = 0, upper = 0;
-      std::vector<MzFixed> mz;
-      std::vector<float> intensity;
-      bool was_unsorted = false;
-    };
+    using Decoded = GridSpectrum;
 
     Decoded decode(OpenMS::MSSpectrum& s, std::uint32_t index)
     {
@@ -363,8 +355,11 @@ namespace ODIA
       first.push_back(n);
       const Size used = first.size() - 1;
 
-      // 4. Parse chunks in parallel, route them in file order.
+      // 4. Parse chunks in parallel, route them in file order. ODIA_MZML_PARSER=openms forces the OpenMS parser.
       std::vector<std::ifstream> files(static_cast<Size>(std::max(1, threads)));
+      const char* parser_env = std::getenv("ODIA_MZML_PARSER");
+      const bool fast = parser_env == nullptr || std::string_view(parser_env) != "openms";
+      std::atomic<Size> fast_chunks{0};
       orderedParallel(
         // Look-ahead bounded in chunks, not threads: each parked chunk holds its decoded spectra.
         used, threads, std::min<Size>(2 * static_cast<Size>(threads), 32),
@@ -373,14 +368,31 @@ namespace ODIA
           if (!file.is_open()) { file.open(filename, std::ios::binary); }
           const bool last = c + 1 == used;
           const Size from = starts[first[c]], to = last ? list_end : starts[first[c + 1]];
+          // Fast path: the spectra parsed straight from the file bytes (MzMLFast), into reused buffers.
+          thread_local std::string raw;
+          thread_local std::vector<unsigned char> s1, s2;
+          raw.resize(to - from);
+          file.seekg(static_cast<std::streamoff>(from));
+          file.read(raw.data(), static_cast<std::streamsize>(to - from));
+          if (!file) { throw std::runtime_error("mzML chunk read failed"); }
+          if (fast)
+          {
+            std::vector<Decoded> out(first[c + 1] - first[c]);
+            bool ok_fast = true;
+            for (Size k = first[c]; k < first[c + 1] && ok_fast; ++k)
+            {
+              const Size b = starts[k] - from, e = (k + 1 < first[c + 1] ? starts[k + 1] : to) - from;
+              Decoded& d = out[k - first[c]];
+              d.index = static_cast<std::uint32_t>(k);
+              ok_fast = parseSpectrumFast(std::string_view(raw).substr(b, e - b), d, s1, s2);
+            }
+            if (ok_fast) { fast_chunks.fetch_add(1, std::memory_order_relaxed); return out; }
+          }
+          // Fallback: the chunk with the file's header and closing tags, parsed by OpenMS (all encodings).
           std::string chunk(header, 0, count_begin);
           chunk += std::to_string(first[c + 1] - first[c]);
           chunk.append(header, count_end, std::string::npos);
-          const Size at = chunk.size();
-          chunk.resize(at + (to - from));
-          file.seekg(static_cast<std::streamoff>(from));
-          file.read(chunk.data() + at, static_cast<std::streamsize>(to - from));
-          if (!file) { throw std::runtime_error("mzML chunk read failed"); }
+          chunk += raw;
           chunk += "</spectrumList>" + end_of_run;
           OpenMS::MzMLFile mzml;
           mzml.getOptions().setSkipXMLChecks(true);
@@ -398,6 +410,10 @@ namespace ODIA
           return out;
         },
         [&](std::vector<Decoded>&& v) { for (auto& d : v) { route(std::move(d)); } });
+      if (std::getenv("ODIA_PROFILE") != nullptr)
+      {
+        std::fprintf(stderr, "[ingest] %zu of %zu chunks parsed by the fast mzML parser\n", fast_chunks.load(), used);
+      }
       return true;
     }
   }

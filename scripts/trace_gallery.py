@@ -103,15 +103,24 @@ UNI = {"UniMod:4": "Carbamidomethyl", "UniMod:35": "Oxidation"}
 def from_unimod(s):
     for k, v in UNI.items(): s = s.replace(k, v)
     return s
+def ms1_axis_rt(odia_path, axes, cycle_rt):
+    """Times of MS1 rows: the MS1 scans (axes lane -2) when the traces say odia.ms1_axis = ms1_scans, else the cycle axis."""
+    import glob as _glob, os as _os, pyarrow.parquet as _pq
+    first = sorted(_glob.glob(_os.path.join(odia_path, "*.parquet")))[0] if _os.path.isdir(odia_path) else odia_path
+    md = _pq.read_schema(first).metadata or {}   # (pyarrow.dataset drops the footer metadata)
+    if md.get(b"odia.ms1_axis") == b"ms1_scans":
+        return axes[axes.lane == -2].sort_values("cycle").rt.to_numpy()
+    return cycle_rt
 tr = {}   # (pid, level) -> {engine: (t, y)}
 def keep(pid, lvl, ann): return pid in want and ((lvl == 1 and ann == "M+0") or (lvl == 2 and ann == frag_of[pid]))
 for eng, path in (("A", R + "/odiaA.parquet"), ("B", R + "/odiaB.parquet")):
+    ms1_rt = ms1_axis_rt(path, axes, cycle_rt)
     t = pq.read_table(path, columns=["precursor_id", "ms_level", "window", "annotation", "cycle_begin", "intensity"],
                       filters=[("precursor_id", "in", list(want))]).to_pandas()
     for pid, lvl, win, ann, cb, blob in t.itertuples(index=False):
         if not keep(pid, lvl, ann): continue
         y = np.frombuffer(blob, "<f4").astype(float)
-        x = acq[win][cb:cb + len(y)] if lvl == 2 else cycle_rt[cb:cb + len(y)]
+        x = acq[win][cb:cb + len(y)] if lvl == 2 else ms1_rt[cb:cb + len(y)]
         ok = ~np.isnan(x); tr.setdefault((pid, lvl), {})[eng] = (x[ok], y[ok])
 d = pq.read_table(R + "/diann/diann_xic.parquet", columns=["precursor_id", "ms_level", "annotation", "rt", "intensity"]).to_pandas()
 d["precursor_id"] = d.precursor_id.map(from_unimod)

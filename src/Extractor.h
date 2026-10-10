@@ -27,16 +27,21 @@ namespace ODIA
     std::size_t unit_precursors = 256; ///< precursors per work unit
     std::size_t max_units_ahead = 0;  ///< back-pressure for the ordered commit (0 = 4 x threads)
     std::size_t block_floats = 0;     ///< trace-buffer block size; plan() counts each unit's blocks (0 = none)
+    /// MS1 traces on the MS1 scans themselves (raw values; times on the axes' lane -2) instead of linearly
+    /// interpolated onto the global cycle axis.
+    bool ms1_scan_axis = true;
   };
 
-  /// One precursor's traces on the global cycle axis: cycles [cycle_begin, cycle_begin + cycles).
-  /// `values` holds `fragments` MS2 traces then `isotopes` MS1 traces, each `cycles` long
-  /// (trace-major), in the block's arena.
+  /// One precursor's traces. MS2 on the global cycle axis: cycles [cycle_begin, cycle_begin + cycles); MS1
+  /// on [ms1_begin, ms1_begin + ms1_count): MS1 scan indices (ms1_scan_axis) or the same cycle range
+  /// (interpolated). `values` holds `fragments` MS2 traces of `cycles` points, then `isotopes` MS1 traces of
+  /// `ms1_count` points (trace-major), in the block's arena.
   struct TraceRecord
   {
     std::uint32_t precursor = 0;
     std::int32_t window = -1;
     std::uint32_t cycle_begin = 0, cycles = 0;
+    std::uint32_t ms1_begin = 0, ms1_count = 0;
     float rt_center = 0;
     std::uint16_t fragments = 0;
     std::uint8_t isotopes = 0;
@@ -99,6 +104,8 @@ namespace ODIA
 
   private:
     std::pair<std::size_t, std::size_t> cycleRange_(double rt_center) const;
+    /// MS1 points of a record: scans with times in the window (scan axis) or the cycle range.
+    std::pair<std::size_t, std::size_t> ms1Range_(double rt_center, std::size_t lo, std::size_t hi) const;
     float aggregate_(const MzFixed* mz, const float* in, std::size_t a, std::size_t b, MzFixed lo, MzFixed hi,
                      std::size_t& pos) const;
 

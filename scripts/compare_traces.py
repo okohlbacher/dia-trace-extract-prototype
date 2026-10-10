@@ -27,17 +27,28 @@ def from_unimod(s):
 axes = pq.read_table(a.axes).to_pandas()
 cycle_rt = axes[axes.lane == -1].sort_values("cycle").rt.to_numpy()
 # Exact acquisition time of window w in cycle c (NaN where the window was not acquired). MS2 points are
-# compared at these times (their true sampling times); MS1 points live on the global axis by construction.
+# compared at these times (their true sampling times); MS1 points at the MS1 scan times (or on the global axis
+# for traces written with -ms1_axis cycles).
 n_cycles = len(cycle_rt)
 acq = {}
 for w, g in axes[axes.lane >= 0].groupby("lane"):
     t = np.full(n_cycles, np.nan); t[g.cycle.to_numpy()] = g.rt.to_numpy(); acq[w] = t
 
+def ms1_axis_rt(odia_path, axes, cycle_rt):
+    """Times of MS1 rows: the MS1 scans (axes lane -2) when the traces say odia.ms1_axis = ms1_scans, else the cycle axis."""
+    import glob as _glob, os as _os, pyarrow.parquet as _pq
+    first = sorted(_glob.glob(_os.path.join(odia_path, "*.parquet")))[0] if _os.path.isdir(odia_path) else odia_path
+    md = _pq.read_schema(first).metadata or {}   # (pyarrow.dataset drops the footer metadata)
+    if md.get(b"odia.ms1_axis") == b"ms1_scans":
+        return axes[axes.lane == -2].sort_values("cycle").rt.to_numpy()
+    return cycle_rt
+ms1_rt = ms1_axis_rt(a.odia, axes, cycle_rt)
+
 o = pq.read_table(a.odia, columns=["precursor_id", "ms_level", "window", "annotation", "cycle_begin", "intensity"]).to_pandas()
 traces = {}
 for pid, lvl, win, ann, cb, blob in o.itertuples(index=False):
     y = np.frombuffer(blob, "<f4").astype(np.float64)
-    t = acq[win][cb:cb + len(y)] if lvl == 2 else cycle_rt[cb:cb + len(y)]
+    t = acq[win][cb:cb + len(y)] if lvl == 2 else ms1_rt[cb:cb + len(y)]
     ok = ~np.isnan(t)
     traces[(pid, lvl, ann)] = {"odia": (t[ok], y[ok])}
 

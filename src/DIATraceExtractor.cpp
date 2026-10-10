@@ -144,8 +144,10 @@ protected:
     registerDoubleOption_("rt_window", "<s>", 60.0, "Half width (seconds) of the extraction window around the "
                           "mapped RT; <= 0 extracts the whole run.", false);
 
-    registerDoubleOption_("mz_tol", "<ppm>", 10.0, "Fragment tolerance, +- ppm (half width).", false);
-    registerDoubleOption_("mz_tol_ms1", "<ppm>", 10.0, "MS1 tolerance, +- ppm (half width).", false);
+    registerDoubleOption_("mz_tol", "<ppm>", 10.0, "Fragment tolerance, +- ppm (half width). 0 = the MS2 accuracy measured "
+                          "by -mass_calibration auto (5 x 70th percentile of the apex residuals; about 6 ppm on Astral).", false);
+    registerDoubleOption_("mz_tol_ms1", "<ppm>", 10.0, "MS1 tolerance, +- ppm (half width). 0 = the MS1 accuracy measured "
+                          "by -mass_calibration auto (5 x 70th percentile of the MS1 apex residuals; about 2.1 ppm on Astral).", false);
     registerStringOption_("mass_calibration", "<mode>", "off", "auto: measure the fragment and MS1 mass offsets "
                           "from the run (calibration anchors) and apply them instead of -mz_offset*.", false);
     setValidStrings_("mass_calibration", {"off", "auto"});
@@ -163,6 +165,9 @@ protected:
     registerStringOption_("aggregation", "<mode>", "sum", "Combine centroids within tolerance: sum (OpenSWATH) "
                           "or max (DIA-NN).", false);
     setValidStrings_("aggregation", {"sum", "max"});
+    registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (raw values; times on axes lane -2) "
+                          "or interpolated linearly onto the global cycle axis (cycles).", false);
+    setValidStrings_("ms1_axis", {"scans", "cycles"});
     registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotopes after the monoisotope (-1 disables MS1).", false);
     setMinInt_("ms1_isotopes", -1);
     registerStringOption_("ms1_isotope_spacing", "<mode>", "charge", "MS1 isotope k at mz + k*1.00336/z (charge) "
@@ -287,7 +292,8 @@ protected:
                       << cal->used << " used; RT residual |p50/p95/p99| " << cal->rt_residual_p50 << " / "
                       << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; MS2 offset "
                       << cal->ms2_offset_ppm << " ppm (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
-                      << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); " << fmt(cal->time) << std::endl;
+                      << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
+                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm; " << fmt(cal->time) << std::endl;
       if (!getStringOption_("out_calibration").empty()) { ODIA::writeAnchors(getStringOption_("out_calibration"), *cal_lib, *cal); }
     }
     ODIA::RtMap rt_map;
@@ -303,6 +309,18 @@ protected:
     ODIA::ExtractOptions eopt;
     eopt.ms2_ppm = getDoubleOption_("mz_tol");
     eopt.ms1_ppm = getDoubleOption_("mz_tol_ms1");
+    if (eopt.ms2_ppm <= 0.0)
+    {
+      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol 0 (measured MS2 accuracy) needs -mass_calibration auto." << std::endl; return ILLEGAL_PARAMETERS; }
+      eopt.ms2_ppm = cal->ms2_accuracy_ppm;
+      OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (measured)" << std::endl;
+    }
+    if (eopt.ms1_ppm <= 0.0)
+    {
+      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol_ms1 0 (measured MS1 accuracy) needs -mass_calibration auto." << std::endl; return ILLEGAL_PARAMETERS; }
+      eopt.ms1_ppm = cal->ms1_accuracy_ppm;
+      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (measured)" << std::endl;
+    }
     eopt.ms2_ppm_offset = mass_auto ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
     eopt.ms1_ppm_offset = mass_auto ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
     eopt.rt_half_window = getDoubleOption_("rt_window");
@@ -312,6 +330,7 @@ protected:
     eopt.assign_all_windows = getStringOption_("window_assignment") == "all";
     eopt.threads = threads;
     eopt.isotope_unit_spacing = getStringOption_("ms1_isotope_spacing") == "unit";
+    eopt.ms1_scan_axis = getStringOption_("ms1_axis") == "scans";
     eopt.unit_precursors = static_cast<std::size_t>(std::max(1, getIntOption_("unit_precursors")));
     // Trace buffer pool: 256 KiB blocks, pre-faulted once and recycled (no page faults or allocator churn
     // during extraction); a trace run longer than a block goes to the heap.
@@ -333,11 +352,12 @@ protected:
     wcfg.skip_empty = getFlag_("skip_empty");
     wcfg.shards = getIntOption_("out_shards");
     wcfg.isotope_unit_spacing = eopt.isotope_unit_spacing;
+    wcfg.ms1_scan_axis = eopt.ms1_scan_axis;
     wcfg.metadata = {{"input", in}, {"library", lib_file}, {"rt_map", rt_map.describe()},
                      {"mz_tol_ppm", std::to_string(eopt.ms2_ppm)}, {"mz_tol_ms1_ppm", std::to_string(eopt.ms1_ppm)},
                      {"aggregation", getStringOption_("aggregation")},
                      {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
-                     {"ms1_mapping", "linear interpolation of MS1 scans at cycle_rt"}};
+                     {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};
     ODIA::TraceWriter writer(grid, wcfg);
 
     // One pool of workers, centrally scheduled (ODIA::ExtractionScheduler): read + plan library parts,
@@ -429,7 +449,9 @@ protected:
          << "  \"writer_busy_wall\": " << writer.busySeconds() << ",\n"
          << "  \"total\": " << json(t_total) << ",\n"
          << "  \"ms2_offset_ppm\": " << eopt.ms2_ppm_offset << ",\n"
-         << "  \"ms1_offset_ppm\": " << eopt.ms1_ppm_offset << ",\n";
+         << "  \"ms1_offset_ppm\": " << eopt.ms1_ppm_offset << ",\n"
+         << "  \"mz_tol_ppm\": " << eopt.ms2_ppm << ",\n"
+         << "  \"mz_tol_ms1_ppm\": " << eopt.ms1_ppm << ",\n";
       if (cal)
       {
         js << "  \"calibration\": {\"panel\": " << cal->panel << ", \"anchors\": " << cal->anchors.size()
@@ -437,6 +459,8 @@ protected:
            << ", \"rt_residual_p95\": " << cal->rt_residual_p95 << ", \"rt_residual_p99\": " << cal->rt_residual_p99
            << ", \"ms2_offset_ppm\": " << cal->ms2_offset_ppm << ", \"ms2_sigma_ppm\": " << cal->ms2_sigma_ppm
            << ", \"ms1_offset_ppm\": " << cal->ms1_offset_ppm << ", \"ms1_sigma_ppm\": " << cal->ms1_sigma_ppm
+           << ", \"ms2_accuracy_ppm\": " << cal->ms2_accuracy_ppm << ", \"ms1_accuracy_ppm\": " << cal->ms1_accuracy_ppm
+           << ", \"strict_mass_anchors\": " << cal->strict_mass_anchors
            << ", \"time\": " << json(cal->time) << "},\n";
       }
       js << "  \"peak_rss_gib\": " << peakRssGiB() << "\n"
