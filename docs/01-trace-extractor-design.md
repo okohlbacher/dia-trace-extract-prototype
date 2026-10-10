@@ -108,3 +108,43 @@ fitted on DIA-NN's identifications (02-benchmark-astral.md).
 Open: an mzPeak reader (parallel ingest; MS1 there is profile data), sharded Parquet writers, library
 refinement from the run anchors (per-peptide RT), the 50 K / top-6 shared library from the
 project meeting once posted, DIA-NN 2.x comparison on request.
+
+## 7. Parallel efficiency (2026-10-10)
+
+Before, ~95% of a full-library run was serial: the mzML XML parse (35 s), the single Parquet writer
+(caps extraction at ~46 s from 8 threads up) and the library load (14 s); 64 threads ran at 8% efficiency
+and nothing improved beyond 8 threads. Four changes:
+
+1. **Parallel mzML ingest** (RunGrid.cpp `loadChunked`, adapted from OpenMS ProSEAlgorithm's
+   `loadMzMLChunked`): spectra are cut into ≤4 MiB chunks at their `<spectrum>` tags, each parsed with the
+   file header by its own `MzMLFile::loadBuffer` (standard handler: all metadata and encodings), converted
+   to grid spectra on the worker, and routed in file order through the ordered pipeline (bounded
+   look-ahead). Falls back to the streaming parser for compressed or unusual files. `-ingest_threads`
+   (default = `-threads`).
+2. **Sharded Parquet output**: unit u → part u % 8, one writer thread per part; `-out` becomes a directory
+   of `part-NNN.parquet` (one dataset for pyarrow/DuckDB). Fixed default (`-out_shards 8`), so the output
+   is independent of `-threads`.
+3. **Library load**: precursor strings in one buffer per column (`StringColumn`) instead of ~7 M
+   `std::string`s; compact Parquet libraries parsed in parallel row chunks, joined in order;
+   multi-threaded column decode.
+4. **Passive OpenMP waits**: the tool sets `OMP_WAIT_POLICY=PASSIVE` (re-exec once) unless set by the user.
+
+Full human library (3.49 M precursors, 31.3 M traces), Astral run 01:
+
+| threads | library | ingest | extract+write | total wall | total CPU | efficiency | peak RSS |
+|---|---|---|---|---|---|---|---|
+| before, 64 | 13.6 s | 34.8 s | 46.7 s | 96.7 s | 513 s | 8% | 3.2 GiB |
+| 1 | 10.5 s | 34.5 s | 158.8 s | 205.2 s | 308 s | — | 3.2 GiB |
+| 8 | 5.4 s | 5.7 s | 20.9 s | 33.6 s | 328 s | 122%* | 4.3 GiB |
+| 32 | 5.3 s | 2.8 s | 6.1 s | **15.6 s** | 336 s | 67% | 5.5 GiB |
+| 64 | 5.2 s | 3.5 s | 6.1 s | 16.2 s | 460 s | 44% | 6.4 GiB |
+| 128 | 5.4 s | 4.1 s | 6.5 s | 17.5 s | 800 s | 36% | 7.7 GiB |
+
+(*the 8 writer threads and Parquet's column threads run in addition to the 8 workers.)
+Speed-up 1→32 threads 13×; the full-library run is 6.2× faster than before. Outputs are identical:
+parallel vs serial ingest (31,348,861 rows), 1 vs 64 threads, and the refined-library benchmark traces
+before vs after. Refined library (84 K precursors): 42 s → 4.7 s (64 threads), 5.7 s (32 threads).
+
+Remaining: library load (~5 s; Parquet decode and dictionary casts), ingest CPU grows with threads (35 →
+174 → 425 CPU-s at 1/64/128 threads; per-chunk parser set-up and allocator contention), peak RSS rises
+with the look-ahead buffers (3.2 → 6.4 GiB at 64 threads). 32 threads is the sweet spot on this node.

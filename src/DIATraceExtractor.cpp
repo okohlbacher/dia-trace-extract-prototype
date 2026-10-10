@@ -12,7 +12,10 @@
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 
+#include <cstdlib>
 #include <filesystem>
+#include <unistd.h>
+#include <vector>
 #include <optional>
 #include <omp.h>
 #include <fstream>
@@ -130,9 +133,13 @@ protected:
     registerDoubleOption_("log8_decades", "<n>", 6.0, "Dynamic range of the log8 encoding (decades).", false, true);
     registerFlag_("expand_rt", "Also write the RT list per trace row (convenience; larger file).");
     registerFlag_("skip_empty", "Do not write traces that are all zero.");
-    registerIntOption_("ingest_threads", "<n>", 1, "Threads for OpenMS's binary-array decoding during ingest "
-                       "(the XML parse is serial; more threads mostly spin).", false, true);
-    setMinInt_("ingest_threads", 1);
+    registerIntOption_("ingest_threads", "<n>", 0, "Threads for the mzML ingest (parallel chunk parsing; 1 = serial "
+                       "streaming parser; 0 = same as -threads).", false, true);
+    setMinInt_("ingest_threads", 0);
+    registerIntOption_("out_shards", "<n>", 8, "Parquet part files written concurrently; > 1 makes -out a directory of "
+                       "part-NNN.parquet files (read as one table by pyarrow/DuckDB). Fixed default: the output does "
+                       "not depend on -threads.", false, true);
+    setMinInt_("out_shards", 1);
     registerIntOption_("unit_precursors", "<n>", 256, "Precursors per parallel work unit.", false, true);
     registerStringOption_("run_name", "<name>", "", "Run name in the output (default: input file stem).", false);
   }
@@ -160,6 +167,7 @@ protected:
     ODIA::LibraryLoadOptions lopt;
     lopt.top_fragments = static_cast<std::size_t>(getIntOption_("top_fragments"));
     lopt.targets_only = getFlag_("targets_only");
+    lopt.threads = threads;
     if (!getStringOption_("ids").empty()) { lopt.keep_ids = ODIA::readIdList(getStringOption_("ids")); }
     ODIA::Library lib;
     ODIA::loadLibrary(lib_file, lopt, lib);
@@ -169,7 +177,8 @@ protected:
     if (lib.size() == 0) { OPENMS_LOG_ERROR << "Library is empty after filtering." << std::endl; return INPUT_FILE_EMPTY; }
 
     // --- run grid
-    ODIA::RunGrid grid = ODIA::RunGrid::load(in, getIntOption_("ingest_threads"));
+    const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : threads;
+    ODIA::RunGrid grid = ODIA::RunGrid::load(in, ingest_threads);
     omp_set_num_threads(threads);
     const auto& gs = grid.stats;
     OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, "
@@ -192,6 +201,7 @@ protected:
         ODIA::LibraryLoadOptions copt;
         copt.top_fragments = 6;
         copt.targets_only = true;
+        copt.threads = threads;
         ODIA::loadLibrary(lib_file, copt, full);
         cal_lib = &full;
       }
@@ -247,6 +257,7 @@ protected:
     wcfg.log8_decades = getDoubleOption_("log8_decades");
     wcfg.expand_rt = getFlag_("expand_rt");
     wcfg.skip_empty = getFlag_("skip_empty");
+    wcfg.shards = getIntOption_("out_shards");
     wcfg.isotope_unit_spacing = eopt.isotope_unit_spacing;
     wcfg.metadata = {{"input", in}, {"library", lib_file}, {"rt_map", rt_map.describe()},
                      {"mz_tol_ppm", std::to_string(eopt.ms2_ppm)}, {"mz_tol_ms1_ppm", std::to_string(eopt.ms1_ppm)},
@@ -269,6 +280,7 @@ protected:
         ODIA::TraceBlock b = extractor.extract(u);
         Done d;
         d.encoded = writer.encode(b);
+        d.encoded.unit = u;
         d.lookups = b.lookups;
         d.records = std::move(b.records);
         return d;
@@ -289,7 +301,7 @@ protected:
                     << " outside the acquired RT range; " << es.traces << " traces, " << es.ms2_points << " MS2 + "
                     << es.ms1_points << " MS1 points, " << es.peak_lookups << " lookups; " << fmt(es.time)
                     << " with " << threads << " threads" << std::endl;
-    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points (writer busy "
+    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points in " << writer.shardCount() << " Parquet part(s) (busiest writer "
                     << writer.busySeconds() << " s, final drain " << t_close.wall << " s)" << std::endl;
     OPENMS_LOG_INFO << "Total: " << fmt(t_total) << ", peak RSS " << peakRssGiB() << " GiB" << std::endl;
 
@@ -344,6 +356,18 @@ protected:
 
 int main(int argc, const char** argv)
 {
+  // Idle OpenMP threads should sleep, not spin (spinning burned ~70% extra CPU while workers waited on
+  // I/O). libgomp reads OMP_WAIT_POLICY only when it is loaded, so set it and re-execute once; an
+  // explicit user setting is respected.
+  if (std::getenv("OMP_WAIT_POLICY") == nullptr)
+  {
+    ::setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
+    std::vector<char*> args;
+    for (int i = 0; i < argc; ++i) { args.push_back(const_cast<char*>(argv[i])); }
+    args.push_back(nullptr);
+    ::execv("/proc/self/exe", args.data());
+    // execv only returns on failure: continue with the inherited policy
+  }
   TOPPDIATraceExtractor tool;
   return tool.main(argc, argv);
 }

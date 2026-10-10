@@ -14,6 +14,7 @@
 #include <parquet/arrow/reader.h>
 
 #include <algorithm>
+#include <omp.h>
 #include <charconv>
 #include <fstream>
 #include <numeric>
@@ -175,6 +176,8 @@ namespace ODIA
       if (!qmz_field) { throw std::runtime_error("library: no Product.Mz column in " + filename); }
       const bool compact = qmz_field->type()->id() == arrow::Type::LIST
                         || qmz_field->type()->id() == arrow::Type::LARGE_LIST;
+      reader->set_use_threads(opt.threads > 1);   // decode columns concurrently
+      reader->set_batch_size(1 << 20);
       auto batches = check(reader->GetRecordBatchReader());
 
       Builder builder(opt, lib);
@@ -211,25 +214,36 @@ namespace ODIA
           const auto& zv = static_cast<const arrow::UInt8Array&>(*fz->values());
           const auto& ov = static_cast<const arrow::UInt8Array&>(*ord->values());
           const auto& lv = static_cast<const arrow::UInt8Array&>(*loss->values());
-          for (std::int64_t r = 0; r < batch->num_rows(); ++r)
+          // Rows are independent: parse them in chunks on all threads into partial libraries and join
+          // the parts in chunk order, so the result does not depend on the thread count.
+          const std::int64_t rows = batch->num_rows(), chunk = 16384;
+          const std::int64_t nchunks = (rows + chunk - 1) / chunk;
+          std::vector<Library> parts(static_cast<std::size_t>(nchunks));
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, opt.threads))
+          for (std::int64_t c = 0; c < nchunks; ++c)
           {
-            PendingPrecursor p;
-            p.id = std::string(id->GetView(r));
-            p.modseq = std::string(seq->GetView(r));
-            p.charge = z->Value(r);
-            p.decoy = dec && dec->IsValid(r) ? dec->Value(r) : 0;
-            p.rt = rt && rt->IsValid(r) ? rt->Value(r) : 0.0;
-            p.mz = pmz->Value(r);
-            const auto b = qmz->value_offset(r), e = qmz->value_offset(r + 1);
-            p.frags.reserve(e - b);
-            for (auto j = b; j < e; ++j)
+            Builder part(opt, parts[static_cast<std::size_t>(c)]);
+            for (std::int64_t r = c * chunk; r < std::min(rows, (c + 1) * chunk); ++r)
             {
-              // All fragment lists of a row share offsets (same writer), so index j applies to each.
-              p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
-                                 ov.Value(j), zv.Value(j), lv.Value(j)});
+              PendingPrecursor p;
+              p.id = std::string(id->GetView(r));
+              p.modseq = std::string(seq->GetView(r));
+              p.charge = z->Value(r);
+              p.decoy = dec && dec->IsValid(r) ? dec->Value(r) : 0;
+              p.rt = rt && rt->IsValid(r) ? rt->Value(r) : 0.0;
+              p.mz = pmz->Value(r);
+              const auto b = qmz->value_offset(r), e = qmz->value_offset(r + 1);
+              p.frags.reserve(e - b);
+              for (auto j = b; j < e; ++j)
+              {
+                // All fragment lists of a row share offsets (same writer), so index j applies to each.
+                p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
+                                   ov.Value(j), zv.Value(j), lv.Value(j)});
+              }
+              part.add(std::move(p));
             }
-            builder.add(std::move(p));
           }
+          for (const auto& part : parts) { lib.append(part); }
         }
         else
         {
@@ -416,6 +430,25 @@ namespace ODIA
       }
       grouper.flush(builder);
     }
+  }
+
+  void Library::append(const Library& o)
+  {
+    const std::uint32_t base = static_cast<std::uint32_t>(fragment_mz.size());
+    precursor_id.append(o.precursor_id);
+    modified_sequence.append(o.modified_sequence);
+    precursor_mz.insert(precursor_mz.end(), o.precursor_mz.begin(), o.precursor_mz.end());
+    charge.insert(charge.end(), o.charge.begin(), o.charge.end());
+    decoy.insert(decoy.end(), o.decoy.begin(), o.decoy.end());
+    library_rt.insert(library_rt.end(), o.library_rt.begin(), o.library_rt.end());
+    if (fragment_begin.empty()) { fragment_begin.push_back(0); }
+    for (std::size_t i = 1; i < o.fragment_begin.size(); ++i) { fragment_begin.push_back(base + o.fragment_begin[i]); }
+    fragment_mz.insert(fragment_mz.end(), o.fragment_mz.begin(), o.fragment_mz.end());
+    fragment_intensity.insert(fragment_intensity.end(), o.fragment_intensity.begin(), o.fragment_intensity.end());
+    fragment_type.insert(fragment_type.end(), o.fragment_type.begin(), o.fragment_type.end());
+    fragment_ordinal.insert(fragment_ordinal.end(), o.fragment_ordinal.begin(), o.fragment_ordinal.end());
+    fragment_charge.insert(fragment_charge.end(), o.fragment_charge.begin(), o.fragment_charge.end());
+    fragment_loss.insert(fragment_loss.end(), o.fragment_loss.begin(), o.fragment_loss.end());
   }
 
   std::string Library::annotation(std::size_t f) const

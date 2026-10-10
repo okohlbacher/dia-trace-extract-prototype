@@ -1,12 +1,19 @@
 // ODIA-V3 trace extractor -- compact grid representation of a DIA run on ONE global RT axis.
 #include "RunGrid.h"
 
+#include "Pipeline.h"
+
 #include <OpenMS/FORMAT/DATAACCESS/MSDataTransformingConsumer.h>
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 
 #include <algorithm>
+#include <string_view>
+#include <functional>
+#include <fstream>
+#include <cstring>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -216,6 +223,171 @@ namespace ODIA
     };
 
     struct StopParsing {};
+
+    /// Parallel mzML ingest, adapted from OpenMS ProSEAlgorithm.cpp (loadMzMLChunked, BSD-3):
+    /// the spectra are cut into chunks at their <spectrum> start tags; every chunk is parsed together
+    /// with the file's header and closing tags by an MzMLFile of its own (MzMLFile::loadBuffer), so
+    /// the standard handler reads all metadata and encodings. Unlike ProSE, chunks are not collected
+    /// into one experiment: each worker converts its chunk to Decoded spectra, and the chunks are routed
+    /// strictly in file order through the ordered pipeline (bounded look-ahead => bounded memory).
+    /// Returns false (caller falls back to the streaming parser) for compressed files, unexpected
+    /// layout (a comment/DOCTYPE inside the run, not exactly one spectrum list, a count attribute that
+    /// does not match the spectra found, very few spectra) or a chunk that fails to parse.
+    bool loadChunked(const std::string& filename, int threads, const std::function<void(Decoded&&)>& route)
+    {
+      using Size = std::size_t;
+      std::ifstream in(filename, std::ios::binary);
+      if (!in) { return false; }
+      in.seekg(0, std::ios::end);
+      const Size size = static_cast<Size>(in.tellg());
+      char magic[2] = {0, 0};
+      in.seekg(0);
+      in.read(magic, 2);
+      if (!in || (magic[0] == 'B' && magic[1] == 'Z') || (magic[0] == '\x1f' && magic[1] == '\x8b') || (magic[0] == 'P' && magic[1] == 'K'))
+      {
+        return false;
+      }
+
+      // 1. Markup positions, found in parallel over 1 MiB blocks.
+      enum class Mark : unsigned char { spectrum, list_start, list_end, run_end, declaration };
+      const auto is_tag = [](std::string_view text, std::string_view name) {
+        return text.size() > name.size() && text.substr(0, name.size()) == name
+               && std::string_view(" \t\r\n>/").find(text[name.size()]) != std::string_view::npos;
+      };
+      constexpr Size block = Size(1) << 20, lookahead = 16;
+      const Size n_blocks = (size + block - 1) / block;
+      std::vector<std::vector<std::pair<Size, Mark>>> marks(n_blocks);
+      std::atomic<bool> ok{true};
+#pragma omp parallel num_threads(threads)
+      {
+        std::ifstream file;
+        std::string buffer;
+#pragma omp for schedule(dynamic, 1)
+        for (std::ptrdiff_t sb = 0; sb < static_cast<std::ptrdiff_t>(n_blocks); ++sb)
+        {
+          bool read = false;
+          try
+          {
+            if (!file.is_open()) { file.open(filename, std::ios::binary); }
+            const Size b = static_cast<Size>(sb), from = b * block, end = std::min(block, size - from);
+            buffer.resize(std::min(block + lookahead, size - from));
+            file.seekg(static_cast<std::streamoff>(from));
+            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            read = static_cast<bool>(file);
+            for (Size i = 0; read && i < end; ++i)
+            {
+              const char* q = static_cast<const char*>(std::memchr(buffer.data() + i, '<', end - i));
+              if (q == nullptr) { break; }
+              i = static_cast<Size>(q - buffer.data());
+              const std::string_view text(q, std::min(lookahead, buffer.size() - i));
+              if (is_tag(text, "<spectrumList")) { marks[b].emplace_back(from + i, Mark::list_start); }
+              else if (is_tag(text, "<spectrum")) { marks[b].emplace_back(from + i, Mark::spectrum); }
+              else if (is_tag(text, "</spectrumList")) { marks[b].emplace_back(from + i, Mark::list_end); }
+              else if (is_tag(text, "</run")) { marks[b].emplace_back(from + i, Mark::run_end); }
+              else if (text.substr(0, 2) == "<!") { marks[b].emplace_back(from + i, Mark::declaration); }
+            }
+          }
+          catch (...) { read = false; }
+          if (!read) { ok = false; file.clear(); }
+        }
+      }
+      constexpr Size none = std::numeric_limits<Size>::max();
+      Size list_start = none, list_end = none, run_end = none;
+      std::vector<Size> starts;
+      bool good = ok;
+      for (const auto& bm : marks)
+      {
+        for (const auto& [pos, mark] : bm)
+        {
+          switch (mark)
+          {
+            case Mark::list_start: good = good && list_start == none; list_start = pos; break;
+            case Mark::spectrum: good = good && list_start != none && list_end == none; starts.push_back(pos); break;
+            case Mark::list_end: good = good && list_start != none && list_end == none; list_end = pos; break;
+            case Mark::run_end: if (run_end == none) { good = good && list_end != none; run_end = pos; } break;
+            case Mark::declaration: good = good && run_end != none; break;
+          }
+        }
+      }
+      marks = {};
+      if (!good || run_end == none || starts.size() < 64) { return false; }
+
+      // 2. Header (everything before the first spectrum) with the spectrumList count made per chunk.
+      std::string header(starts[0], '\0');
+      in.seekg(0);
+      in.read(header.data(), static_cast<std::streamsize>(header.size()));
+      if (!in) { return false; }
+      Size count_begin = none, count_end = none;
+      for (Size q = list_start + std::string_view("<spectrumList").size();;)
+      {
+        q = header.find_first_not_of(" \t\r\n", q);
+        if (q == std::string::npos) { return false; }
+        if (header[q] == '>') { break; }
+        const Size name_end = header.find_first_of("= \t\r\n>", q);
+        Size v = header.find_first_not_of(" \t\r\n", name_end);
+        if (name_end == std::string::npos || v == std::string::npos || header[v] != '=') { return false; }
+        v = header.find_first_not_of(" \t\r\n", v + 1);
+        if (v == std::string::npos || (header[v] != '"' && header[v] != '\'')) { return false; }
+        const Size value_end = header.find(header[v], v + 1);
+        if (value_end == std::string::npos) { return false; }
+        if (std::string_view(header).substr(q, name_end - q) == "count") { count_begin = v + 1; count_end = value_end; }
+        q = value_end + 1;
+      }
+      if (count_begin == none || header.compare(count_begin, count_end - count_begin, std::to_string(starts.size())) != 0)
+      {
+        return false;
+      }
+      const std::string end_of_run = std::string("</run></mzML>") + (header.find("<indexedmzML") != std::string::npos ? "</indexedmzML>" : "");
+
+      // 3. Chunks of at most 4 MiB (and at least 2 per thread, 16 spectra).
+      constexpr Size max_chunk_bytes = Size(4) << 20;
+      const Size n = starts.size(), bytes = list_end - starts[0];
+      const Size n_chunks = std::min(n / 16, std::max(2 * static_cast<Size>(threads), (bytes + max_chunk_bytes - 1) / max_chunk_bytes));
+      std::vector<Size> first{0};
+      for (Size c = 1; c < n_chunks; ++c)
+      {
+        const Size f = static_cast<Size>(std::lower_bound(starts.begin(), starts.end(), starts[0] + bytes / n_chunks * c) - starts.begin());
+        if (f > first.back() && f < n) { first.push_back(f); }
+      }
+      first.push_back(n);
+      const Size used = first.size() - 1;
+
+      // 4. Parse chunks in parallel, route them in file order.
+      std::vector<std::ifstream> files(static_cast<Size>(std::max(1, threads)));
+      orderedParallel(
+        used, threads, 2 * static_cast<Size>(threads),
+        [&](Size c) {
+          auto& file = files[static_cast<Size>(omp_get_thread_num())];
+          if (!file.is_open()) { file.open(filename, std::ios::binary); }
+          const bool last = c + 1 == used;
+          const Size from = starts[first[c]], to = last ? list_end : starts[first[c + 1]];
+          std::string chunk(header, 0, count_begin);
+          chunk += std::to_string(first[c + 1] - first[c]);
+          chunk.append(header, count_end, std::string::npos);
+          const Size at = chunk.size();
+          chunk.resize(at + (to - from));
+          file.seekg(static_cast<std::streamoff>(from));
+          file.read(chunk.data() + at, static_cast<std::streamsize>(to - from));
+          if (!file) { throw std::runtime_error("mzML chunk read failed"); }
+          chunk += "</spectrumList>" + end_of_run;
+          OpenMS::MzMLFile mzml;
+          mzml.getOptions().setSkipXMLChecks(true);
+          OpenMS::PeakMap part;
+          mzml.loadBuffer(chunk, part);
+          if (part.size() != first[c + 1] - first[c]) { throw std::runtime_error("mzML chunk spectrum count mismatch"); }
+          std::string().swap(chunk);
+          std::vector<Decoded> out;
+          out.reserve(part.size());
+          for (Size k = 0; k < part.size(); ++k)
+          {
+            out.push_back(decode(part[k], static_cast<std::uint32_t>(first[c] + k)));
+            part[k].clear(true);
+          }
+          return out;
+        },
+        [&](std::vector<Decoded>&& v) { for (auto& d : v) { route(std::move(d)); } });
+      return true;
+    }
   }
 
   std::size_t RunGrid::bytes() const
@@ -252,6 +424,10 @@ namespace ODIA
       exp.sortSpectra(false);
       std::uint32_t index = 0;
       for (auto& s : exp.getSpectra()) { router.route(decode(s, index++)); }
+    }
+    else if (decode_threads > 1 && loadChunked(filename, decode_threads, [&](Decoded&& d) { router.route(std::move(d)); }))
+    {
+      // parsed in parallel chunks (see loadChunked)
     }
     else
     {

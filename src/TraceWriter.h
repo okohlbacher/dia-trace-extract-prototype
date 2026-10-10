@@ -46,6 +46,10 @@ namespace ODIA
       bool skip_empty = false;
       bool isotope_unit_spacing = false;
       std::int64_t rows_per_group = 1 << 17;
+      /// Parquet part files written concurrently (unit u goes to part u % shards). 1 = a single file at
+      /// `parquet`; > 1 = `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not
+      /// derived from the thread count, so the output does not depend on -threads.
+      int shards = 8;
       std::vector<std::pair<std::string, std::string>> metadata;  ///< written into the Parquet footer
     };
 
@@ -54,13 +58,15 @@ namespace ODIA
       std::shared_ptr<arrow::RecordBatch> batch;  ///< null without Parquet output
       std::string tsv;
       std::uint64_t rows = 0, points = 0;
+      std::size_t unit = 0;                       ///< work unit (selects the shard)
     };
 
     TraceWriter(const Library& lib, const RunGrid& grid, Config cfg);
     ~TraceWriter();
 
     Encoded encode(const TraceBlock& block) const;
-    /// Queue an encoded block (in unit order; blocks while the bounded queue is full).
+    /// Queue an encoded block (call in unit order). TSV text is written immediately; the Parquet batch
+    /// goes to its shard's writer thread (blocks while that shard's bounded queue is full).
     void push(Encoded&& e);
     /// Drain, close files; rethrows a writer-thread error.
     void close();
@@ -68,25 +74,20 @@ namespace ODIA
     std::uint64_t rows() const { return rows_; }
     std::uint64_t points() const { return points_; }
     double busySeconds() const { return busy_; }
+    std::size_t shardCount() const { return shards_.size(); }
 
   private:
-    struct Files;
-    void run_();
+    struct Shard;
     void writeAxes_();
 
     const Library& lib_;
     const RunGrid& grid_;
     Config cfg_;
     std::shared_ptr<arrow::Schema> schema_;
-    std::unique_ptr<Files> files_;
-
-    std::mutex mtx_;
-    std::condition_variable cv_;
-    std::deque<Encoded> queue_;
-    bool closing_ = false, closed_ = false;
-    std::exception_ptr error_;
-    std::thread thread_;
+    std::vector<std::unique_ptr<Shard>> shards_;
+    std::FILE* tsv_ = nullptr;
+    bool closed_ = false;
     std::uint64_t rows_ = 0, points_ = 0;
-    double busy_ = 0;
+    double busy_ = 0;   ///< max over shards of the time spent writing
   };
 }

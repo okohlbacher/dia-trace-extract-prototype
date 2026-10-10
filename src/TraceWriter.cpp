@@ -7,6 +7,8 @@
 #include <parquet/arrow/writer.h>
 
 #include <charconv>
+#include <cstdio>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
@@ -52,15 +54,52 @@ namespace ODIA
     }
   }
 
-  struct TraceWriter::Files
+  /// One Parquet part file with its own writer thread and bounded queue.
+  struct TraceWriter::Shard
   {
     std::shared_ptr<arrow::io::FileOutputStream> out;
     std::unique_ptr<parquet::arrow::FileWriter> writer;
-    std::FILE* tsv = nullptr;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::deque<std::shared_ptr<arrow::RecordBatch>> queue;
+    bool closing = false;
+    std::exception_ptr error;
+    std::thread thread;
+    double busy = 0;
+
+    void run()
+    {
+      try
+      {
+        while (true)
+        {
+          std::shared_ptr<arrow::RecordBatch> b;
+          {
+            std::unique_lock lock(mtx);
+            cv.wait(lock, [&] { return !queue.empty() || closing; });
+            if (queue.empty()) { break; }
+            b = std::move(queue.front());
+            queue.pop_front();
+            cv.notify_all();
+          }
+          const auto t0 = std::chrono::steady_clock::now();
+          check(writer->WriteRecordBatch(*b));
+          busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+        check(writer->Close());
+        check(out->Close());
+      }
+      catch (...)
+      {
+        std::lock_guard lock(mtx);
+        error = std::current_exception();
+        cv.notify_all();
+      }
+    }
   };
 
   TraceWriter::TraceWriter(const Library& lib, const RunGrid& grid, Config cfg)
-    : lib_(lib), grid_(grid), cfg_(std::move(cfg)), files_(std::make_unique<Files>())
+    : lib_(lib), grid_(grid), cfg_(std::move(cfg))
   {
     arrow::FieldVector f = {
       arrow::field("run", arrow::utf8()),
@@ -103,16 +142,43 @@ namespace ODIA
     for (const auto& [k, v] : cfg_.metadata) { md->Append("odia." + k, v); }
     schema_ = arrow::schema(f, md);
 
-    if (!cfg_.parquet.empty()) { files_->writer = openWriter(cfg_.parquet, *schema_, cfg_.rows_per_group, files_->out); }
+    if (!cfg_.parquet.empty())
+    {
+      const int n = std::max(1, cfg_.shards);
+      std::vector<std::string> paths;
+      if (n == 1) { paths.push_back(cfg_.parquet); }
+      else
+      {
+        namespace fs = std::filesystem;
+        if (fs::exists(cfg_.parquet) && !fs::is_directory(cfg_.parquet)) { fs::remove(cfg_.parquet); }
+        fs::create_directories(cfg_.parquet);
+        for (const auto& e : fs::directory_iterator(cfg_.parquet))   // stale parts of an earlier run
+        {
+          if (e.path().filename().string().starts_with("part-")) { fs::remove(e.path()); }
+        }
+        for (int i = 0; i < n; ++i)
+        {
+          char name[32];
+          std::snprintf(name, sizeof name, "part-%03d.parquet", i);
+          paths.push_back((fs::path(cfg_.parquet) / name).string());
+        }
+      }
+      for (const auto& path : paths)
+      {
+        auto sh = std::make_unique<Shard>();
+        sh->writer = openWriter(path, *schema_, cfg_.rows_per_group, sh->out);
+        shards_.push_back(std::move(sh));
+      }
+      for (auto& sh : shards_) { sh->thread = std::thread([p = sh.get()] { p->run(); }); }
+    }
     if (!cfg_.axes.empty()) { writeAxes_(); }
     if (!cfg_.tsv.empty())
     {
-      files_->tsv = std::fopen(cfg_.tsv.c_str(), "wb");
-      if (!files_->tsv) { throw std::runtime_error("cannot write " + cfg_.tsv); }
+      tsv_ = std::fopen(cfg_.tsv.c_str(), "wb");
+      if (!tsv_) { throw std::runtime_error("cannot write " + cfg_.tsv); }
       std::fputs("run\tprecursor_id\tmodified_sequence\tprecursor_charge\tdecoy\tms_level\tannotation\t"
-                 "target_mz\tcycle\trt\tintensity\n", files_->tsv);
+                 "target_mz\tcycle\trt\tintensity\n", tsv_);
     }
-    thread_ = std::thread([this] { run_(); });
   }
 
   TraceWriter::~TraceWriter()
@@ -292,59 +358,36 @@ namespace ODIA
 
   void TraceWriter::push(Encoded&& e)
   {
-    std::unique_lock lock(mtx_);
-    cv_.wait(lock, [&] { return queue_.size() < 32 || error_; });
-    if (error_) { std::rethrow_exception(error_); }
-    queue_.push_back(std::move(e));
-    cv_.notify_all();
-  }
-
-  void TraceWriter::run_()
-  {
-    try
-    {
-      while (true)
-      {
-        Encoded e;
-        {
-          std::unique_lock lock(mtx_);
-          cv_.wait(lock, [&] { return !queue_.empty() || closing_; });
-          if (queue_.empty()) { break; }
-          e = std::move(queue_.front());
-          queue_.pop_front();
-          cv_.notify_all();
-        }
-        const auto t0 = std::chrono::steady_clock::now();
-        if (e.batch) { check(files_->writer->WriteRecordBatch(*e.batch)); }
-        if (files_->tsv && !e.tsv.empty()) { std::fwrite(e.tsv.data(), 1, e.tsv.size(), files_->tsv); }
-        rows_ += e.rows;
-        points_ += e.points;
-        busy_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-      }
-      if (files_->writer)
-      {
-        check(files_->writer->Close());
-        check(files_->out->Close());
-      }
-      if (files_->tsv) { std::fclose(files_->tsv); files_->tsv = nullptr; }
-    }
-    catch (...)
-    {
-      std::lock_guard lock(mtx_);
-      error_ = std::current_exception();
-      cv_.notify_all();
-    }
+    rows_ += e.rows;
+    points_ += e.points;
+    if (tsv_ && !e.tsv.empty()) { std::fwrite(e.tsv.data(), 1, e.tsv.size(), tsv_); }
+    if (!e.batch || shards_.empty()) { return; }
+    auto& sh = *shards_[e.unit % shards_.size()];
+    std::unique_lock lock(sh.mtx);
+    sh.cv.wait(lock, [&] { return sh.queue.size() < 8 || sh.error; });
+    if (sh.error) { std::rethrow_exception(sh.error); }
+    sh.queue.push_back(std::move(e.batch));
+    sh.cv.notify_all();
   }
 
   void TraceWriter::close()
   {
+    if (closed_) { return; }
+    closed_ = true;
+    for (auto& sh : shards_)
     {
-      std::lock_guard lock(mtx_);
-      if (closed_) { return; }
-      closing_ = closed_ = true;
-      cv_.notify_all();
+      std::lock_guard lock(sh->mtx);
+      sh->closing = true;
+      sh->cv.notify_all();
     }
-    if (thread_.joinable()) { thread_.join(); }
-    if (error_) { std::rethrow_exception(error_); }
+    std::exception_ptr error;
+    for (auto& sh : shards_)
+    {
+      if (sh->thread.joinable()) { sh->thread.join(); }
+      busy_ = std::max(busy_, sh->busy);
+      if (sh->error && !error) { error = sh->error; }
+    }
+    if (tsv_) { std::fclose(tsv_); tsv_ = nullptr; }
+    if (error) { std::rethrow_exception(error); }
   }
 }
