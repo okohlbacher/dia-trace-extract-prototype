@@ -4,7 +4,7 @@
 - **mzPeak reader for files from the latest mzpeak-convert** (okohlbacher/mzPeakConverter, now v0.17.2;
   0.7.0 is outdated, not to be used). Separate agent, PR to OpenMS-mzPeakRW. Our requirements for a
   parallel, partitioned read API: docs/04-mzpeak-reader-handoff.md. The vendored reader reads 0 spectra from
-  0.17.2 files. Open point: MS1 is profile-only in 0.17.2 Thermo output (centroid where?). When it lands:
+  0.17.2 files. MS1 is profile-only in 0.17.2 Thermo output; vendor-centroided MS1 requested from the converter (docs/05-mzpeak-converter-handoff.md). When it lands:
   re-vendor, feed partitions into the ordered ingest pipeline, benchmark vs mzML (cold/warm cache).
 
 ## Waiting

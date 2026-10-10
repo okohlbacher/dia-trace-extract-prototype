@@ -133,7 +133,7 @@ cycles first.
 
 ### R4 MS1 profile data
 Our mzML is vendor-centroided at both levels; in the 0.17.2 file MS1 is profile only. We need centroided
-MS1 for comparisons with DIA-NN and OpenSWATH. Please state which of these you will do:
+MS1 for comparisons with DIA-NN and OpenSWATH. Option (a) has been requested from the converter: docs/05-mzpeak-converter-handoff.md. Until it lands, please state which of these you will do:
 - **(a)** the converter writes Thermo vendor centroids for MS1 to `spectra_peaks`. This is preferred, as
   it is identical to the mzML input. This is a request to mzPeakConverter: today `--representation` is
   honoured only for Shimadzu and BAF.
