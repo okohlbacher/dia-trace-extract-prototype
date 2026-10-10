@@ -1,12 +1,11 @@
 # Backlog
 
 ## In progress elsewhere
-- **mzPeak reader for mzpeak-convert 0.7.0 files** (separate agent, PR to OpenMS-mzPeakRW). The vendored
-  `src/mzpeak/MzPeakFile` reads OpenMS-mzPeakRW-written files (identical traces) but not converter 0.7.0
-  output: `data_kind "data_arrays"` vs `"data arrays"`, split spectrum metadata / precursor tables, chunked
-  numpress-linear MS1 profile layout. Also wanted: parallel read (now 8.7 s vs 3.2 s mzML), keep empty
-  spectra (23 dropped in run 01, shifts 18 cycle RTs by ≤4.9 ms). When it lands: re-vendor, benchmark
-  ingest from `.mzpeak` vs mzML (cold cache).
+- **mzPeak reader for files from the latest mzpeak-convert** (okohlbacher/mzPeakConverter, now v0.17.2;
+  0.7.0 is outdated, not to be used). Separate agent, PR to OpenMS-mzPeakRW. Our requirements for a
+  parallel, partitioned read API: docs/04-mzpeak-reader-handoff.md. The vendored reader reads 0 spectra from
+  0.17.2 files. Open point: MS1 is profile-only in 0.17.2 Thermo output (centroid where?). When it lands:
+  re-vendor, feed partitions into the ordered ingest pipeline, benchmark vs mzML (cold/warm cache).
 
 ## Waiting
 - **DIALibGen PR #4** (plain string columns): after merge, regenerate the libraries and re-measure load
