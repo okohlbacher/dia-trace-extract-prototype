@@ -155,3 +155,36 @@ Of the extractor's ~38 s, ~34 s is the serial mzML parse; library load and extra
 uncorrected precursor m/z (`ms1_XIC` queries `mz`, not the corrected `query_mz`) while extractor A applies the
 measured MS1 offset (largest on run 02 with the widest tolerance); with OpenSWATH's rules the extractor
 reproduces OpenSWATH's MS1 traces to 0.9998.
+
+## Entrapment library, DIALibGen 0.11.1: tuned vs untuned (2026-10-10)
+
+Library: ProteoBench entrapment FASTA (peptide-level entries, targets + entrapment), 7,007,990 precursors.
+Tuned = DIALibGen `-mode tune` (RT head fine-tuned on DIA-NN 1.7.12 run-01 IDs; RT in run minutes).
+DIA-NN gets the library as a spectral library (`--lib` TSV; it generates its own decoys); the TSV now has
+`UniprotID`, without which DIA-NN 1.7.12 loaded "0 protein groups". Procedure: `RECAL=tuned
+scripts/benchmark_refined.sh` — DIA-NN searches the full tuned library; the shared library for all three
+tools is the tuned library restricted to those 1% FDR IDs, **predicted RT unchanged**; ±60 s windows.
+
+**Tuned vs untuned**
+
+| | untuned (run 01) | tuned run 01 (training run) | tuned run 02 | tuned run 03 |
+|---|---|---|---|---|
+| DIA-NN IDs, 1% FDR, full library | 78,405 | 82,333 (+5.0%) | 79,545 | 80,058 |
+| RT error vs DIA-NN observed: robust SD | 24.2 s ¹ | 12.5 s | 12.9 s | 13.3 s |
+| within ±60 s | 94.5% ¹ | 97.9% | 97.7% | 97.3% |
+| 95th percentile abs. error | 62.3 s ¹ | 38.7 s | 39.9 s | 43.2 s |
+
+¹ untuned: DIA-NN's own calibration of the raw prediction (`Predicted.RT`), i.e. the best case; tuned: the
+library RT as stored, no further calibration (`scripts/rt_accuracy.py`). Runs 02/03 were not used for tuning.
+
+**Trace agreement on the shared tuned library** (median Pearson r per trace, MS2 / MS1)
+
+| pair | run 01 | run 02 | run 03 | untuned run 01 (observed RT) |
+|---|---|---|---|---|
+| ours A (DIA-NN rules) vs DIA-NN | 1.000000 / 0.985 | 1.000000 / 0.978 | 1.000000 / 0.995 | 1.000000 / 0.978 |
+| ours B (OpenSWATH rules) vs OpenSWATH | 0.99988 / 0.99979 | 0.99988 / 0.99980 | 0.99988 / 0.99979 | 0.99988 / 0.99979 |
+| DIA-NN vs OpenSWATH | 0.971 / 0.953 | 0.9996 / 0.951 | 0.995 / 0.981 | 0.970 / 0.938 |
+
+**Cost per run** (64 threads, shared node): ours on the shared library 5.5–6.8 s / 2.9–3.1 GB; ours on the
+full 7.0 M-precursor tuned library (top 6 fragments) 24.4–26.2 s / 6.6–6.8 GiB; DIA-NN (second search, shared
+library, with XIC) 27–35 s / 3.4 GB; OpenSWATH 3:00–4:37 / 14.4 GB; DIA-NN search of the full library 8–9 min.

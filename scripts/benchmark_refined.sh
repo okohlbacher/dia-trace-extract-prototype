@@ -56,7 +56,7 @@ $PY $P/scripts/diann17_report_to_parquet.py $D1/report.tsv $D1/report.parquet
       -q_global 1 -q_protein 1 -out $REF -out_report ${REF%.parquet}.residuals.tsv -threads 16 \
       > ${REF%.parquet}.refine.log 2>&1 )
 fi
-grep -E 'matched|library .* -> ' ${REF%.parquet}.refine.log || true
+grep -sE 'matched|library .* -> ' ${REF%.parquet}.refine.log || true
 grep -E 'Spectral library loaded|IDs at 0.01' $D1/diann.log || true
 
 # 3a. the same library in each tool's format
