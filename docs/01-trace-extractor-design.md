@@ -148,3 +148,21 @@ before vs after. Refined library (84 K precursors): 42 s → 4.7 s (64 threads),
 Remaining: library load (~5 s; Parquet decode and dictionary casts), ingest CPU grows with threads (35 →
 174 → 425 CPU-s at 1/64/128 threads; per-chunk parser set-up and allocator contention), peak RSS rises
 with the look-ahead buffers (3.2 → 6.4 GiB at 64 threads). 32 threads is the sweet spot on this node.
+
+### 7.1 Library load (Parquet decoding)
+
+Profile of the full human library (3.49 M precursors, `ODIA_PROFILE=1`): Parquet read+decode was 73% of the
+load (3.9 of 5.4 s at 32 threads), dominated by `Precursor.Id` and `Modified.Sequence`. Cause, measured:
+DIALibGen writes these as Arrow dictionary arrays with one global dictionary (all ~3.5 M strings), and
+Parquet stores that whole dictionary in every row group's dictionary page (~20 MB) — each row group decodes
+all 3.5 M strings although it uses ~0.87 M; with more row groups it gets worse (32 → 4.9 s, 128 → 15.6 s).
+
+Done in the tool: row groups read concurrently (own reader each, only the 12 needed columns, column-parallel
+decoding only while row groups alone cannot fill the threads), casts per row group, rows parsed in chunks on
+all threads, parts joined with concurrent copies. Load 5.4 s → 2.0 s; output identical (31,348,861 traces).
+Full-library run (warm page cache, 32 threads) 15.6 s → 13.0 s.
+
+Remaining, in DIALibGen's writer (not this tool): writing the string columns as plain strings (Parquet then
+dictionary-encodes per row group as useful) gives 1.17 s with 4 row groups and 0.79 s with 32, and a 26%
+smaller file (424 vs 570 MB) — measured on a rewritten copy of the same library.
+Cold page cache: reading the 5.8 GB mzML from Ceph adds ~10 s to ingest (the 1.2 GB mzPeak would cut that).

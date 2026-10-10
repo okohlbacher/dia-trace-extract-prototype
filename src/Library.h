@@ -30,6 +30,9 @@ namespace ODIA
       for (std::size_t i = 1; i < o.offset_.size(); ++i) { offset_.push_back(base + o.offset_[i]); }
     }
     void reserve(std::size_t n, std::size_t bytes) { offset_.reserve(n + 1); data_.reserve(bytes); }
+    std::size_t bytes() const { return data_.size(); }
+    /// Concatenate columns in order, copying the parts concurrently.
+    static StringColumn concat(const std::vector<const StringColumn*>& parts, int threads);
 
   private:
     std::string data_;
@@ -68,6 +71,8 @@ namespace ODIA
 
     /// Append another library (fragment offsets are rebased).
     void append(const Library& o);
+    /// Concatenate libraries in order; the copies run concurrently.
+    static Library concat(const std::vector<Library>& parts, int threads);
   };
 
   struct LibraryLoadOptions

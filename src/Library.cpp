@@ -16,6 +16,9 @@
 #include <algorithm>
 #include <omp.h>
 #include <charconv>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <numeric>
 #include <stdexcept>
@@ -165,6 +168,137 @@ namespace ODIA
       return check(arrow::compute::Cast(*a, to));
     }
 
+    /// DIA-NN-dialect compact Parquet (one row per precursor, fragment lists), as DIALibGen writes it.
+    ///
+    /// Row groups are read concurrently, each by its own reader (column-parallel decoding inside), and
+    /// only the columns extraction needs; each row group is cast and parsed on its thread into a partial
+    /// library, and the parts are joined in row-group order (concurrent copies). The result does not
+    /// depend on the thread count. ODIA_PROFILE=1 prints per-step timings.
+    void loadParquetCompact(const std::string& filename, const LibraryLoadOptions& opt, Library& lib)
+    {
+      using clk = std::chrono::steady_clock;
+      const auto t_start = clk::now();
+      auto since = [](clk::time_point t) { return std::chrono::duration<double>(clk::now() - t).count(); };
+
+      auto meta_file = check(arrow::io::ReadableFile::Open(filename));
+      auto meta_reader = check(parquet::arrow::OpenFile(meta_file, arrow::default_memory_pool()));
+      const auto& pq_schema = *meta_reader->parquet_reader()->metadata()->schema();
+      const int n_rg = meta_reader->num_row_groups();
+      static const std::vector<std::string> wanted = {
+        "Precursor.Id", "Modified.Sequence", "Precursor.Charge", "Decoy", "RT", "Precursor.Mz", "Product.Mz",
+        "Relative.Intensity", "Fragment.Type", "Fragment.Charge", "Fragment.Series.Number", "Fragment.Loss.Type"};
+      std::vector<int> leaves;
+      for (int c = 0; c < pq_schema.num_columns(); ++c)
+      {
+        const std::string top = pq_schema.Column(c)->path()->ToDotVector().front();
+        if (std::find(wanted.begin(), wanted.end(), top) != wanted.end()) { leaves.push_back(c); }
+      }
+      meta_reader.reset();
+
+      // Phase A: read, decode and cast the row groups concurrently.
+      struct Columns
+      {
+        std::shared_ptr<arrow::RecordBatch> batch;   // keeps the arrays alive
+        std::shared_ptr<arrow::StringArray> id, seq;
+        std::shared_ptr<arrow::UInt8Array> z, dec;
+        std::shared_ptr<arrow::DoubleArray> rt, pmz;
+        std::shared_ptr<arrow::ListArray> qmz, inten, ft, fz, ord, loss;
+      };
+      const int threads = std::max(1, opt.threads);
+      std::vector<Columns> cols(static_cast<std::size_t>(n_rg));
+      std::exception_ptr error;
+      auto t0 = clk::now();
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::min(threads, std::max(1, n_rg)))
+      for (int rg = 0; rg < n_rg; ++rg)
+      {
+        try
+        {
+          auto file = check(arrow::io::ReadableFile::Open(filename));
+          auto reader = check(parquet::arrow::OpenFile(file, arrow::default_memory_pool()));
+          // Column-parallel decoding only while row groups alone cannot occupy the threads: nesting both
+          // oversubscribes (measured: 32 row groups 4.9 s with nesting).
+          reader->set_use_threads(threads > 1 && n_rg < threads);
+          auto table = check(reader->ReadRowGroup(rg, leaves));
+          auto& c = cols[static_cast<std::size_t>(rg)];
+          c.batch = check(table->CombineChunksToBatch());
+          const auto utf8 = arrow::utf8(), f64 = arrow::float64(), u8 = arrow::uint8();
+          const auto lf64 = arrow::list(f64), lu8 = arrow::list(u8);
+          const auto& b = *c.batch;
+          c.id = std::static_pointer_cast<arrow::StringArray>(column(b, "Precursor.Id", utf8));
+          c.seq = std::static_pointer_cast<arrow::StringArray>(column(b, "Modified.Sequence", utf8));
+          c.z = std::static_pointer_cast<arrow::UInt8Array>(column(b, "Precursor.Charge", u8));
+          c.dec = std::static_pointer_cast<arrow::UInt8Array>(column(b, "Decoy", u8, false));
+          c.rt = std::static_pointer_cast<arrow::DoubleArray>(column(b, "RT", f64, false));
+          c.pmz = std::static_pointer_cast<arrow::DoubleArray>(column(b, "Precursor.Mz", f64));
+          c.qmz = std::static_pointer_cast<arrow::ListArray>(column(b, "Product.Mz", lf64));
+          c.inten = std::static_pointer_cast<arrow::ListArray>(column(b, "Relative.Intensity", lf64));
+          c.ft = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Type", lu8));
+          c.fz = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Charge", lu8));
+          c.ord = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Series.Number", lu8));
+          c.loss = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Loss.Type", lu8));
+        }
+        catch (...)
+        {
+#pragma omp critical(odia_library_error)
+          if (!error) { error = std::current_exception(); }
+        }
+      }
+      if (error) { std::rethrow_exception(error); }
+      const double t_read = since(t0);
+
+      // Phase B: parse rows in chunks on all threads (chunks never straddle a row group).
+      constexpr std::int64_t chunk = 16384;
+      std::vector<std::pair<int, std::int64_t>> chunks;   // (row group, first row)
+      for (int rg = 0; rg < n_rg; ++rg)
+      {
+        for (std::int64_t r = 0; r < cols[rg].batch->num_rows(); r += chunk) { chunks.emplace_back(rg, r); }
+      }
+      std::vector<Library> parts(chunks.size());
+      t0 = clk::now();
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+      for (std::ptrdiff_t k = 0; k < static_cast<std::ptrdiff_t>(chunks.size()); ++k)
+      {
+        const auto& c = cols[static_cast<std::size_t>(chunks[k].first)];
+        const auto& qv = static_cast<const arrow::DoubleArray&>(*c.qmz->values());
+        const auto& iv = static_cast<const arrow::DoubleArray&>(*c.inten->values());
+        const auto& tv = static_cast<const arrow::UInt8Array&>(*c.ft->values());
+        const auto& zv = static_cast<const arrow::UInt8Array&>(*c.fz->values());
+        const auto& ov = static_cast<const arrow::UInt8Array&>(*c.ord->values());
+        const auto& lv = static_cast<const arrow::UInt8Array&>(*c.loss->values());
+        Builder part(opt, parts[static_cast<std::size_t>(k)]);
+        const std::int64_t r0 = chunks[k].second, r1 = std::min(c.batch->num_rows(), r0 + chunk);
+        for (std::int64_t r = r0; r < r1; ++r)
+        {
+          PendingPrecursor p;
+          p.id.assign(c.id->GetView(r));
+          p.modseq.assign(c.seq->GetView(r));
+          p.charge = c.z->Value(r);
+          p.decoy = c.dec && c.dec->IsValid(r) ? c.dec->Value(r) : 0;
+          p.rt = c.rt && c.rt->IsValid(r) ? c.rt->Value(r) : 0.0;
+          p.mz = c.pmz->Value(r);
+          const auto b = c.qmz->value_offset(r), e = c.qmz->value_offset(r + 1);
+          p.frags.reserve(e - b);
+          for (auto j = b; j < e; ++j)
+          {
+            // All fragment lists of a row share offsets (same writer), so index j applies to each.
+            p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
+                               ov.Value(j), zv.Value(j), lv.Value(j)});
+          }
+          part.add(std::move(p));
+        }
+      }
+      const double t_parse = since(t0);
+      cols.clear();
+      t0 = clk::now();
+      lib = Library::concat(parts, threads);
+      if (std::getenv("ODIA_PROFILE") != nullptr)
+      {
+        std::fprintf(stderr, "[library profile] %d row groups, %zu columns; read+decode+cast %.2f s, parse %.2f s "
+                     "(%zu chunks), join %.2f s, total %.2f s\n", n_rg, leaves.size(), t_read, t_parse, chunks.size(),
+                     since(t0), since(t_start));
+      }
+    }
+
     // --- Parquet (DIA-NN dialect, DIALibGen compact or flat) -----------------------------------
     void loadParquet(const std::string& filename, const LibraryLoadOptions& opt, Library& lib)
     {
@@ -176,6 +310,12 @@ namespace ODIA
       if (!qmz_field) { throw std::runtime_error("library: no Product.Mz column in " + filename); }
       const bool compact = qmz_field->type()->id() == arrow::Type::LIST
                         || qmz_field->type()->id() == arrow::Type::LARGE_LIST;
+      if (compact)
+      {
+        reader.reset();
+        loadParquetCompact(filename, opt, lib);
+        return;
+      }
       reader->set_use_threads(opt.threads > 1);   // decode columns concurrently
       reader->set_batch_size(1 << 20);
       auto batches = check(reader->GetRecordBatchReader());
@@ -198,54 +338,6 @@ namespace ODIA
         auto dec = std::static_pointer_cast<arrow::UInt8Array>(column(*batch, "Decoy", u8, false));
         auto rt = has_rt ? std::static_pointer_cast<arrow::DoubleArray>(column(*batch, "RT", f64)) : nullptr;
         auto pmz = std::static_pointer_cast<arrow::DoubleArray>(column(*batch, "Precursor.Mz", f64));
-        if (compact)
-        {
-          const auto lf64 = arrow::list(f64);
-          const auto lu8 = arrow::list(u8);
-          auto qmz = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Product.Mz", lf64));
-          auto inten = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Relative.Intensity", lf64));
-          auto ft = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Fragment.Type", lu8));
-          auto fz = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Fragment.Charge", lu8));
-          auto ord = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Fragment.Series.Number", lu8));
-          auto loss = std::static_pointer_cast<arrow::ListArray>(column(*batch, "Fragment.Loss.Type", lu8));
-          const auto& qv = static_cast<const arrow::DoubleArray&>(*qmz->values());
-          const auto& iv = static_cast<const arrow::DoubleArray&>(*inten->values());
-          const auto& tv = static_cast<const arrow::UInt8Array&>(*ft->values());
-          const auto& zv = static_cast<const arrow::UInt8Array&>(*fz->values());
-          const auto& ov = static_cast<const arrow::UInt8Array&>(*ord->values());
-          const auto& lv = static_cast<const arrow::UInt8Array&>(*loss->values());
-          // Rows are independent: parse them in chunks on all threads into partial libraries and join
-          // the parts in chunk order, so the result does not depend on the thread count.
-          const std::int64_t rows = batch->num_rows(), chunk = 16384;
-          const std::int64_t nchunks = (rows + chunk - 1) / chunk;
-          std::vector<Library> parts(static_cast<std::size_t>(nchunks));
-#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, opt.threads))
-          for (std::int64_t c = 0; c < nchunks; ++c)
-          {
-            Builder part(opt, parts[static_cast<std::size_t>(c)]);
-            for (std::int64_t r = c * chunk; r < std::min(rows, (c + 1) * chunk); ++r)
-            {
-              PendingPrecursor p;
-              p.id = std::string(id->GetView(r));
-              p.modseq = std::string(seq->GetView(r));
-              p.charge = z->Value(r);
-              p.decoy = dec && dec->IsValid(r) ? dec->Value(r) : 0;
-              p.rt = rt && rt->IsValid(r) ? rt->Value(r) : 0.0;
-              p.mz = pmz->Value(r);
-              const auto b = qmz->value_offset(r), e = qmz->value_offset(r + 1);
-              p.frags.reserve(e - b);
-              for (auto j = b; j < e; ++j)
-              {
-                // All fragment lists of a row share offsets (same writer), so index j applies to each.
-                p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
-                                   ov.Value(j), zv.Value(j), lv.Value(j)});
-              }
-              part.add(std::move(p));
-            }
-          }
-          for (const auto& part : parts) { lib.append(part); }
-        }
-        else
         {
           auto qmz = std::static_pointer_cast<arrow::DoubleArray>(column(*batch, "Product.Mz", f64));
           auto inten = std::static_pointer_cast<arrow::DoubleArray>(column(*batch, "Relative.Intensity", f64));
@@ -430,6 +522,60 @@ namespace ODIA
       }
       grouper.flush(builder);
     }
+  }
+
+  StringColumn StringColumn::concat(const std::vector<const StringColumn*>& parts, int threads)
+  {
+    StringColumn out;
+    std::vector<std::size_t> n0{0}, b0{0};
+    for (const auto* p : parts) { n0.push_back(n0.back() + p->size()); b0.push_back(b0.back() + p->bytes()); }
+    out.data_.resize(b0.back());
+    out.offset_.resize(n0.back() + 1);
+    out.offset_[0] = 0;
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, threads))
+    for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(parts.size()); ++i)
+    {
+      const auto& p = *parts[i];
+      std::copy(p.data_.begin(), p.data_.end(), out.data_.begin() + static_cast<std::ptrdiff_t>(b0[i]));
+      for (std::size_t k = 1; k < p.offset_.size(); ++k) { out.offset_[n0[i] + k] = b0[i] + p.offset_[k]; }
+    }
+    return out;
+  }
+
+  Library Library::concat(const std::vector<Library>& parts, int threads)
+  {
+    Library out;
+    std::vector<std::size_t> np{0}, nf{0};
+    for (const auto& p : parts) { np.push_back(np.back() + p.size()); nf.push_back(nf.back() + p.fragmentCount()); }
+    std::vector<const StringColumn*> ids, seqs;
+    for (const auto& p : parts) { ids.push_back(&p.precursor_id); seqs.push_back(&p.modified_sequence); }
+    out.precursor_id = StringColumn::concat(ids, threads);
+    out.modified_sequence = StringColumn::concat(seqs, threads);
+    out.precursor_mz.resize(np.back()); out.charge.resize(np.back()); out.decoy.resize(np.back());
+    out.library_rt.resize(np.back()); out.fragment_begin.resize(np.back() + 1); out.fragment_begin[0] = 0;
+    out.fragment_mz.resize(nf.back()); out.fragment_intensity.resize(nf.back()); out.fragment_type.resize(nf.back());
+    out.fragment_ordinal.resize(nf.back()); out.fragment_charge.resize(nf.back()); out.fragment_loss.resize(nf.back());
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, threads))
+    for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(parts.size()); ++i)
+    {
+      const auto& p = parts[i];
+      const auto P = static_cast<std::ptrdiff_t>(np[i]), F = static_cast<std::ptrdiff_t>(nf[i]);
+      std::copy(p.precursor_mz.begin(), p.precursor_mz.end(), out.precursor_mz.begin() + P);
+      std::copy(p.charge.begin(), p.charge.end(), out.charge.begin() + P);
+      std::copy(p.decoy.begin(), p.decoy.end(), out.decoy.begin() + P);
+      std::copy(p.library_rt.begin(), p.library_rt.end(), out.library_rt.begin() + P);
+      for (std::size_t k = 1; k < p.fragment_begin.size(); ++k)
+      {
+        out.fragment_begin[np[i] + k] = static_cast<std::uint32_t>(nf[i] + p.fragment_begin[k]);
+      }
+      std::copy(p.fragment_mz.begin(), p.fragment_mz.end(), out.fragment_mz.begin() + F);
+      std::copy(p.fragment_intensity.begin(), p.fragment_intensity.end(), out.fragment_intensity.begin() + F);
+      std::copy(p.fragment_type.begin(), p.fragment_type.end(), out.fragment_type.begin() + F);
+      std::copy(p.fragment_ordinal.begin(), p.fragment_ordinal.end(), out.fragment_ordinal.begin() + F);
+      std::copy(p.fragment_charge.begin(), p.fragment_charge.end(), out.fragment_charge.begin() + F);
+      std::copy(p.fragment_loss.begin(), p.fragment_loss.end(), out.fragment_loss.begin() + F);
+    }
+    return out;
   }
 
   void Library::append(const Library& o)
