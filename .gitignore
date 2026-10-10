@@ -1,0 +1,10 @@
+build/
+OpenMS/
+tools/
+benchmark-data/
+library/
+fasta/
+handoff/
+results/
+*.parquet
+*.log

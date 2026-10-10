@@ -1,0 +1,57 @@
+diff --git a/src/diann.cpp b/src/diann.cpp
+index d14d7ce..4cbd8b0 100644
+--- a/src/diann.cpp
++++ b/src/diann.cpp
+@@ -2550,6 +2550,7 @@ struct Feature {
+ 			if (pos == frm.end()) continue;
+ 			while (pos->mz < high) {
+ 				if (open && iter == 1 && pos->charge != 1) goto finish;
++				{  // odia: build-only scope (gcc>=8 crosses-initialisation)
+ 				auto &pr = precursors[pos->pr];
+ 				if ((open || (pr.first > min && pr.first < max)) && pr.second == charge) {
+ 					if (size <= pos->pr) size = ((pos->pr * 5) / 4) + 1, temp.resize(size);
+@@ -2580,6 +2581,7 @@ struct Feature {
+ 						if (open) match[j].fr = fr;
+ 					}
+ 				}
++				}  // odia: build-only scope (gcc>=8 crosses-initialisation)
+ 			finish:
+ 				pos++;
+ 				if (pos == frm.end()) break;
+@@ -5394,6 +5396,7 @@ public:
+ 			if (tot_pr < 2) {
+ 				for (i = 0; i < n_s; i++) quantities[i] = reference[i];
+ 				goto save;
++				{  // odia: build-only scope (gcc>=8 crosses-initialisation)
+ 			}
+ 
+ 			int ni = indices.size();
+@@ -5440,6 +5443,7 @@ public:
+ 				A.resize(0, 0);
+ 			}
+ 
++				}  // odia: build-only scope (gcc>=8 crosses-initialisation)
+ 			save:
+ 			for (i = 0; i < prs_n; i++) {
+ 				int pr = pg.precursors[i];
+@@ -8022,10 +8026,11 @@ public:
+ 				xg.N = 2 * XICRadius, xg.qvalue = info[0].qvalue, xg.run = run->run_index, xg.pr = pep->index;
+ 				if (run->ms1h.size()) xg.has_ms1 = 1;
+ 
+-				xg.values.resize(xg.xic_size_in_bytes());
+ 
+ 				xg.id = run->lib->entries[pep->index].name;
+ 				xg.fr.resize(pep->fragments.size());
++				// odia: size the buffer AFTER the fragment list is known (1.7.12 sized it for 0 fragments -> heap overflow)
++				xg.values.resize(xg.xic_size_in_bytes() / sizeof(float));
+ 				for (int i = 0; i < xg.fr.size(); i++) xg.fr[i].init(pep->fragments[i]);
+ 
+ 				XIC xic; pos = 0;
+@@ -8036,6 +8041,7 @@ public:
+ 						xg.values[pos + xg.N] = xic.peaks[i].second;
+ 						pos++;
+ 					}
++					pos += xg.N; // odia: skip the MS1 intensity block (1.7.12 overwrote it with the MS2 RTs)
+ 					xg.pr_mz = xic.pr_mz;
+ 				}
+ 				int cnt = 0;

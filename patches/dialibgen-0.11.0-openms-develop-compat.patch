@@ -1,0 +1,48 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 756a5c6..2339287 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -171,6 +171,10 @@ if(DIALIBGEN_BUILD_TOOL)
+   add_executable(DIALibGen src/DIALibGen.cpp src/Generate.cpp src/Refine.cpp)
+   target_link_libraries(DIALibGen PRIVATE
+     odia_refine nlohmann_json::nlohmann_json)
++  # OpenMS >= 3.7 moved TOPPBase into the separate OpenMS_CLI library.
++  if(TARGET OpenMS_CLI)
++    target_link_libraries(DIALibGen PRIVATE OpenMS_CLI)
++  endif()
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
+     # Retain ELF identity when AppImage packaging rewrites RPATHs.
+     target_link_options(DIALibGen PRIVATE "-Wl,--build-id=sha1")
+diff --git a/src/DIALibGen.cpp b/src/DIALibGen.cpp
+index 878198c..a6d352d 100644
+--- a/src/DIALibGen.cpp
++++ b/src/DIALibGen.cpp
+@@ -15,12 +15,12 @@
+ namespace fs = std::filesystem;
+ 
+ DIALibGen::DIALibGen()
+-  : TOPPBase("DIALibGen", "Generate, refine and tune DIA spectral libraries.", false,
++  : TOPPBase("DIALibGen", "Generate, refine and tune DIA spectral libraries.",
+       {{"Zeng WF et al.", "AlphaPeptDeep: a modular deep learning framework to predict peptide properties for proteomics",
+-        "Nat Commun 2022; 13: 7238", "10.1038/s41467-022-34904-3"}})
++        "Nat Commun 2022; 13: 7238", "10.1038/s41467-022-34904-3"}}, false)
+ {
+   version_ = DIALIBGEN_VERSION;
+-  verboseVersion_ = OpenMS::String(DIALIBGEN_VERSION) + " (OpenMS " + OpenMS::VersionInfo::getVersion() + ")";
++  verboseVersion_ = std::string(DIALIBGEN_VERSION) + " (OpenMS " + OpenMS::VersionInfo::getVersion() + ")";
+ }
+ 
+ void DIALibGen::registerOptionsAndFlags_()
+diff --git a/src/refine/LibraryRefiner.cpp b/src/refine/LibraryRefiner.cpp
+index e4cff84..b8d6781 100644
+--- a/src/refine/LibraryRefiner.cpp
++++ b/src/refine/LibraryRefiner.cpp
+@@ -182,7 +182,7 @@ namespace ODIA
+     std::string namedAccession(std::string_view token, char residue, bool n_term, bool c_term)
+     {
+       using Mod = OpenMS::ResidueModification;
+-      const OpenMS::String name{std::string(token)};
++      const std::string name{token};
+       const auto* database = OpenMS::ModificationsDB::getInstance();
+       // Avoid the database's per-token warning for unknown names; the caller counts them.
+       if (!database->has(name)) { return {}; }
