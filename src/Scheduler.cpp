@@ -2,6 +2,8 @@
 #include "Scheduler.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 namespace ODIA
@@ -25,14 +27,39 @@ namespace ODIA
     const auto t0 = clk::now();
     std::vector<std::thread> pool;
     for (int t = 0; t < opt_.threads; ++t) { pool.emplace_back([this] { worker_(); }); }
+    // ODIA_PROFILE=1: sample the scheduler state twice a second (stderr).
+    std::thread monitor;
+    bool stop = false;
+    if (std::getenv("ODIA_PROFILE") != nullptr)
+    {
+      monitor = std::thread([&] {
+        Lock lock(mtx_);
+        while (!stop)
+        {
+          cv_mon_.wait_for(lock, std::chrono::milliseconds(500));
+          if (stop) { break; }
+          std::fprintf(stderr, "[sched %6.1f s] active read %d extract %d encode %d write %d | outstanding %zu unissued %zu "
+                       "loaded parts %zu (commit part %zu unit %zu) | encode queue %zu unwritten %zu | pool free %zu\n",
+                       std::chrono::duration<double>(clk::now() - t0).count(), active_[0], active_[1], active_[2], active_[3],
+                       outstanding_, unissued_, loaded_.size(), commit_part_, commit_unit_, encode_queue_.size(), unwritten_,
+                       pool_.available());
+        }
+      });
+    }
     for (auto& t : pool) { t.join(); }
+    if (monitor.joinable())
+    {
+      { Lock lock(mtx_); stop = true; }
+      cv_mon_.notify_all();
+      monitor.join();
+    }
     stats_.wall = std::chrono::duration<double>(clk::now() - t0).count();
     if (error_) { std::rethrow_exception(error_); }
   }
 
   bool ExtractionScheduler::finished_() const
   {
-    if (commit_part_ < reader_.parts()) { return false; }
+    if (commit_part_ < reader_.parts() || !encode_queue_.empty() || encoding_ > 0) { return false; }
     for (std::size_t s = 0; s < sink_queue_.size(); ++s)
     {
       if (sink_busy_[s] || !sink_queue_[s].empty()) { return false; }
@@ -46,6 +73,7 @@ namespace ODIA
     while (!error_ && !finished_())
     {
       if (tryWrite_(lock)) { continue; }
+      if (tryEncode_(lock)) { continue; }
       if (tryRead_(lock, true)) { continue; }
       if (tryExtract_(lock)) { continue; }
       if (tryRead_(lock, false)) { continue; }
@@ -109,11 +137,12 @@ namespace ODIA
 
   bool ExtractionScheduler::tryWrite_(Lock& lock)
   {
-    // The idle sink with the longest queue.
+    // The idle sink with the longest queue whose next unit is encoded.
     std::size_t best = sink_queue_.size(), longest = 0;
     for (std::size_t s = 0; s < sink_queue_.size(); ++s)
     {
-      if (!sink_busy_[s] && sink_queue_[s].size() > longest) { best = s; longest = sink_queue_[s].size(); }
+      if (sink_busy_[s] || sink_queue_[s].empty() || !sink_queue_[s].front()->ready) { continue; }
+      if (sink_queue_[s].size() > longest) { best = s; longest = sink_queue_[s].size(); }
     }
     if (best == sink_queue_.size()) { return false; }
     std::shared_ptr<Item> item = std::move(sink_queue_[best].front());
@@ -124,7 +153,7 @@ namespace ODIA
     lock.unlock();
     try
     {
-      writer_.write(best, *item->block, item->part->lib);
+      writer_.append(best, item->encoded);
     }
     catch (...)
     {
@@ -135,14 +164,41 @@ namespace ODIA
       return true;
     }
     lock.lock();
+    if (--item->sinks_left == 0) { --unwritten_; }
     sink_busy_[best] = false;
     end_(SchedulerStats::Write, t0);
-    if (--item->refs == 0)
+    cv_.notify_all();
+    return true;
+  }
+
+  bool ExtractionScheduler::tryEncode_(Lock& lock)
+  {
+    if (encode_queue_.empty()) { return false; }
+    std::shared_ptr<Item> item = std::move(encode_queue_.front());
+    encode_queue_.pop_front();
+    ++encoding_;
+    begin_(SchedulerStats::Encode);
+    const auto t0 = clk::now();
+    lock.unlock();
+    try
     {
-      // Written everywhere: discard the traces now (blocks to the pool), release the part reference.
+      item->encoded = writer_.encode(*item->block, item->part->lib);
+      // Encoded: discard the traces now (blocks back to the pool) and release the library part.
       recycle_(std::move(item->block));
       item->part.reset();
     }
+    catch (...)
+    {
+      lock.lock();
+      --encoding_;
+      end_(SchedulerStats::Encode, t0);
+      fail_();
+      return true;
+    }
+    lock.lock();
+    --encoding_;
+    end_(SchedulerStats::Encode, t0);
+    item->ready = true;
     cv_.notify_all();
     return true;
   }
@@ -189,12 +245,18 @@ namespace ODIA
 
   bool ExtractionScheduler::tryExtract_(Lock& lock)
   {
+    // Units are issued strictly in commit order: never past a part that is not loaded yet. (Otherwise
+    // results of later parts can fill the `ahead` window while the part next in commit order waits,
+    // and only the one unit next to commit may run: measured, 18 s of one busy worker.)
+    std::size_t expected = commit_part_;
     for (auto& [seq, part] : loaded_)
     {
-      if (part->issued >= part->plan.units.size()) { continue; }
+      if (seq != expected) { return false; }
+      if (part->issued >= part->plan.units.size()) { ++expected; continue; }
       const std::size_t unit = part->issued;
       const bool next_commit = seq == commit_part_ && unit == commit_unit_;
       if (outstanding_ >= opt_.ahead && !next_commit) { return false; }
+      if (unwritten_ >= opt_.max_unwritten) { return false; }   // the sinks are behind: write first
       std::vector<float*> blocks;
       if (!pool_.tryAcquire(part->plan.units[unit].blocks, blocks))
       {
@@ -270,9 +332,10 @@ namespace ODIA
         item->part = part;
         item->block = std::move(node.mapped());
         writer_.sinksOf(unit_seq_++, sinks_scratch_);
-        item->refs = sinks_scratch_.size();
+        item->sinks_left = sinks_scratch_.size();
         for (const std::size_t s : sinks_scratch_) { sink_queue_[s].push_back(item); }
-        if (item->refs == 0) { recycle_(std::move(item->block)); }
+        if (item->sinks_left > 0) { ++unwritten_; }
+        encode_queue_.push_back(std::move(item));
       }
       catch (...)
       {

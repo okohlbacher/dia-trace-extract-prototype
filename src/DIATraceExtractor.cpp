@@ -269,7 +269,7 @@ protected:
       popt.threads = threads;
       const auto panel_size = static_cast<std::uint64_t>(std::max(1, getIntOption_("calibration:panel")));
       popt.keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
-      ODIA::loadLibrary(lib_file, popt, panel_lib);
+      ODIA::LibraryReader(lib_file, popt).readAll(panel_lib, threads);   // streamed: never the whole library
       OPENMS_LOG_INFO << "Calibration panel library: every " << popt.keep_every << ". row, " << panel_lib.size()
                       << " targets; " << fmt(ODIA::stageClock() - t_panel0) << mem() << std::endl;
       const ODIA::Library* cal_lib = &panel_lib;
@@ -360,7 +360,7 @@ protected:
       const auto& ss = scheduler.stats();
       std::ostringstream os;
       os << "Scheduler: " << threads << " workers;";
-      for (int c = 0; c < 3; ++c)
+      for (int c = 0; c < ODIA::SchedulerStats::classes; ++c)
       {
         os << " " << ODIA::SchedulerStats::names[c] << " " << ss.tasks[c] << " tasks, " << ss.busy[c] << " thread-s (avg "
            << (ss.wall > 0 ? ss.busy[c] / ss.wall : 0.0) << ", max " << ss.max_threads[c] << " workers);";

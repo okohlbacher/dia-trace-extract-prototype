@@ -57,9 +57,18 @@ namespace ODIA
     bool hasTsv() const { return tsv_ != nullptr; }
     /// Sinks a unit (commit sequence number) goes to.
     void sinksOf(std::uint64_t unit, std::vector<std::size_t>& out) const;
-    /// Encode `block` (extracted from library part `lib`) and append it to `sink`. One call at a time
-    /// per sink, in unit order; different sinks may be written concurrently.
-    void write(std::size_t sink, const TraceBlock& block, const Library& lib);
+    /// A unit encoded for output: the Arrow batch (Parquet) and/or the TSV text.
+    struct Encoded
+    {
+      std::shared_ptr<arrow::RecordBatch> batch;
+      std::string tsv;
+      std::uint64_t rows = 0, points = 0;
+    };
+    /// Encode `block` (extracted from library part `lib`). Const and thread-safe: any worker, in parallel.
+    Encoded encode(const TraceBlock& block, const Library& lib) const;
+    /// Append an encoded unit to `sink`. One call at a time per sink, in unit order; different sinks may
+    /// be appended to concurrently (Parquet compresses each page on the calling thread).
+    void append(std::size_t sink, const Encoded& e);
     /// Close the files.
     void close();
 

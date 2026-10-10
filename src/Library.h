@@ -133,6 +133,9 @@ namespace ODIA
     /// different sources; calls for one source must not overlap.
     std::size_t read(std::size_t source, Library& part);
     std::uint64_t rows() const;   ///< library rows (precursors) in the file
+    /// Read every part (sources concurrently, each streaming its parts) and join them in file order.
+    /// Only one part per source is decoded at a time, so a sampled read (keep_every) stays small.
+    void readAll(Library& out, int threads);
 
   private:
     struct Impl;

@@ -208,11 +208,10 @@ namespace ODIA
     return b;
   }
 
-  void TraceWriter::write(std::size_t sink, const TraceBlock& block, const Library& lib)
+  TraceWriter::Encoded TraceWriter::encode(const TraceBlock& block, const Library& lib) const
   {
-    const auto t0 = std::chrono::steady_clock::now();
-    const bool pq = sink < shards_.size(), tsv = !pq;
-    struct { std::uint64_t rows = 0, points = 0; std::string tsv; std::shared_ptr<arrow::RecordBatch> batch; } e;
+    const bool pq = !shards_.empty(), tsv = tsv_ != nullptr;
+    Encoded e;
     arrow::MemoryPool* pool = arrowPool();
     arrow::StringBuilder run(pool), id(pool), seq(pool), ann(pool), ftype(pool);
     arrow::UInt8Builder charge(pool), decoy(pool), level(pool), ford(pool), fz(pool), floss(pool);
@@ -335,6 +334,13 @@ namespace ODIA
       if (cfg_.expand_rt) { cols.push_back(finish(rtl)); }
       e.batch = arrow::RecordBatch::Make(schema_, static_cast<std::int64_t>(e.rows), cols);
     }
+    return e;
+  }
+
+  void TraceWriter::append(std::size_t sink, const Encoded& e)
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool pq = sink < shards_.size();
     if (pq)
     {
       if (e.batch) { check(shards_[sink]->writer->WriteRecordBatch(*e.batch)); }

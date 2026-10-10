@@ -755,6 +755,34 @@ namespace ODIA
     return s.next < s.seq.size() ? s.seq[s.next] : impl_->parts;
   }
 
+  void LibraryReader::readAll(Library& out, int threads)
+  {
+    const std::size_t n_src = sources();
+    std::vector<std::vector<Library>> per_source(n_src);
+    std::exception_ptr error;
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, std::min<int>(threads, static_cast<int>(n_src))))
+    for (std::ptrdiff_t src = 0; src < static_cast<std::ptrdiff_t>(n_src); ++src)
+    {
+      try
+      {
+        while (nextPart(static_cast<std::size_t>(src)) < parts())
+        {
+          per_source[src].emplace_back();
+          read(static_cast<std::size_t>(src), per_source[src].back());
+        }
+      }
+      catch (...)
+      {
+#pragma omp critical(odia_library_error)
+        if (!error) { error = std::current_exception(); }
+      }
+    }
+    if (error) { std::rethrow_exception(error); }
+    std::vector<Library> parts_in_order;
+    for (auto& v : per_source) { for (auto& p : v) { parts_in_order.push_back(std::move(p)); } }
+    out = Library::concat(parts_in_order, threads);
+  }
+
   std::size_t LibraryReader::read(std::size_t source, Library& part)
   {
     auto& I = *impl_;
