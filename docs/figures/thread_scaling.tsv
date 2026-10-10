@@ -1,0 +1,21 @@
+tool	threads	wall_s	cpu_s	peak_rss_gib
+DIA-NN 1.7.12 (search + XIC export)	4	114.530	396.800	1.697
+DIA-NN 1.7.12 (search + XIC export)	8	59.430	407.900	1.716
+DIA-NN 1.7.12 (search + XIC export)	16	33.830	437.710	1.829
+DIA-NN 1.7.12 (search + XIC export)	32	25.600	587.000	2.236
+DIA-NN 1.7.12 (search + XIC export)	64	27.200	1267.260	3.277
+OpenSwathWorkflow (extraction + scoring)	4	227.210	505.520	10.472
+OpenSwathWorkflow (extraction + scoring)	8	188.570	567.960	11.105
+OpenSwathWorkflow (extraction + scoring)	16	182.980	708.870	11.513
+OpenSwathWorkflow (extraction + scoring)	32	182.610	1075.380	12.341
+OpenSwathWorkflow (extraction + scoring)	64	182.280	2082.070	14.088
+ours A (DIA-NN rules)	4	22.870	87.180	2.127
+ours A (DIA-NN rules)	8	12.740	89.650	2.344
+ours A (DIA-NN rules)	16	7.400	91.080	2.485
+ours A (DIA-NN rules)	32	5.940	115.560	3.015
+ours A (DIA-NN rules)	64	6.080	132.650	2.919
+ours B (OpenSWATH rules)	4	13.890	51.720	2.107
+ours B (OpenSWATH rules)	8	7.740	52.560	2.177
+ours B (OpenSWATH rules)	16	5.110	56.320	2.570
+ours B (OpenSWATH rules)	32	4.860	83.590	2.745
+ours B (OpenSWATH rules)	64	4.620	83.370	2.718
