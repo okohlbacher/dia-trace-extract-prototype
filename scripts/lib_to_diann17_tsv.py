@@ -3,7 +3,10 @@
 
 Modifications are renamed to UniMod (Carbamidomethyl -> UniMod:4, Oxidation -> UniMod:35); the RT
 column (DIALibGen raw 0..1 model output) is written as iRT * --rt_scale (DIA-NN fits its own RT map).
-Fragments: all stored ones (DIALibGen keeps 3..12 by intensity). Usage:
+Fragments: all stored ones (DIALibGen keeps 3..12 by intensity).
+Proteins: DIA-NN 1.7.12 takes protein identity only from a UniprotID/ProteinId column (with ProteinName
+alone it reports "0 protein groups"). DIALibGen's Protein.Group ("sp|ACC|NAME;sp|ACC2|NAME2") is split
+into UniprotID = "ACC;ACC2" and ProteinName = "NAME;NAME2". Usage:
   lib_to_diann17_tsv.py in.parquet out.tsv [--ids ids.txt] [--rt_scale 100]
 """
 import argparse, re
@@ -20,6 +23,16 @@ a = ap.parse_args()
 keep = set(open(a.ids).read().split()) if a.ids else None
 pat = re.compile(r"\(([^)]*)\)")
 def unimod(s): return pat.sub(lambda m: "(" + UNIMOD.get(m.group(1), m.group(1)) + ")", s)
+def split_group(g):
+    acc, name = [], []
+    for member in g.split(";"):
+        f = member.split("|")
+        acc.append(f[1] if len(f) >= 3 else member); name.append(f[2] if len(f) >= 3 else member)
+    return ";".join(acc), ";".join(name)
+def proteins(col):
+    d = pc.dictionary_encode(col).combine_chunks()
+    acc, name = zip(*[split_group(g) for g in d.dictionary.to_pylist()]) if len(d.dictionary) else ((), ())
+    return pc.take(pa.array(acc, pa.string()), d.indices), pc.take(pa.array(name, pa.string()), d.indices)
 
 f = pq.ParquetFile(a.inp)
 writer = None
@@ -35,6 +48,7 @@ for rg in range(f.num_row_groups):
     idx = pc.list_parent_indices(t["Product.Mz"])
     rep = lambda col: pc.take(t[col], idx)
     seq = [unimod(s) for s in rep("Modified.Sequence").to_pylist()]
+    acc, pname = proteins(rep("Protein.Group"))
     ft = [TYPES.get(x, "y") for x in pc.list_flatten(t["Fragment.Type"]).to_pylist()]
     fl = [LOSS.get(x, "noloss") for x in pc.list_flatten(t["Fragment.Loss.Type"]).to_pylist()]
     out = pa.table({
@@ -44,7 +58,8 @@ for rg in range(f.num_row_groups):
         "iRT": pc.multiply(pc.cast(rep("RT"), pa.float64()), a.rt_scale),
         "ProductMz": pc.list_flatten(t["Product.Mz"]),
         "LibraryIntensity": pc.list_flatten(t["Relative.Intensity"]),
-        "ProteinName": rep("Protein.Group"),
+        "UniprotID": acc,
+        "ProteinName": pname,
         "FragmentCharge": pc.list_flatten(t["Fragment.Charge"]),
         "FragmentType": ft,
         "FragmentSeriesNumber": pc.list_flatten(t["Fragment.Series.Number"]),

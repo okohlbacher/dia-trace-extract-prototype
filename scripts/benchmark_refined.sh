@@ -7,21 +7,29 @@
 #      DIA-NN 1.7.12 (round 2, --xic), DIATraceExtractor (-rt_mode minutes), OpenSwathWorkflow (RT in s, no iRT)
 #   4. compare_traces.py: extractor A (DIA-NN rules) vs DIA-NN and OpenSWATH; extractor B (OpenSWATH rules)
 #      vs OpenSWATH; DIA-NN vs OpenSWATH
-# Usage: benchmark_refined.sh 01|02|03 [threads]
+# Usage: [LIB=predicted.parquet] [DIALIBGEN=path] benchmark_refined.sh 01|02|03 [threads]
+#   LIB defaults to the human 0.11.0 library; outputs are keyed by the library name.
 set -euo pipefail
 RUN=$1; THREADS=${2:-64}
 P=/ceph/ibmi/abi/oliver/Claude/ODIA-V3
 MZML=$P/benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_$RUN.mzML
-PRED=$P/library/human_UP000005640_astral_nce25.parquet
-PRED_DIANN=$P/library/human_UP000005640_astral_nce25.diann17.tsv
-REF=$P/library/refined/human_astral_refined_run$RUN.parquet
+PRED=${LIB:-$P/library/human_UP000005640_astral_nce25.parquet}
+NAME=$(basename $PRED .parquet)
+PRED_DIANN=$P/library/diann17/$NAME.tsv   # UniprotID + ProteinName columns (DIA-NN protein groups)
+REF=$P/library/refined/${NAME}_shared_run$RUN.parquet
+DLG=${DIALIBGEN:-$P/tools/DIALibGen/build/DIALibGen}
 PY=$P/tools/pyenv/bin/python
 X=$P/build/DIATraceExtractor
 B=$P/OpenMS/OpenMS-build/bin
 DIANN=$P/tools/DiaNN-1.7.12/diann-1.7.12-xicfix
-D1=$P/results/diann17/run$RUN          # round 1 (predicted library)
-O=$P/results/refined/run$RUN           # everything on the refined library
-mkdir -p $D1/temp $O/diann/temp $P/library/refined
+D1=$P/results/diann17/$NAME/run$RUN    # round 1 (predicted library)
+O=$P/results/refined/$NAME/run$RUN     # everything on the refined library
+mkdir -p $D1/temp $O/diann/temp $P/library/refined $P/library/diann17
+
+# 0. the predicted library as a DIA-NN 1.7.12 spectral library (TSV, passed with --lib)
+if [ ! -s $PRED_DIANN ]; then
+  $PY $P/scripts/lib_to_diann17_tsv.py $PRED $PRED_DIANN.part > $PRED_DIANN.log 2>&1 && mv $PRED_DIANN.part $PRED_DIANN
+fi
 
 # 1. round 1: DIA-NN 1.7.12 on the predicted library
 if [ ! -s $D1/report.tsv ]; then
@@ -32,12 +40,14 @@ fi
 # 2. recalibrate the library with DIALibGen (observed RT of the 1% FDR identifications)
 if [ ! -s $REF ]; then   # DIALibGen refuses to overwrite; refinement is deterministic, so reuse
 $PY $P/scripts/diann17_report_to_parquet.py $D1/report.tsv $D1/report.parquet
-( export LD_LIBRARY_PATH=$P/tools/onnxruntime-linux-x64-1.31.0/lib DIALIBGEN_MODEL_DIR=$P/tools/DIALibGen/models
-  /usr/bin/time -v $P/tools/DIALibGen/build/DIALibGen -mode refine -in $PRED -ids $D1/report.parquet \
+( export LD_LIBRARY_PATH=$P/tools/onnxruntime-linux-x64-1.31.0/lib DIALIBGEN_MODEL_DIR=$P/tools/DIALibGen/models \
+         OPENMS_DATA_PATH=${OPENMS_DATA_PATH:-$(dirname $DLG)/../share/OpenMS}
+  /usr/bin/time -v $DLG -mode refine -in $PRED -ids $D1/report.parquet \
       -q_global 1 -q_protein 1 -out $REF -out_report ${REF%.parquet}.residuals.tsv -threads 16 \
       > ${REF%.parquet}.refine.log 2>&1 )
 fi
 grep -E 'matched|library .* -> ' ${REF%.parquet}.refine.log || true
+grep -E 'Spectral library loaded|IDs at 0.01' $D1/diann.log || true
 
 # 3a. the same library in each tool's format
 $PY $P/scripts/lib_to_diann17_tsv.py $REF $O/lib_diann17.tsv --rt_scale 1 > /dev/null    # iRT := observed minutes
