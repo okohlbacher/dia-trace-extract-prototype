@@ -36,8 +36,16 @@ add_library(odia_traces STATIC
   src/RunGrid.cpp
   src/Extractor.cpp
   src/TraceWriter.cpp
-  src/Calibration.cpp)
+  src/Calibration.cpp
+  src/mzpeak/MzPeakFile.cpp)
 target_include_directories(odia_traces PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# The vendored mzPeak reader uses nlohmann/json; OpenMS ships it (header-only) but does not export it.
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
+          HINTS ${OpenMS_DIR}/../src/openms/extern/nlohmann_json/include ${OpenMS_DIR}/vcpkg_installed/x64-linux-dynamic/include)
+if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+  message(FATAL_ERROR "nlohmann/json.hpp not found; set NLOHMANN_JSON_INCLUDE_DIR")
+endif()
+target_include_directories(odia_traces SYSTEM PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
 target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX)
 target_compile_options(odia_traces PRIVATE -Wall -Wextra)
 
@@ -52,3 +60,7 @@ endif()
 # Comparison helper: OpenSWATH .xic -> trace layout used by scripts/compare_traces.py.
 add_executable(OpenSwathXicToTraces src/OpenSwathXicToTraces.cpp)
 target_link_libraries(OpenSwathXicToTraces PRIVATE OpenMS ${ODIA_ARROW} ${ODIA_PARQUET})
+
+# Helper: mzML -> mzPeak with the vendored MzPeakFile writer.
+add_executable(MzMLToMzPeak src/mzpeak/MzMLToMzPeak.cpp)
+target_link_libraries(MzMLToMzPeak PRIVATE odia_traces)

@@ -7,12 +7,15 @@
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
+#include "mzpeak/MzPeakFile.h"
 
 #include <algorithm>
 #include <string_view>
 #include <functional>
 #include <fstream>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -42,6 +45,14 @@ namespace ODIA
 
   namespace
   {
+    bool hasExtension(const std::string& f, const std::string& ext)
+    {
+      if (f.size() < ext.size()) { return false; }
+      std::string e = f.substr(f.size() - ext.size());
+      std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return std::tolower(c); });
+      return e == ext;
+    }
+
     bool isRaw(const std::string& f)
     {
       if (f.size() < 4) { return false; }
@@ -424,6 +435,28 @@ namespace ODIA
       exp.sortSpectra(false);
       std::uint32_t index = 0;
       for (auto& s : exp.getSpectra()) { router.route(decode(s, index++)); }
+    }
+    else if (hasExtension(filename, ".mzpeak"))
+    {
+      // mzPeak through the vendored OpenMS MzPeakFile reader, streamed spectrum by spectrum.
+      OpenMS::MzPeakFile file;
+      OpenMS::MSDataTransformingConsumer consumer;
+      std::uint32_t index = 0;
+      std::uint64_t n_level[3] = {0, 0, 0}, n_peaks[3] = {0, 0, 0}, n_prec = 0, n_profile[3] = {0, 0, 0};
+      consumer.setSpectraProcessingFunc([&](OpenMS::MSSpectrum& s) {
+        const int l = std::min<int>(2, static_cast<int>(s.getMSLevel()));
+        ++n_level[l]; n_peaks[l] += s.size(); n_prec += !s.getPrecursors().empty();
+        n_profile[l] += s.getType(false) == OpenMS::MSSpectrum::SpectrumType::PROFILE;
+        router.route(decode(s, index++));
+      });
+      file.transform(filename, &consumer, true, true);
+      if (std::getenv("ODIA_PROFILE"))
+      {
+        std::fprintf(stderr, "[mzpeak] MS1 %llu spectra (%llu profile) %llu peaks; MS2 %llu spectra (%llu profile) %llu peaks; "
+                     "with precursor %llu; other %llu\n", (unsigned long long)n_level[1], (unsigned long long)n_profile[1],
+                     (unsigned long long)n_peaks[1], (unsigned long long)n_level[2], (unsigned long long)n_profile[2],
+                     (unsigned long long)n_peaks[2], (unsigned long long)n_prec, (unsigned long long)n_level[0]);
+      }
     }
     else if (decode_threads > 1 && loadChunked(filename, decode_threads, [&](Decoded&& d) { router.route(std::move(d)); }))
     {

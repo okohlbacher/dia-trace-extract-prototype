@@ -70,8 +70,9 @@ public:
 protected:
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "DIA run: centroided mzML or Thermo .raw.");
-    setValidFormats_("in", {"mzML", "raw"});
+    // A plain string, not registerInputFile_: for unregistered extensions OpenMS (develop) sniffs the
+    // content, takes the mzPeak ZIP container for a single-file .zip and fails; -in is checked below.
+    registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.");
     registerInputFile_("lib", "<file>", "",
                        "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.");
     registerOutputFile_("out", "<file>", "", "Traces (Parquet, one row per trace on the global cycle axis).", false);
@@ -144,10 +145,27 @@ protected:
     registerStringOption_("run_name", "<name>", "", "Run name in the output (default: input file stem).", false);
   }
 
-  ExitCodes main_(int, const char**) override
+  ExitCodes main_(int argc, const char** argv) override
+  {
+    // TOPPBase reports OpenMS exceptions; report everything else too instead of aborting.
+    try { return run_(argc, argv); }
+    catch (const OpenMS::Exception::BaseException&) { throw; }
+    catch (const std::exception& e)
+    {
+      OPENMS_LOG_ERROR << "Error: " << e.what() << std::endl;
+      return INTERNAL_ERROR;
+    }
+  }
+
+  ExitCodes run_(int, const char**)
   {
     const ODIA::StageTime t_start = ODIA::stageClock();
     const std::string in = getStringOption_("in"), lib_file = getStringOption_("lib");
+    if (!std::filesystem::is_regular_file(in) || ::access(in.c_str(), R_OK) != 0)
+    {
+      OPENMS_LOG_ERROR << "Input file not readable: " << in << std::endl;
+      return INPUT_FILE_NOT_READABLE;
+    }
     const std::string out = getStringOption_("out"), out_tsv = getStringOption_("out_tsv");
     std::string out_axes = getStringOption_("out_axes");
     if (out.empty() && out_tsv.empty())
