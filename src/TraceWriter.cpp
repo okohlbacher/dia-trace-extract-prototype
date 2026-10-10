@@ -364,7 +364,7 @@ namespace ODIA
     if (!e.batch || shards_.empty()) { return; }
     auto& sh = *shards_[e.unit % shards_.size()];
     std::unique_lock lock(sh.mtx);
-    sh.cv.wait(lock, [&] { return sh.queue.size() < 8 || sh.error; });
+    sh.cv.wait(lock, [&] { return sh.queue.size() < 4 || sh.error; });
     if (sh.error) { std::rethrow_exception(sh.error); }
     sh.queue.push_back(std::move(e.batch));
     sh.cv.notify_all();

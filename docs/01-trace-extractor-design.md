@@ -166,3 +166,20 @@ Remaining, in DIALibGen's writer (not this tool): writing the string columns as 
 dictionary-encodes per row group as useful) gives 1.17 s with 4 row groups and 0.79 s with 32, and a 26%
 smaller file (424 vs 570 MB) — measured on a rewritten copy of the same library.
 Cold page cache: reading the 5.8 GB mzML from Ceph adds ~10 s to ingest (the 1.2 GB mzPeak would cut that).
+
+### 7.2 Bounded ingest and memory (2026-10-10)
+
+Ingest wall time is flat beyond ~32 threads while its CPU keeps growing (memory-bandwidth bound; jemalloc
+and tcmalloc were slower, nested parallelism ruled out). Changes: `-ingest_threads` defaults to
+min(threads, 32); look-ahead bounded (ingest min(2·threads, 32) chunks, extraction min(4·threads, 64)
+units, ≤4 queued batches per writer shard); freed Arrow and malloc memory returned to the OS after the
+grid ingest (`ReleaseUnused` + `malloc_trim`). The tool now prints memory after each stage.
+
+| threads | total wall | ingest CPU | peak RSS before → after |
+|---|---|---|---|
+| 32 | 14.0–14.2 s | 65 → ~60 s | 5.50 → 4.6 GiB |
+| 64 | 14.8–14.9 s | 174 → 69 s | 6.36 → 4.7–4.9 GiB |
+
+Output identical to the unbounded run (full library, 64 threads). The remaining peak is the library
+load transient (~4.3 GiB while decoded row groups, parsed parts and the joined copy coexist) and the
+grid + library + extraction buffers (~5 GiB at the end).

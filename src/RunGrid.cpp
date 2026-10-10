@@ -366,7 +366,8 @@ namespace ODIA
       // 4. Parse chunks in parallel, route them in file order.
       std::vector<std::ifstream> files(static_cast<Size>(std::max(1, threads)));
       orderedParallel(
-        used, threads, 2 * static_cast<Size>(threads),
+        // Look-ahead bounded in chunks, not threads: each parked chunk holds its decoded spectra.
+        used, threads, std::min<Size>(2 * static_cast<Size>(threads), 32),
         [&](Size c) {
           auto& file = files[static_cast<Size>(omp_get_thread_num())];
           if (!file.is_open()) { file.open(filename, std::ios::binary); }

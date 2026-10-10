@@ -13,7 +13,9 @@
 #include <OpenMS/CONCEPT/LogStream.h>
 
 #include <cstdlib>
+#include <arrow/memory_pool.h>
 #include <filesystem>
+#include <malloc.h>
 #include <unistd.h>
 #include <vector>
 #include <optional>
@@ -32,6 +34,36 @@ namespace
     rusage u{};
     getrusage(RUSAGE_SELF, &u);
     return static_cast<double>(u.ru_maxrss) / (1024.0 * 1024.0); // KiB on Linux
+  }
+
+  /// Current and peak resident memory (VmRSS, VmHWM) in GiB.
+  std::pair<double, double> rssGiB()
+  {
+    std::ifstream st("/proc/self/status");
+    std::string line;
+    double rss = 0, hwm = 0;
+    while (std::getline(st, line))
+    {
+      if (line.rfind("VmRSS:", 0) == 0) { rss = std::stod(line.substr(6)) / (1024.0 * 1024.0); }
+      if (line.rfind("VmHWM:", 0) == 0) { hwm = std::stod(line.substr(6)) / (1024.0 * 1024.0); }
+    }
+    return {rss, hwm};
+  }
+
+  std::string mem()
+  {
+    const auto [rss, hwm] = rssGiB();
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(2) << "; memory " << rss << " GiB (peak so far " << hwm << " GiB)";
+    return os.str();
+  }
+
+  /// Hand memory freed by a finished stage back to the OS: Arrow's pool (decoded Parquet row groups) and
+  /// glibc's arenas (ingest chunks) otherwise keep it resident for the rest of the run.
+  void releaseFreedMemory()
+  {
+    arrow::default_memory_pool()->ReleaseUnused();
+    ::malloc_trim(0);
   }
 
   std::string fmt(const ODIA::StageTime& t)
@@ -135,7 +167,8 @@ protected:
     registerFlag_("expand_rt", "Also write the RT list per trace row (convenience; larger file).");
     registerFlag_("skip_empty", "Do not write traces that are all zero.");
     registerIntOption_("ingest_threads", "<n>", 0, "Threads for the mzML ingest (parallel chunk parsing; 1 = serial "
-                       "streaming parser; 0 = same as -threads).", false, true);
+                       "streaming parser; 0 = min(-threads, 32): the parse is memory-bandwidth bound, measured flat beyond "
+                       "~32 threads while CPU time keeps growing).", false, true);
     setMinInt_("ingest_threads", 0);
     registerIntOption_("out_shards", "<n>", 8, "Parquet part files written concurrently; > 1 makes -out a directory of "
                        "part-NNN.parquet files (read as one table by pyarrow/DuckDB). Fixed default: the output does "
@@ -191,18 +224,19 @@ protected:
     ODIA::loadLibrary(lib_file, lopt, lib);
     const ODIA::StageTime t_lib = ODIA::stageClock() - t_lib0;
     OPENMS_LOG_INFO << "Library: " << lib.size() << " precursors, " << lib.fragmentCount() << " fragments; "
-                    << fmt(t_lib) << std::endl;
+                    << fmt(t_lib) << mem() << std::endl;
     if (lib.size() == 0) { OPENMS_LOG_ERROR << "Library is empty after filtering." << std::endl; return INPUT_FILE_EMPTY; }
 
     // --- run grid
-    const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : threads;
+    const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : std::min(threads, 32);
     ODIA::RunGrid grid = ODIA::RunGrid::load(in, ingest_threads);
     omp_set_num_threads(threads);
+    releaseFreedMemory();
     const auto& gs = grid.stats;
     OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, "
                     << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra, "
                     << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
-                    << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << std::endl;
+                    << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << mem() << std::endl;
 
     // --- calibration (from the run itself) and RT map
     const std::string mode = getStringOption_("rt_mode");
@@ -293,7 +327,7 @@ protected:
     };
     const ODIA::StageTime t_ext0 = ODIA::stageClock();
     ODIA::orderedParallel(
-      extractor.units(), threads, 4 * static_cast<std::size_t>(threads),
+      extractor.units(), threads, std::min<std::size_t>(4 * static_cast<std::size_t>(threads), 64),
       [&](std::size_t u) {
         ODIA::TraceBlock b = extractor.extract(u);
         Done d;
@@ -318,7 +352,7 @@ protected:
                     << " units, " << es.without_window << " precursors without window, " << es.empty_range
                     << " outside the acquired RT range; " << es.traces << " traces, " << es.ms2_points << " MS2 + "
                     << es.ms1_points << " MS1 points, " << es.peak_lookups << " lookups; " << fmt(es.time)
-                    << " with " << threads << " threads" << std::endl;
+                    << " with " << threads << " threads" << mem() << std::endl;
     OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points in " << writer.shardCount() << " Parquet part(s) (busiest writer "
                     << writer.busySeconds() << " s, final drain " << t_close.wall << " s)" << std::endl;
     OPENMS_LOG_INFO << "Total: " << fmt(t_total) << ", peak RSS " << peakRssGiB() << " GiB" << std::endl;
