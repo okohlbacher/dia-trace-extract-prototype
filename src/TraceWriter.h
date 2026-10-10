@@ -5,25 +5,20 @@
 #include "Library.h"
 #include "RunGrid.h"
 
-#include <condition_variable>
+#include <atomic>
 #include <cstdio>
-#include <deque>
-#include <exception>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace arrow { class RecordBatch; class Schema; }
 
 namespace ODIA
 {
-  /// Writes traces in two stages:
-  ///  1. encode(block) -- const and thread-safe; the extraction workers call it, so building the
-  ///     Arrow arrays and the TSV text runs in parallel;
-  ///  2. push(encoded) -- in unit order; a writer thread appends to the files (Parquet buffers
-  ///     row groups and compresses columns on its own threads).
+  /// Writes traces to output *sinks*: the Parquet part files (`part-NNN.parquet`, or one file) and the
+  /// long TSV. The writer owns no threads: the caller (the extraction scheduler) writes each sink
+  /// serially from any worker thread, and different sinks concurrently. A write encodes the block
+  /// (Arrow arrays or TSV text) and appends it; Parquet compresses each row group on the calling thread.
   ///
   /// Outputs:
   ///  - Parquet traces (one row per trace = fragment or MS1 isotope): `cycle_begin` on the global
@@ -46,48 +41,44 @@ namespace ODIA
       bool skip_empty = false;
       bool isotope_unit_spacing = false;
       std::int64_t rows_per_group = 1 << 17;
-      /// Parquet part files written concurrently (unit u goes to part u % shards). 1 = a single file at
-      /// `parquet`; > 1 = `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not
-      /// derived from the thread count, so the output does not depend on -threads.
+      /// Parquet part files (unit u goes to part u % shards). 1 = a single file at `parquet`; > 1 =
+      /// `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not derived from the
+      /// thread count, so the output does not depend on -threads.
       int shards = 8;
       std::vector<std::pair<std::string, std::string>> metadata;  ///< written into the Parquet footer
     };
 
-    struct Encoded
-    {
-      std::shared_ptr<arrow::RecordBatch> batch;  ///< null without Parquet output
-      std::string tsv;
-      std::uint64_t rows = 0, points = 0;
-      std::size_t unit = 0;                       ///< work unit (selects the shard)
-    };
-
-    TraceWriter(const Library& lib, const RunGrid& grid, Config cfg);
+    TraceWriter(const RunGrid& grid, Config cfg);
     ~TraceWriter();
 
-    Encoded encode(const TraceBlock& block) const;
-    /// Queue an encoded block (call in unit order). TSV text is written immediately; the Parquet batch
-    /// goes to its shard's writer thread (blocks while that shard's bounded queue is full).
-    void push(Encoded&& e);
-    /// Drain, close files; rethrows a writer-thread error.
+    /// Sinks: Parquet parts 0 .. parquetSinks()-1, then the TSV (if configured).
+    std::size_t sinks() const { return shards_.size() + (tsv_ ? 1 : 0); }
+    std::size_t parquetSinks() const { return shards_.size(); }
+    bool hasTsv() const { return tsv_ != nullptr; }
+    /// Sinks a unit (commit sequence number) goes to.
+    void sinksOf(std::uint64_t unit, std::vector<std::size_t>& out) const;
+    /// Encode `block` (extracted from library part `lib`) and append it to `sink`. One call at a time
+    /// per sink, in unit order; different sinks may be written concurrently.
+    void write(std::size_t sink, const TraceBlock& block, const Library& lib);
+    /// Close the files.
     void close();
 
     std::uint64_t rows() const { return rows_; }
     std::uint64_t points() const { return points_; }
-    double busySeconds() const { return busy_; }
+    double busySeconds() const;   ///< max over sinks of the time spent writing
     std::size_t shardCount() const { return shards_.size(); }
 
   private:
     struct Shard;
     void writeAxes_();
 
-    const Library& lib_;
     const RunGrid& grid_;
     Config cfg_;
     std::shared_ptr<arrow::Schema> schema_;
     std::vector<std::unique_ptr<Shard>> shards_;
     std::FILE* tsv_ = nullptr;
+    double tsv_busy_ = 0;
     bool closed_ = false;
-    std::uint64_t rows_ = 0, points_ = 0;
-    double busy_ = 0;   ///< max over shards of the time spent writing
+    std::atomic<std::uint64_t> rows_{0}, points_{0};
   };
 }

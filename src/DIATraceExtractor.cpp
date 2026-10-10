@@ -1,17 +1,21 @@
 // ODIA-V3 trace extractor -- TOPP tool.
 //
 // Stages: library -> run grid (one global RT axis) -> parallel gather -> ordered export.
+#include "ArrowPool.h"
 #include "Calibration.h"
 #include "Extractor.h"
 #include "Library.h"
 #include "Pipeline.h"
 #include "RtMap.h"
 #include "RunGrid.h"
+#include "Scheduler.h"
 #include "TraceWriter.h"
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <arrow/memory_pool.h>
 #include <filesystem>
@@ -55,6 +59,12 @@ namespace
     const auto [rss, hwm] = rssGiB();
     std::ostringstream os;
     os << std::fixed << std::setprecision(2) << "; memory " << rss << " GiB (peak so far " << hwm << " GiB)";
+    // Page faults since the previous report (first touch of new memory: allocator churn shows here).
+    static long last_minflt = 0;
+    rusage ru{};
+    ::getrusage(RUSAGE_SELF, &ru);
+    os << ", " << std::setprecision(2) << (ru.ru_minflt - last_minflt) / 1e6 << " M page faults";
+    last_minflt = ru.ru_minflt;
     return os.str();
   }
 
@@ -63,6 +73,7 @@ namespace
   void releaseFreedMemory()
   {
     arrow::default_memory_pool()->ReleaseUnused();
+    ODIA::arrowPool()->ReleaseUnused();
     ::malloc_trim(0);
   }
 
@@ -175,6 +186,10 @@ protected:
                        "not depend on -threads.", false, true);
     setMinInt_("out_shards", 1);
     registerIntOption_("unit_precursors", "<n>", 256, "Precursors per parallel work unit.", false, true);
+    registerIntOption_("buffer_mb", "<MiB>", 512, "Trace buffer pool (pre-faulted, recycled): extracted traces live "
+                       "here until they are written. Units that do not fit wait for writes to free blocks.", false, true);
+    registerIntOption_("library_part_rows", "<n>", 65536, "Library rows per streamed part (parts are read, planned "
+                       "and released while extraction runs; fixed, so the output does not depend on -threads).", false, true);
     registerStringOption_("run_name", "<name>", "", "Run name in the output (default: input file stem).", false);
   }
 
@@ -213,19 +228,18 @@ protected:
     }
     const int threads = std::max(1, getIntOption_("threads"));
 
-    // --- library
+    // --- library: opened as a stream of parts (read concurrently with extraction below)
     const ODIA::StageTime t_lib0 = ODIA::stageClock();
     ODIA::LibraryLoadOptions lopt;
     lopt.top_fragments = static_cast<std::size_t>(getIntOption_("top_fragments"));
     lopt.targets_only = getFlag_("targets_only");
     lopt.threads = threads;
     if (!getStringOption_("ids").empty()) { lopt.keep_ids = ODIA::readIdList(getStringOption_("ids")); }
-    ODIA::Library lib;
-    ODIA::loadLibrary(lib_file, lopt, lib);
+    ODIA::LibraryReader library(lib_file, lopt, static_cast<std::size_t>(std::max(1, getIntOption_("library_part_rows"))));
     const ODIA::StageTime t_lib = ODIA::stageClock() - t_lib0;
-    OPENMS_LOG_INFO << "Library: " << lib.size() << " precursors, " << lib.fragmentCount() << " fragments; "
-                    << fmt(t_lib) << mem() << std::endl;
-    if (lib.size() == 0) { OPENMS_LOG_ERROR << "Library is empty after filtering." << std::endl; return INPUT_FILE_EMPTY; }
+    OPENMS_LOG_INFO << "Library: " << library.rows() << " rows in " << library.parts() << " parts from "
+                    << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem() << std::endl;
+    if (library.rows() == 0) { OPENMS_LOG_ERROR << "Library is empty." << std::endl; return INPUT_FILE_EMPTY; }
 
     // --- run grid
     const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : std::min(threads, 32);
@@ -244,19 +258,21 @@ protected:
     std::optional<ODIA::CalibrationResult> cal;
     if (mode == "auto" || mass_auto)
     {
-      // The panel is drawn from the whole library, never from an -ids subset: calibrating on externally
-      // confirmed precursors would not be self-calibration.
-      ODIA::Library full;
-      const ODIA::Library* cal_lib = &lib;
-      if (!lopt.keep_ids.empty())
-      {
-        ODIA::LibraryLoadOptions copt;
-        copt.top_fragments = 6;
-        copt.targets_only = true;
-        copt.threads = threads;
-        ODIA::loadLibrary(lib_file, copt, full);
-        cal_lib = &full;
-      }
+      // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
+      // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
+      // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
+      const ODIA::StageTime t_panel0 = ODIA::stageClock();
+      ODIA::Library panel_lib;
+      ODIA::LibraryLoadOptions popt;
+      popt.top_fragments = 6;
+      popt.targets_only = true;
+      popt.threads = threads;
+      const auto panel_size = static_cast<std::uint64_t>(std::max(1, getIntOption_("calibration:panel")));
+      popt.keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
+      ODIA::loadLibrary(lib_file, popt, panel_lib);
+      OPENMS_LOG_INFO << "Calibration panel library: every " << popt.keep_every << ". row, " << panel_lib.size()
+                      << " targets; " << fmt(ODIA::stageClock() - t_panel0) << mem() << std::endl;
+      const ODIA::Library* cal_lib = &panel_lib;
       ODIA::CalibrationOptions copt;
       copt.panel = static_cast<std::size_t>(getIntOption_("calibration:panel"));
       copt.search_ppm = getDoubleOption_("calibration:search_ppm");
@@ -297,7 +313,13 @@ protected:
     eopt.threads = threads;
     eopt.isotope_unit_spacing = getStringOption_("ms1_isotope_spacing") == "unit";
     eopt.unit_precursors = static_cast<std::size_t>(std::max(1, getIntOption_("unit_precursors")));
-    ODIA::Extractor extractor(lib, rt_map, grid, eopt);
+    // Trace buffer pool: 256 KiB blocks, pre-faulted once and recycled (no page faults or allocator churn
+    // during extraction); a trace run longer than a block goes to the heap.
+    constexpr std::size_t block_floats = 64 * 1024;
+    const std::size_t pool_blocks = std::max<std::size_t>(16, static_cast<std::size_t>(getIntOption_("buffer_mb")) * (1u << 20) / (block_floats * sizeof(float)));
+    ODIA::BufferPool buffers(block_floats, pool_blocks);
+    eopt.block_floats = block_floats;
+    ODIA::Extractor extractor(rt_map, grid, eopt);
 
     ODIA::TraceWriter::Config wcfg;
     wcfg.parquet = out;
@@ -316,45 +338,61 @@ protected:
                      {"aggregation", getStringOption_("aggregation")},
                      {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
                      {"ms1_mapping", "linear interpolation of MS1 scans at cycle_rt"}};
-    ODIA::TraceWriter writer(lib, grid, wcfg);
+    ODIA::TraceWriter writer(grid, wcfg);
 
-    // Parallel stage: extract a unit and encode it for output. Ordered stage: account + write.
-    struct Done
-    {
-      std::vector<ODIA::TraceRecord> records;
-      std::uint64_t lookups = 0;
-      ODIA::TraceWriter::Encoded encoded;
+    // One pool of workers, centrally scheduled (ODIA::ExtractionScheduler): read + plan library parts,
+    // extract units into recycled pool buffers, write sinks; commits in a fixed order.
+    std::uint64_t library_fragments = 0;
+    ODIA::SchedulerOptions sopt;
+    sopt.threads = threads;
+    sopt.ahead = std::min<std::size_t>(4 * static_cast<std::size_t>(threads), 64);
+    sopt.parts_ahead = std::max<std::size_t>(4, 2 * library.sources());
+    ODIA::ExtractionScheduler scheduler(library, extractor, writer, buffers, sopt);
+    scheduler.on_part = [&](const ODIA::Library& lib, const ODIA::Extractor::Plan& plan) {
+      extractor.account(plan);
+      library_fragments += lib.fragmentCount();
     };
+    scheduler.on_unit = [&](const ODIA::TraceBlock& b) { extractor.account(b.records, b.lookups); };
     const ODIA::StageTime t_ext0 = ODIA::stageClock();
-    ODIA::orderedParallel(
-      extractor.units(), threads, std::min<std::size_t>(4 * static_cast<std::size_t>(threads), 64),
-      [&](std::size_t u) {
-        ODIA::TraceBlock b = extractor.extract(u);
-        Done d;
-        d.encoded = writer.encode(b);
-        d.encoded.unit = u;
-        d.lookups = b.lookups;
-        d.records = std::move(b.records);
-        return d;
-      },
-      [&](Done&& d) {
-        extractor.account(d.records, d.lookups);
-        writer.push(std::move(d.encoded));
-      });
+    scheduler.run();
     extractor.setTime(ODIA::stageClock() - t_ext0);
+    {
+      const auto& ss = scheduler.stats();
+      std::ostringstream os;
+      os << "Scheduler: " << threads << " workers;";
+      for (int c = 0; c < 3; ++c)
+      {
+        os << " " << ODIA::SchedulerStats::names[c] << " " << ss.tasks[c] << " tasks, " << ss.busy[c] << " thread-s (avg "
+           << (ss.wall > 0 ? ss.busy[c] / ss.wall : 0.0) << ", max " << ss.max_threads[c] << " workers);";
+      }
+      os << " trace pool " << buffers.bytes() / double(1u << 20) << " MiB, peak " << buffers.peakInUse() << " of "
+         << buffers.capacity() << " blocks, " << ss.heap_units << " units on the heap; library parts resident <= "
+         << ss.peak_parts << ", " << ss.part_objects << " part objects";
+      OPENMS_LOG_INFO << os.str() << std::endl;
+    }
     const ODIA::StageTime t_close0 = ODIA::stageClock();
     writer.close();
     const ODIA::StageTime t_close = ODIA::stageClock() - t_close0;
     const ODIA::StageTime t_total = ODIA::stageClock() - t_start;
 
     const auto& es = extractor.stats();
-    OPENMS_LOG_INFO << "Extraction: " << es.assignments << " precursor-window assignments in " << es.units
+    OPENMS_LOG_INFO << "Extraction: " << es.precursors << " precursors (" << library_fragments << " fragments) from "
+                    << library.parts() << " library parts; " << es.assignments << " precursor-window assignments in " << es.units
                     << " units, " << es.without_window << " precursors without window, " << es.empty_range
                     << " outside the acquired RT range; " << es.traces << " traces, " << es.ms2_points << " MS2 + "
                     << es.ms1_points << " MS1 points, " << es.peak_lookups << " lookups; " << fmt(es.time)
                     << " with " << threads << " threads" << mem() << std::endl;
     OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points in " << writer.shardCount() << " Parquet part(s) (busiest writer "
                     << writer.busySeconds() << " s, final drain " << t_close.wall << " s)" << std::endl;
+    if (std::getenv("ODIA_PROFILE") != nullptr)
+    {
+      auto* ap = ODIA::arrowPool();
+      const struct mallinfo2 mi = ::mallinfo2();
+      std::fprintf(stderr, "[memory profile] arrow pool '%s': %.2f GiB allocated now, %.2f GiB max, %.2f GiB mapped, %lld reuses; glibc: %.2f GiB arena "
+                   "(%.2f in use, %.2f free), %.2f GiB mmapped\n", ap->backend_name().c_str(), ap->bytes_allocated() / 1073741824.0,
+                   ap->max_memory() / 1073741824.0, ap->mappedBytes() / 1073741824.0, static_cast<long long>(ap->reuses()), mi.arena / 1073741824.0, mi.uordblks / 1073741824.0,
+                   mi.fordblks / 1073741824.0, mi.hblkhd / 1073741824.0);
+    }
     OPENMS_LOG_INFO << "Total: " << fmt(t_total) << ", peak RSS " << peakRssGiB() << " GiB" << std::endl;
 
     const std::string stats_file = getStringOption_("out_stats");
@@ -366,8 +404,10 @@ protected:
          << "  \"library\": \"" << escape(lib_file) << "\",\n"
          << "  \"rt_map\": \"" << escape(rt_map.describe()) << "\",\n"
          << "  \"threads\": " << threads << ",\n"
-         << "  \"library_precursors\": " << lib.size() << ",\n"
-         << "  \"library_fragments\": " << lib.fragmentCount() << ",\n"
+         << "  \"library_rows\": " << library.rows() << ",\n"
+         << "  \"library_parts\": " << library.parts() << ",\n"
+         << "  \"library_precursors\": " << es.precursors << ",\n"
+         << "  \"library_fragments\": " << library_fragments << ",\n"
          << "  \"cycles\": " << grid.cycles() << ",\n"
          << "  \"windows\": " << grid.windows.size() << ",\n"
          << "  \"ms1_spectra\": " << gs.ms1_spectra << ",\n"

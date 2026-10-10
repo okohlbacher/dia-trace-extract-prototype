@@ -34,7 +34,10 @@ add_library(odia_traces STATIC
   src/Library.cpp
   src/RtMap.cpp
   src/RunGrid.cpp
+  src/ArrowPool.cpp
+  src/BufferPool.cpp
   src/Extractor.cpp
+  src/Scheduler.cpp
   src/TraceWriter.cpp
   src/Calibration.cpp
   src/mzpeak/MzPeakFile.cpp)

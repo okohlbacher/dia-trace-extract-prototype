@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- trace export.
 #include "TraceWriter.h"
+#include "ArrowPool.h"
 
 #include <arrow/api.h>
 #include <arrow/io/file.h>
@@ -48,58 +49,24 @@ namespace ODIA
                      ->disable_dictionary("intensity_log8")
                      ->disable_dictionary("rt")
                      ->max_row_group_length(rows_per_group)
+                     ->memory_pool(arrowPool())
                      ->build();
-      auto arrow_props = parquet::ArrowWriterProperties::Builder().set_use_threads(true)->build();
-      return check(parquet::arrow::FileWriter::Open(schema, arrow::default_memory_pool(), out, props, arrow_props));
+      // Column encoding/compression stays on the calling worker: the scheduler parallelises across sinks.
+      auto arrow_props = parquet::ArrowWriterProperties::Builder().set_use_threads(false)->build();
+      return check(parquet::arrow::FileWriter::Open(schema, arrowPool(), out, props, arrow_props));
     }
   }
 
-  /// One Parquet part file with its own writer thread and bounded queue.
+  /// One Parquet part file.
   struct TraceWriter::Shard
   {
     std::shared_ptr<arrow::io::FileOutputStream> out;
     std::unique_ptr<parquet::arrow::FileWriter> writer;
-    std::mutex mtx;
-    std::condition_variable cv;
-    std::deque<std::shared_ptr<arrow::RecordBatch>> queue;
-    bool closing = false;
-    std::exception_ptr error;
-    std::thread thread;
     double busy = 0;
-
-    void run()
-    {
-      try
-      {
-        while (true)
-        {
-          std::shared_ptr<arrow::RecordBatch> b;
-          {
-            std::unique_lock lock(mtx);
-            cv.wait(lock, [&] { return !queue.empty() || closing; });
-            if (queue.empty()) { break; }
-            b = std::move(queue.front());
-            queue.pop_front();
-            cv.notify_all();
-          }
-          const auto t0 = std::chrono::steady_clock::now();
-          check(writer->WriteRecordBatch(*b));
-          busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        }
-        check(writer->Close());
-        check(out->Close());
-      }
-      catch (...)
-      {
-        std::lock_guard lock(mtx);
-        error = std::current_exception();
-        cv.notify_all();
-      }
-    }
   };
 
-  TraceWriter::TraceWriter(const Library& lib, const RunGrid& grid, Config cfg)
-    : lib_(lib), grid_(grid), cfg_(std::move(cfg))
+  TraceWriter::TraceWriter(const RunGrid& grid, Config cfg)
+    : grid_(grid), cfg_(std::move(cfg))
   {
     arrow::FieldVector f = {
       arrow::field("run", arrow::utf8()),
@@ -169,7 +136,6 @@ namespace ODIA
         sh->writer = openWriter(path, *schema_, cfg_.rows_per_group, sh->out);
         shards_.push_back(std::move(sh));
       }
-      for (auto& sh : shards_) { sh->thread = std::thread([p = sh.get()] { p->run(); }); }
     }
     if (!cfg_.axes.empty()) { writeAxes_(); }
     if (!cfg_.tsv.empty())
@@ -228,20 +194,36 @@ namespace ODIA
     check(out->Close());
   }
 
-  TraceWriter::Encoded TraceWriter::encode(const TraceBlock& block) const
+  void TraceWriter::sinksOf(std::uint64_t unit, std::vector<std::size_t>& out) const
   {
-    Encoded e;
-    const bool pq = !cfg_.parquet.empty(), tsv = !cfg_.tsv.empty();
-    arrow::StringBuilder run, id, seq, ann, ftype;
-    arrow::UInt8Builder charge, decoy, level, ford, fz, floss;
-    arrow::DoubleBuilder pmz, tmz;
-    arrow::Int32Builder window;
-    arrow::Int8Builder iso;
-    arrow::FloatBuilder libint, rtc, scale;
-    arrow::UInt32Builder cycle_begin;
+    out.clear();
+    if (!shards_.empty()) { out.push_back(static_cast<std::size_t>(unit % shards_.size())); }
+    if (tsv_) { out.push_back(shards_.size()); }
+  }
+
+  double TraceWriter::busySeconds() const
+  {
+    double b = tsv_busy_;
+    for (const auto& sh : shards_) { b = std::max(b, sh->busy); }
+    return b;
+  }
+
+  void TraceWriter::write(std::size_t sink, const TraceBlock& block, const Library& lib)
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool pq = sink < shards_.size(), tsv = !pq;
+    struct { std::uint64_t rows = 0, points = 0; std::string tsv; std::shared_ptr<arrow::RecordBatch> batch; } e;
+    arrow::MemoryPool* pool = arrowPool();
+    arrow::StringBuilder run(pool), id(pool), seq(pool), ann(pool), ftype(pool);
+    arrow::UInt8Builder charge(pool), decoy(pool), level(pool), ford(pool), fz(pool), floss(pool);
+    arrow::DoubleBuilder pmz(pool), tmz(pool);
+    arrow::Int32Builder window(pool);
+    arrow::Int8Builder iso(pool);
+    arrow::FloatBuilder libint(pool), rtc(pool), scale(pool);
+    arrow::UInt32Builder cycle_begin(pool);
     // Point arrays as binary blobs: one Parquet value per trace instead of per point (nested
     // lists cost repetition/definition levels for every point on the serial write path).
-    arrow::BinaryBuilder inten_f, inten_q, rtl;
+    arrow::BinaryBuilder inten_f(pool), inten_q(pool), rtl(pool);
     std::vector<std::uint8_t> qbuf;
     std::vector<float> rtbuf;
     const double decades = cfg_.log8_decades;
@@ -255,36 +237,36 @@ namespace ODIA
       for (std::size_t k = 0; k < n_traces; ++k)
       {
         const bool ms2 = k < r.fragments;
-        const std::size_t f = ms2 ? lib_.fragment_begin[p] + k : 0;
+        const std::size_t f = ms2 ? lib.fragment_begin[p] + k : 0;
         const int isotope = ms2 ? -1 : static_cast<int>(k - r.fragments);
-        const float* v = block.values.data() + r.value_offset + k * T;
+        const float* v = r.values + k * T;
         float vmax = 0.0f;
         for (std::size_t i = 0; i < T; ++i) { vmax = std::max(vmax, v[i]); }
         if (cfg_.skip_empty && vmax <= 0.0f) { continue; }
-        const double z = cfg_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib_.charge[p]);
-        const double target = ms2 ? lib_.fragment_mz[f] : lib_.precursor_mz[p] + isotope * C13_C12 / z;
-        const std::string a = ms2 ? lib_.annotation(f) : "M+" + std::to_string(isotope);
+        const double z = cfg_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib.charge[p]);
+        const double target = ms2 ? lib.fragment_mz[f] : lib.precursor_mz[p] + isotope * C13_C12 / z;
+        const std::string a = ms2 ? lib.annotation(f) : "M+" + std::to_string(isotope);
         ++e.rows;
         e.points += T;
         if (pq)
         {
           check(run.Append(cfg_.run_name));
-          check(id.Append(lib_.precursor_id[p]));
-          check(seq.Append(lib_.modified_sequence[p]));
-          check(charge.Append(lib_.charge[p]));
-          check(decoy.Append(lib_.decoy[p]));
-          check(pmz.Append(lib_.precursor_mz[p]));
+          check(id.Append(lib.precursor_id[p]));
+          check(seq.Append(lib.modified_sequence[p]));
+          check(charge.Append(lib.charge[p]));
+          check(decoy.Append(lib.decoy[p]));
+          check(pmz.Append(lib.precursor_mz[p]));
           check(window.Append(r.window));
           check(level.Append(ms2 ? 2 : 1));
           check(ann.Append(a));
           if (ms2)
           {
-            check(ftype.Append(std::string(1, lib_.fragment_type[f])));
-            check(ford.Append(lib_.fragment_ordinal[f]));
-            check(fz.Append(lib_.fragment_charge[f]));
-            check(floss.Append(lib_.fragment_loss[f]));
+            check(ftype.Append(std::string(1, lib.fragment_type[f])));
+            check(ford.Append(lib.fragment_ordinal[f]));
+            check(fz.Append(lib.fragment_charge[f]));
+            check(floss.Append(lib.fragment_loss[f]));
             check(iso.AppendNull());
-            check(libint.Append(lib_.fragment_intensity[f]));
+            check(libint.Append(lib.fragment_intensity[f]));
           }
           else
           {
@@ -328,10 +310,10 @@ namespace ODIA
           auto& b = e.tsv;
           for (std::size_t i = 0; i < T; ++i)
           {
-            b += cfg_.run_name; b += '\t'; b += lib_.precursor_id[p]; b += '\t';
-            b += lib_.modified_sequence[p]; b += '\t';
-            b.append(num, std::to_chars(num, num + sizeof num, static_cast<int>(lib_.charge[p])).ptr); b += '\t';
-            b += lib_.decoy[p] ? '1' : '0'; b += '\t';
+            b += cfg_.run_name; b += '\t'; b += lib.precursor_id[p]; b += '\t';
+            b += lib.modified_sequence[p]; b += '\t';
+            b.append(num, std::to_chars(num, num + sizeof num, static_cast<int>(lib.charge[p])).ptr); b += '\t';
+            b += lib.decoy[p] ? '1' : '0'; b += '\t';
             b += ms2 ? '2' : '1'; b += '\t';
             b += a; b += '\t';
             b.append(num, std::to_chars(num, num + sizeof num, target).ptr); b += '\t';
@@ -353,21 +335,18 @@ namespace ODIA
       if (cfg_.expand_rt) { cols.push_back(finish(rtl)); }
       e.batch = arrow::RecordBatch::Make(schema_, static_cast<std::int64_t>(e.rows), cols);
     }
-    return e;
-  }
-
-  void TraceWriter::push(Encoded&& e)
-  {
-    rows_ += e.rows;
-    points_ += e.points;
-    if (tsv_ && !e.tsv.empty()) { std::fwrite(e.tsv.data(), 1, e.tsv.size(), tsv_); }
-    if (!e.batch || shards_.empty()) { return; }
-    auto& sh = *shards_[e.unit % shards_.size()];
-    std::unique_lock lock(sh.mtx);
-    sh.cv.wait(lock, [&] { return sh.queue.size() < 4 || sh.error; });
-    if (sh.error) { std::rethrow_exception(sh.error); }
-    sh.queue.push_back(std::move(e.batch));
-    sh.cv.notify_all();
+    if (pq)
+    {
+      if (e.batch) { check(shards_[sink]->writer->WriteRecordBatch(*e.batch)); }
+      shards_[sink]->busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    }
+    else
+    {
+      if (!e.tsv.empty()) { std::fwrite(e.tsv.data(), 1, e.tsv.size(), tsv_); }
+      tsv_busy_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    }
+    // Rows and points are counted once per unit: on its Parquet part, or on the TSV without Parquet.
+    if (pq || shards_.empty()) { rows_ += e.rows; points_ += e.points; }
   }
 
   void TraceWriter::close()
@@ -376,18 +355,9 @@ namespace ODIA
     closed_ = true;
     for (auto& sh : shards_)
     {
-      std::lock_guard lock(sh->mtx);
-      sh->closing = true;
-      sh->cv.notify_all();
-    }
-    std::exception_ptr error;
-    for (auto& sh : shards_)
-    {
-      if (sh->thread.joinable()) { sh->thread.join(); }
-      busy_ = std::max(busy_, sh->busy);
-      if (sh->error && !error) { error = sh->error; }
+      check(sh->writer->Close());
+      check(sh->out->Close());
     }
     if (tsv_) { std::fclose(tsv_); tsv_ = nullptr; }
-    if (error) { std::rethrow_exception(error); }
   }
 }

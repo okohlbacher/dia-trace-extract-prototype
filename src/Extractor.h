@@ -1,6 +1,7 @@
 // ODIA-V3 trace extractor -- gathers traces from the run grid.
 #pragma once
 
+#include "BufferPool.h"
 #include "Library.h"
 #include "RtMap.h"
 #include "RunGrid.h"
@@ -25,11 +26,12 @@ namespace ODIA
     int threads = 1;                  ///< extraction threads (explicit; never inherited)
     std::size_t unit_precursors = 256; ///< precursors per work unit
     std::size_t max_units_ahead = 0;  ///< back-pressure for the ordered commit (0 = 4 x threads)
+    std::size_t block_floats = 0;     ///< trace-buffer block size; plan() counts each unit's blocks (0 = none)
   };
 
   /// One precursor's traces on the global cycle axis: cycles [cycle_begin, cycle_begin + cycles).
-  /// values[value_offset ...] holds `fragments` MS2 traces then `isotopes` MS1 traces, each
-  /// `cycles` long (trace-major).
+  /// `values` holds `fragments` MS2 traces then `isotopes` MS1 traces, each `cycles` long
+  /// (trace-major), in the block's arena.
   struct TraceRecord
   {
     std::uint32_t precursor = 0;
@@ -38,15 +40,15 @@ namespace ODIA
     float rt_center = 0;
     std::uint16_t fragments = 0;
     std::uint8_t isotopes = 0;
-    std::uint64_t value_offset = 0;
+    float* values = nullptr;
   };
 
-  /// Output of one work unit: records plus one value arena (no per-trace allocation).
+  /// Output of one work unit: records plus the arena holding their values (recycled pool blocks).
   struct TraceBlock
   {
     std::size_t unit = 0;
     std::vector<TraceRecord> records;
-    std::vector<float> values;
+    TraceArena arena;
     std::uint64_t lookups = 0;   ///< peak-array searches spent on this block
   };
 
@@ -61,38 +63,48 @@ namespace ODIA
   class Extractor
   {
   public:
-    Extractor(const Library& lib, const RtMap& rt_map, const RunGrid& grid, const ExtractOptions& opt);
-
-    /// Work units: runs of up to `unit_precursors` precursors of one isolation window, ordered
-    /// by (window, library index). extract(u) is thread-safe (reads only shared, immutable data).
-    std::size_t units() const { return units_.size(); }
-    TraceBlock extract(std::size_t unit) const;
-
-    /// Fold a finished block into the statistics (call once per block, from one thread).
-    void account(const std::vector<TraceRecord>& records, std::uint64_t lookups);
-    void setTime(const StageTime& t) { stats_.time = t; }
-    const ExtractStats& stats() const { return stats_; }
-
-  private:
     struct Assignment
     {
-      std::uint32_t precursor;
+      std::uint32_t precursor;   ///< index in the library part
       std::uint32_t window;
       double rt_center;
     };
     struct Unit
     {
-      std::size_t begin, end;   ///< range in assignments_
+      std::size_t begin, end;   ///< range in Plan::assignments
+      std::size_t blocks = 0;   ///< trace-buffer blocks its values need (ExtractOptions::block_floats)
+    };
+    /// Work plan of one library part: precursor-window assignments ordered by (window, part index),
+    /// cut into units of up to `unit_precursors` that never straddle a window (a unit touches one lane).
+    struct Plan
+    {
+      std::vector<Assignment> assignments;
+      std::vector<Unit> units;
+      std::uint64_t precursors = 0, without_window = 0;
     };
 
+    Extractor(const RtMap& rt_map, const RunGrid& grid, const ExtractOptions& opt);
+
+    /// Thread-safe (reads only shared, immutable data).
+    Plan plan(const Library& part) const;
+    /// Extract a unit into `out`: records are cleared (capacity kept), values go to `out.arena`,
+    /// which the caller has reset with the unit's reserved blocks (or none: heap).
+    void extract(const Library& part, const Plan& plan, std::size_t unit, TraceBlock& out) const;
+
+    /// Fold a planned part / a finished block into the statistics (from one thread at a time).
+    void account(const Plan& plan);
+    void account(const std::vector<TraceRecord>& records, std::uint64_t lookups);
+    void setTime(const StageTime& t) { stats_.time = t; }
+    const ExtractStats& stats() const { return stats_; }
+
+  private:
+    std::pair<std::size_t, std::size_t> cycleRange_(double rt_center) const;
     float aggregate_(const MzFixed* mz, const float* in, std::size_t a, std::size_t b, MzFixed lo, MzFixed hi,
                      std::size_t& pos) const;
 
-    const Library& lib_;
+    const RtMap& rt_map_;
     const RunGrid& grid_;
     ExtractOptions opt_;
-    std::vector<Assignment> assignments_;   ///< ordered by (window, library index)
-    std::vector<Unit> units_;
     ExtractStats stats_;
   };
 }

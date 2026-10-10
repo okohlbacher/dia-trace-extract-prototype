@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- library readers.
 #include "Library.h"
+#include "ArrowPool.h"
 
 #include <OpenMS/ANALYSIS/OPENSWATH/TransitionPQPFile.h>
 #include <OpenMS/ANALYSIS/OPENSWATH/TransitionTSVFile.h>
@@ -86,7 +87,7 @@ namespace ODIA
     public:
       Builder(const LibraryLoadOptions& opt, Library& lib) : opt_(opt), lib_(lib)
       {
-        lib_ = Library{};
+        lib_.clear();   // keeps capacity when a library part is recycled
         lib_.fragment_begin.push_back(0);
       }
 
@@ -165,7 +166,100 @@ namespace ODIA
         return nullptr;
       }
       if (a->type()->Equals(*to)) { return a; }
-      return check(arrow::compute::Cast(*a, to));
+      arrow::compute::ExecContext ctx(arrowPool());
+      return check(arrow::compute::Cast(*a, to, arrow::compute::CastOptions::Safe(), &ctx));
+    }
+
+    /// Leaf columns of a compact Parquet library that extraction needs.
+    std::vector<int> compactLeaves(const parquet::arrow::FileReader& reader)
+    {
+      const auto& pq_schema = *reader.parquet_reader()->metadata()->schema();
+      static const std::vector<std::string> wanted = {
+        "Precursor.Id", "Modified.Sequence", "Precursor.Charge", "Decoy", "RT", "Precursor.Mz", "Product.Mz",
+        "Relative.Intensity", "Fragment.Type", "Fragment.Charge", "Fragment.Series.Number", "Fragment.Loss.Type"};
+      std::vector<int> leaves;
+      for (int c = 0; c < pq_schema.num_columns(); ++c)
+      {
+        const std::string top = pq_schema.Column(c)->path()->ToDotVector().front();
+        if (std::find(wanted.begin(), wanted.end(), top) != wanted.end()) { leaves.push_back(c); }
+      }
+      return leaves;
+    }
+
+    /// Typed columns of one decoded batch of a compact Parquet library.
+    struct CompactColumns
+    {
+      std::shared_ptr<arrow::RecordBatch> batch;   // keeps the arrays alive
+      std::shared_ptr<arrow::StringArray> id, seq;
+      std::shared_ptr<arrow::UInt8Array> z, dec;
+      std::shared_ptr<arrow::DoubleArray> rt, pmz;
+      std::shared_ptr<arrow::ListArray> qmz, inten, ft, fz, ord, loss;
+
+      explicit CompactColumns(std::shared_ptr<arrow::RecordBatch> b) : batch(std::move(b))
+      {
+        const auto utf8 = arrow::utf8(), f64 = arrow::float64(), u8 = arrow::uint8();
+        const auto lf64 = arrow::list(f64), lu8 = arrow::list(u8);
+        const auto& r = *batch;
+        id = std::static_pointer_cast<arrow::StringArray>(column(r, "Precursor.Id", utf8));
+        seq = std::static_pointer_cast<arrow::StringArray>(column(r, "Modified.Sequence", utf8));
+        z = std::static_pointer_cast<arrow::UInt8Array>(column(r, "Precursor.Charge", u8));
+        dec = std::static_pointer_cast<arrow::UInt8Array>(column(r, "Decoy", u8, false));
+        rt = std::static_pointer_cast<arrow::DoubleArray>(column(r, "RT", f64, false));
+        pmz = std::static_pointer_cast<arrow::DoubleArray>(column(r, "Precursor.Mz", f64));
+        qmz = std::static_pointer_cast<arrow::ListArray>(column(r, "Product.Mz", lf64));
+        inten = std::static_pointer_cast<arrow::ListArray>(column(r, "Relative.Intensity", lf64));
+        ft = std::static_pointer_cast<arrow::ListArray>(column(r, "Fragment.Type", lu8));
+        fz = std::static_pointer_cast<arrow::ListArray>(column(r, "Fragment.Charge", lu8));
+        ord = std::static_pointer_cast<arrow::ListArray>(column(r, "Fragment.Series.Number", lu8));
+        loss = std::static_pointer_cast<arrow::ListArray>(column(r, "Fragment.Loss.Type", lu8));
+      }
+      std::int64_t rows() const { return batch->num_rows(); }
+
+      /// Parse rows [r0, r1) into `lib` (via the load options). `row_base` is the library row index of
+      /// batch row 0 (for keep_every).
+      void parse(std::int64_t r0, std::int64_t r1, std::uint64_t row_base, const LibraryLoadOptions& opt,
+                 Library& lib) const
+      {
+        const auto& qv = static_cast<const arrow::DoubleArray&>(*qmz->values());
+        const auto& iv = static_cast<const arrow::DoubleArray&>(*inten->values());
+        const auto& tv = static_cast<const arrow::UInt8Array&>(*ft->values());
+        const auto& zv = static_cast<const arrow::UInt8Array&>(*fz->values());
+        const auto& ov = static_cast<const arrow::UInt8Array&>(*ord->values());
+        const auto& lv = static_cast<const arrow::UInt8Array&>(*loss->values());
+        const std::uint64_t every = std::max<std::size_t>(1, opt.keep_every);
+        Builder part(opt, lib);
+        for (std::int64_t r = r0; r < r1; ++r)
+        {
+          if (every > 1 && (row_base + static_cast<std::uint64_t>(r)) % every != 0) { continue; }
+          PendingPrecursor p;
+          p.id.assign(id->GetView(r));
+          p.modseq.assign(seq->GetView(r));
+          p.charge = z->Value(r);
+          p.decoy = dec && dec->IsValid(r) ? dec->Value(r) : 0;
+          p.rt = rt && rt->IsValid(r) ? rt->Value(r) : 0.0;
+          p.mz = pmz->Value(r);
+          const auto b = qmz->value_offset(r), e = qmz->value_offset(r + 1);
+          p.frags.reserve(e - b);
+          for (auto j = b; j < e; ++j)
+          {
+            // All fragment lists of a row share offsets (same writer), so index j applies to each.
+            p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
+                               ov.Value(j), zv.Value(j), lv.Value(j)});
+          }
+          part.add(std::move(p));
+        }
+      }
+    };
+
+    bool isCompactParquet(const std::string& filename)
+    {
+      auto infile = check(arrow::io::ReadableFile::Open(filename));
+      auto reader = check(parquet::arrow::OpenFile(infile, arrowPool()));
+      std::shared_ptr<arrow::Schema> schema;
+      check(reader->GetSchema(&schema));
+      auto qmz_field = schema->GetFieldByName("Product.Mz");
+      if (!qmz_field) { throw std::runtime_error("library: no Product.Mz column in " + filename); }
+      return qmz_field->type()->id() == arrow::Type::LIST || qmz_field->type()->id() == arrow::Type::LARGE_LIST;
     }
 
     /// DIA-NN-dialect compact Parquet (one row per precursor, fragment lists), as DIALibGen writes it.
@@ -181,31 +275,19 @@ namespace ODIA
       auto since = [](clk::time_point t) { return std::chrono::duration<double>(clk::now() - t).count(); };
 
       auto meta_file = check(arrow::io::ReadableFile::Open(filename));
-      auto meta_reader = check(parquet::arrow::OpenFile(meta_file, arrow::default_memory_pool()));
-      const auto& pq_schema = *meta_reader->parquet_reader()->metadata()->schema();
+      auto meta_reader = check(parquet::arrow::OpenFile(meta_file, arrowPool()));
+      const std::vector<int> leaves = compactLeaves(*meta_reader);
       const int n_rg = meta_reader->num_row_groups();
-      static const std::vector<std::string> wanted = {
-        "Precursor.Id", "Modified.Sequence", "Precursor.Charge", "Decoy", "RT", "Precursor.Mz", "Product.Mz",
-        "Relative.Intensity", "Fragment.Type", "Fragment.Charge", "Fragment.Series.Number", "Fragment.Loss.Type"};
-      std::vector<int> leaves;
-      for (int c = 0; c < pq_schema.num_columns(); ++c)
+      std::vector<std::uint64_t> rg_base(static_cast<std::size_t>(n_rg) + 1, 0);
+      for (int rg = 0; rg < n_rg; ++rg)
       {
-        const std::string top = pq_schema.Column(c)->path()->ToDotVector().front();
-        if (std::find(wanted.begin(), wanted.end(), top) != wanted.end()) { leaves.push_back(c); }
+        rg_base[rg + 1] = rg_base[rg] + static_cast<std::uint64_t>(meta_reader->parquet_reader()->metadata()->RowGroup(rg)->num_rows());
       }
       meta_reader.reset();
 
       // Phase A: read, decode and cast the row groups concurrently.
-      struct Columns
-      {
-        std::shared_ptr<arrow::RecordBatch> batch;   // keeps the arrays alive
-        std::shared_ptr<arrow::StringArray> id, seq;
-        std::shared_ptr<arrow::UInt8Array> z, dec;
-        std::shared_ptr<arrow::DoubleArray> rt, pmz;
-        std::shared_ptr<arrow::ListArray> qmz, inten, ft, fz, ord, loss;
-      };
       const int threads = std::max(1, opt.threads);
-      std::vector<Columns> cols(static_cast<std::size_t>(n_rg));
+      std::vector<std::unique_ptr<CompactColumns>> cols(static_cast<std::size_t>(n_rg));
       std::exception_ptr error;
       auto t0 = clk::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(std::min(threads, std::max(1, n_rg)))
@@ -214,28 +296,12 @@ namespace ODIA
         try
         {
           auto file = check(arrow::io::ReadableFile::Open(filename));
-          auto reader = check(parquet::arrow::OpenFile(file, arrow::default_memory_pool()));
+          auto reader = check(parquet::arrow::OpenFile(file, arrowPool()));
           // Column-parallel decoding only while row groups alone cannot occupy the threads: nesting both
           // oversubscribes (measured: 32 row groups 4.9 s with nesting).
           reader->set_use_threads(threads > 1 && n_rg < threads);
           auto table = check(reader->ReadRowGroup(rg, leaves));
-          auto& c = cols[static_cast<std::size_t>(rg)];
-          c.batch = check(table->CombineChunksToBatch());
-          const auto utf8 = arrow::utf8(), f64 = arrow::float64(), u8 = arrow::uint8();
-          const auto lf64 = arrow::list(f64), lu8 = arrow::list(u8);
-          const auto& b = *c.batch;
-          c.id = std::static_pointer_cast<arrow::StringArray>(column(b, "Precursor.Id", utf8));
-          c.seq = std::static_pointer_cast<arrow::StringArray>(column(b, "Modified.Sequence", utf8));
-          c.z = std::static_pointer_cast<arrow::UInt8Array>(column(b, "Precursor.Charge", u8));
-          c.dec = std::static_pointer_cast<arrow::UInt8Array>(column(b, "Decoy", u8, false));
-          c.rt = std::static_pointer_cast<arrow::DoubleArray>(column(b, "RT", f64, false));
-          c.pmz = std::static_pointer_cast<arrow::DoubleArray>(column(b, "Precursor.Mz", f64));
-          c.qmz = std::static_pointer_cast<arrow::ListArray>(column(b, "Product.Mz", lf64));
-          c.inten = std::static_pointer_cast<arrow::ListArray>(column(b, "Relative.Intensity", lf64));
-          c.ft = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Type", lu8));
-          c.fz = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Charge", lu8));
-          c.ord = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Series.Number", lu8));
-          c.loss = std::static_pointer_cast<arrow::ListArray>(column(b, "Fragment.Loss.Type", lu8));
+          cols[static_cast<std::size_t>(rg)] = std::make_unique<CompactColumns>(check(table->CombineChunksToBatch()));
         }
         catch (...)
         {
@@ -251,41 +317,16 @@ namespace ODIA
       std::vector<std::pair<int, std::int64_t>> chunks;   // (row group, first row)
       for (int rg = 0; rg < n_rg; ++rg)
       {
-        for (std::int64_t r = 0; r < cols[rg].batch->num_rows(); r += chunk) { chunks.emplace_back(rg, r); }
+        for (std::int64_t r = 0; r < cols[rg]->rows(); r += chunk) { chunks.emplace_back(rg, r); }
       }
       std::vector<Library> parts(chunks.size());
       t0 = clk::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
       for (std::ptrdiff_t k = 0; k < static_cast<std::ptrdiff_t>(chunks.size()); ++k)
       {
-        const auto& c = cols[static_cast<std::size_t>(chunks[k].first)];
-        const auto& qv = static_cast<const arrow::DoubleArray&>(*c.qmz->values());
-        const auto& iv = static_cast<const arrow::DoubleArray&>(*c.inten->values());
-        const auto& tv = static_cast<const arrow::UInt8Array&>(*c.ft->values());
-        const auto& zv = static_cast<const arrow::UInt8Array&>(*c.fz->values());
-        const auto& ov = static_cast<const arrow::UInt8Array&>(*c.ord->values());
-        const auto& lv = static_cast<const arrow::UInt8Array&>(*c.loss->values());
-        Builder part(opt, parts[static_cast<std::size_t>(k)]);
-        const std::int64_t r0 = chunks[k].second, r1 = std::min(c.batch->num_rows(), r0 + chunk);
-        for (std::int64_t r = r0; r < r1; ++r)
-        {
-          PendingPrecursor p;
-          p.id.assign(c.id->GetView(r));
-          p.modseq.assign(c.seq->GetView(r));
-          p.charge = c.z->Value(r);
-          p.decoy = c.dec && c.dec->IsValid(r) ? c.dec->Value(r) : 0;
-          p.rt = c.rt && c.rt->IsValid(r) ? c.rt->Value(r) : 0.0;
-          p.mz = c.pmz->Value(r);
-          const auto b = c.qmz->value_offset(r), e = c.qmz->value_offset(r + 1);
-          p.frags.reserve(e - b);
-          for (auto j = b; j < e; ++j)
-          {
-            // All fragment lists of a row share offsets (same writer), so index j applies to each.
-            p.frags.push_back({qv.Value(j), static_cast<float>(iv.Value(j)), typeFromCode(tv.Value(j)),
-                               ov.Value(j), zv.Value(j), lv.Value(j)});
-          }
-          part.add(std::move(p));
-        }
+        const auto& c = *cols[static_cast<std::size_t>(chunks[k].first)];
+        const std::int64_t r0 = chunks[k].second, r1 = std::min(c.rows(), r0 + chunk);
+        c.parse(r0, r1, rg_base[chunks[k].first], opt, parts[static_cast<std::size_t>(k)]);
       }
       const double t_parse = since(t0);
       cols.clear();
@@ -302,20 +343,15 @@ namespace ODIA
     // --- Parquet (DIA-NN dialect, DIALibGen compact or flat) -----------------------------------
     void loadParquet(const std::string& filename, const LibraryLoadOptions& opt, Library& lib)
     {
-      auto infile = check(arrow::io::ReadableFile::Open(filename));
-      auto reader = check(parquet::arrow::OpenFile(infile, arrow::default_memory_pool()));
-      std::shared_ptr<arrow::Schema> schema;
-      check(reader->GetSchema(&schema));
-      auto qmz_field = schema->GetFieldByName("Product.Mz");
-      if (!qmz_field) { throw std::runtime_error("library: no Product.Mz column in " + filename); }
-      const bool compact = qmz_field->type()->id() == arrow::Type::LIST
-                        || qmz_field->type()->id() == arrow::Type::LARGE_LIST;
-      if (compact)
+      if (isCompactParquet(filename))
       {
-        reader.reset();
         loadParquetCompact(filename, opt, lib);
         return;
       }
+      auto infile = check(arrow::io::ReadableFile::Open(filename));
+      auto reader = check(parquet::arrow::OpenFile(infile, arrowPool()));
+      std::shared_ptr<arrow::Schema> schema;
+      check(reader->GetSchema(&schema));
       reader->set_use_threads(opt.threads > 1);   // decode columns concurrently
       reader->set_batch_size(1 << 20);
       auto batches = check(reader->GetRecordBatchReader());
@@ -633,6 +669,145 @@ namespace ODIA
       throw std::runtime_error("library: unsupported format: " + filename);
     }
     loadLightExperiment(exp, opt, lib, interp);
+  }
+
+  // --- LibraryReader -----------------------------------------------------------------------------
+
+  struct LibraryReader::Impl
+  {
+    struct Source
+    {
+      int row_group = -1;                                    // compact Parquet; -1 = sliced library
+      std::uint64_t row_base = 0, rows = 0;                  // library rows of this source
+      std::vector<std::size_t> seq;                          // sequence number of its k-th part
+      std::size_t next = 0;                                  // parts delivered
+      std::unique_ptr<arrow::RecordBatchReader> batches;     // opened on first read
+      std::shared_ptr<arrow::io::ReadableFile> file;
+      std::unique_ptr<parquet::arrow::FileReader> reader;
+    };
+    std::string filename;
+    LibraryLoadOptions opt;
+    std::size_t part_rows = 65536;
+    std::vector<int> leaves;
+    std::vector<Source> sources;
+    std::size_t parts = 0;
+    std::uint64_t rows = 0;
+    Library whole;                                           // non-compact formats
+
+    void plan()
+    {
+      // Round-robin sequence: part k of every source before part k + 1.
+      std::size_t max_k = 0;
+      for (auto& s : sources) { max_k = std::max<std::size_t>(max_k, (s.rows + part_rows - 1) / part_rows); }
+      for (std::size_t k = 0; k < max_k; ++k)
+      {
+        for (auto& s : sources)
+        {
+          if (k * part_rows < s.rows) { s.seq.push_back(parts++); }
+        }
+      }
+    }
+  };
+
+  LibraryReader::LibraryReader(const std::string& filename, const LibraryLoadOptions& opt, std::size_t part_rows)
+    : impl_(std::make_unique<Impl>())
+  {
+    auto& I = *impl_;
+    I.filename = filename;
+    I.opt = opt;
+    I.part_rows = std::max<std::size_t>(1, part_rows);
+    if (endsWith(filename, ".parquet") && isCompactParquet(filename))
+    {
+      auto file = check(arrow::io::ReadableFile::Open(filename));
+      auto reader = check(parquet::arrow::OpenFile(file, arrowPool()));
+      I.leaves = compactLeaves(*reader);
+      const auto md = reader->parquet_reader()->metadata();
+      for (int rg = 0; rg < md->num_row_groups(); ++rg)
+      {
+        Impl::Source s;
+        s.row_group = rg;
+        s.row_base = I.rows;
+        s.rows = static_cast<std::uint64_t>(md->RowGroup(rg)->num_rows());
+        I.rows += s.rows;
+        I.sources.push_back(std::move(s));
+      }
+    }
+    else
+    {
+      loadLibrary(filename, opt, I.whole);   // filters already applied; parts are slices of the result
+      Impl::Source s;
+      s.rows = I.whole.size();
+      I.rows = s.rows;
+      I.sources.push_back(std::move(s));
+    }
+    I.plan();
+  }
+
+  LibraryReader::~LibraryReader() = default;
+
+  std::size_t LibraryReader::parts() const { return impl_->parts; }
+  std::size_t LibraryReader::sources() const { return impl_->sources.size(); }
+  std::uint64_t LibraryReader::rows() const { return impl_->rows; }
+
+  std::size_t LibraryReader::nextPart(std::size_t source) const
+  {
+    const auto& s = impl_->sources[source];
+    return s.next < s.seq.size() ? s.seq[s.next] : impl_->parts;
+  }
+
+  std::size_t LibraryReader::read(std::size_t source, Library& part)
+  {
+    auto& I = *impl_;
+    auto& s = I.sources[source];
+    if (s.next >= s.seq.size()) { throw std::logic_error("LibraryReader: source exhausted"); }
+    const std::uint64_t r0 = static_cast<std::uint64_t>(s.next) * I.part_rows;
+    const std::uint64_t r1 = std::min<std::uint64_t>(s.rows, r0 + I.part_rows);
+    part.clear();
+    if (s.row_group < 0)
+    {
+      // Slice of a fully loaded library.
+      const Library& w = I.whole;
+      part.fragment_begin.assign(1, 0);
+      for (std::uint64_t p = r0; p < r1; ++p)
+      {
+        part.precursor_id.push_back(w.precursor_id[p]);
+        part.modified_sequence.push_back(w.modified_sequence[p]);
+        part.precursor_mz.push_back(w.precursor_mz[p]);
+        part.charge.push_back(w.charge[p]);
+        part.decoy.push_back(w.decoy[p]);
+        part.library_rt.push_back(w.library_rt[p]);
+        for (std::uint32_t f = w.fragment_begin[p]; f < w.fragment_begin[p + 1]; ++f)
+        {
+          part.fragment_mz.push_back(w.fragment_mz[f]);
+          part.fragment_intensity.push_back(w.fragment_intensity[f]);
+          part.fragment_type.push_back(w.fragment_type[f]);
+          part.fragment_ordinal.push_back(w.fragment_ordinal[f]);
+          part.fragment_charge.push_back(w.fragment_charge[f]);
+          part.fragment_loss.push_back(w.fragment_loss[f]);
+        }
+        part.fragment_begin.push_back(static_cast<std::uint32_t>(part.fragment_mz.size()));
+      }
+    }
+    else
+    {
+      if (!s.batches)
+      {
+        s.file = check(arrow::io::ReadableFile::Open(I.filename));
+        s.reader = check(parquet::arrow::OpenFile(s.file, arrowPool()));
+        s.reader->set_use_threads(false);   // the caller schedules threads; decoding stays on this one
+        s.reader->set_batch_size(static_cast<std::int64_t>(I.part_rows));
+        s.batches = check(s.reader->GetRecordBatchReader({s.row_group}, I.leaves));
+      }
+      std::shared_ptr<arrow::RecordBatch> batch;
+      check(s.batches->ReadNext(&batch));
+      if (!batch || static_cast<std::uint64_t>(batch->num_rows()) != r1 - r0)
+      {
+        throw std::runtime_error("library: unexpected batch size in row group " + std::to_string(s.row_group));
+      }
+      CompactColumns(batch).parse(0, batch->num_rows(), s.row_base + r0, I.opt, part);
+      if (s.next + 1 == s.seq.size()) { s.batches.reset(); s.reader.reset(); s.file.reset(); }
+    }
+    return s.seq[s.next++];
   }
 
   std::unordered_set<std::string> readIdList(const std::string& filename)

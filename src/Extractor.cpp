@@ -21,51 +21,70 @@ namespace ODIA
     }
   }
 
-  Extractor::Extractor(const Library& lib, const RtMap& rt_map, const RunGrid& grid, const ExtractOptions& opt)
-    : lib_(lib), grid_(grid), opt_(opt)
+  Extractor::Extractor(const RtMap& rt_map, const RunGrid& grid, const ExtractOptions& opt)
+    : rt_map_(rt_map), grid_(grid), opt_(opt)
   {
-    stats_.precursors = lib.size();
-    const auto& win = grid.windows;
+  }
+
+  Extractor::Plan Extractor::plan(const Library& lib) const
+  {
+    Plan plan;
+    auto& assignments = plan.assignments;
+    plan.precursors = lib.size();
+    const auto& win = grid_.windows;
     for (std::uint32_t p = 0; p < lib.size(); ++p)
     {
       const double mz = lib.precursor_mz[p];
-      const double rt = rt_map(lib.library_rt[p]);
+      const double rt = rt_map_(lib.library_rt[p]);
       std::int64_t best = -1;
       double best_dist = std::numeric_limits<double>::infinity();
+      bool any = false;
       for (std::size_t w = 0; w < win.size(); ++w)
       {
         if (mz < win[w].lower || mz > win[w].upper) { continue; }
-        if (opt_.assign_all_windows) { assignments_.push_back({p, static_cast<std::uint32_t>(w), rt}); continue; }
+        if (opt_.assign_all_windows) { assignments.push_back({p, static_cast<std::uint32_t>(w), rt}); any = true; continue; }
         const double d = std::fabs(mz - win[w].target);
         if (d < best_dist) { best_dist = d; best = static_cast<std::int64_t>(w); }
       }
-      if (!opt_.assign_all_windows)
-      {
-        if (best < 0) { ++stats_.without_window; continue; }
-        assignments_.push_back({p, static_cast<std::uint32_t>(best), rt});
-      }
-    }
-    if (opt_.assign_all_windows)
-    {
-      std::vector<bool> any(lib.size(), false);
-      for (const auto& a : assignments_) { any[a.precursor] = true; }
-      stats_.without_window = static_cast<std::uint64_t>(std::count(any.begin(), any.end(), false));
+      if (opt_.assign_all_windows) { plan.without_window += !any; continue; }
+      if (best < 0) { ++plan.without_window; continue; }
+      assignments.push_back({p, static_cast<std::uint32_t>(best), rt});
     }
     // Deterministic order: window, then library index. Units never straddle a window, so a unit
     // touches exactly one lane of the grid (cache locality, one owner).
-    std::stable_sort(assignments_.begin(), assignments_.end(), [](const Assignment& a, const Assignment& b) {
+    std::stable_sort(assignments.begin(), assignments.end(), [](const Assignment& a, const Assignment& b) {
       return a.window != b.window ? a.window < b.window : a.precursor < b.precursor;
     });
-    stats_.assignments = assignments_.size();
     const std::size_t step = std::max<std::size_t>(1, opt_.unit_precursors);
-    for (std::size_t b = 0; b < assignments_.size();)
+    for (std::size_t b = 0; b < assignments.size();)
     {
       std::size_t e = b;
-      while (e < assignments_.size() && e - b < step && assignments_[e].window == assignments_[b].window) { ++e; }
-      units_.push_back({b, e});
+      while (e < assignments.size() && e - b < step && assignments[e].window == assignments[b].window) { ++e; }
+      Unit unit{b, e, 0};
+      if (opt_.block_floats > 0)
+      {
+        thread_local std::vector<std::size_t> runs;
+        runs.clear();
+        const std::size_t n_iso = opt_.extract_ms1 ? static_cast<std::size_t>(opt_.ms1_isotopes) + 1 : 0;
+        for (std::size_t k = b; k < e; ++k)
+        {
+          const auto [lo, hi] = cycleRange_(assignments[k].rt_center);
+          runs.push_back(hi > lo ? (lib.fragmentsOf(assignments[k].precursor) + n_iso) * (hi - lo) : 0);
+        }
+        unit.blocks = TraceArena::blocksFor(runs, opt_.block_floats);
+      }
+      plan.units.push_back(unit);
       b = e;
     }
-    stats_.units = units_.size();
+    return plan;
+  }
+
+  void Extractor::account(const Plan& plan)
+  {
+    stats_.precursors += plan.precursors;
+    stats_.without_window += plan.without_window;
+    stats_.assignments += plan.assignments.size();
+    stats_.units += plan.units.size();
   }
 
   float Extractor::aggregate_(const MzFixed* mz, const float* in, std::size_t a, std::size_t b, MzFixed lo,
@@ -85,52 +104,54 @@ namespace ODIA
     return v;
   }
 
-  TraceBlock Extractor::extract(std::size_t unit) const
+  std::pair<std::size_t, std::size_t> Extractor::cycleRange_(double rt_center) const
   {
-    const Unit& u = units_[unit];
-    TraceBlock out;
+    if (opt_.rt_half_window <= 0.0) { return {0, grid_.cycles()}; }
+    return {grid_.lowerCycle(rt_center - opt_.rt_half_window), grid_.upperCycle(rt_center + opt_.rt_half_window)};
+  }
+
+  void Extractor::extract(const Library& lib, const Plan& plan, std::size_t unit, TraceBlock& out) const
+  {
+    const Unit& u = plan.units[unit];
     out.unit = unit;
+    out.records.clear();
+    out.lookups = 0;
     std::uint64_t& lookups = out.lookups;
-    const bool whole = opt_.rt_half_window <= 0.0;
-    const std::size_t n_cycles = grid_.cycles();
     const double ms2_scale = 1.0 + opt_.ms2_ppm_offset * 1e-6;
     const double ms1_scale = 1.0 + opt_.ms1_ppm_offset * 1e-6;
     const int n_iso = opt_.extract_ms1 ? opt_.ms1_isotopes + 1 : 0;
     const auto& ms1 = grid_.ms1;
 
-    std::vector<std::pair<Bounds, std::uint32_t>> frag;   // (bounds, row) sorted by m/z
-    std::vector<Bounds> iso;
-    std::vector<float> ms1_at;                            // [ms1 spectrum][isotope]
+    thread_local std::vector<std::pair<Bounds, std::uint32_t>> frag;   // (bounds, row) sorted by m/z
+    thread_local std::vector<Bounds> iso;
+    thread_local std::vector<float> ms1_at;                            // [ms1 spectrum][isotope]
 
     for (std::size_t k = u.begin; k < u.end; ++k)
     {
-      const Assignment& as = assignments_[k];
+      const Assignment& as = plan.assignments[k];
       const std::uint32_t p = as.precursor;
-      const std::size_t lo = whole ? 0 : grid_.lowerCycle(as.rt_center - opt_.rt_half_window);
-      const std::size_t hi = whole ? n_cycles : grid_.upperCycle(as.rt_center + opt_.rt_half_window);
+      const auto [lo, hi] = cycleRange_(as.rt_center);
       TraceRecord r;
       r.precursor = p;
       r.window = static_cast<std::int32_t>(as.window);
       r.rt_center = static_cast<float>(as.rt_center);
       r.cycle_begin = static_cast<std::uint32_t>(lo);
       r.cycles = static_cast<std::uint32_t>(hi > lo ? hi - lo : 0);
-      r.fragments = static_cast<std::uint16_t>(lib_.fragmentsOf(p));
+      r.fragments = static_cast<std::uint16_t>(lib.fragmentsOf(p));
       r.isotopes = static_cast<std::uint8_t>(n_iso);
-      r.value_offset = out.values.size();
       if (r.cycles == 0)
       {
         out.records.push_back(r); // RT window outside the acquisition: an empty record keeps accounting exact
         continue;
       }
       const std::size_t T = r.cycles;
-      out.values.resize(out.values.size() + (r.fragments + r.isotopes) * T, 0.0f);
-      float* v = out.values.data() + r.value_offset;
+      float* v = r.values = out.arena.alloc((r.fragments + r.isotopes) * T);
 
       // --- MS2: one tile, F x T, gathered cell by cell from this window's lane.
       frag.clear();
-      for (std::uint32_t f = lib_.fragment_begin[p], row = 0; f < lib_.fragment_begin[p + 1]; ++f, ++row)
+      for (std::uint32_t f = lib.fragment_begin[p], row = 0; f < lib.fragment_begin[p + 1]; ++f, ++row)
       {
-        frag.push_back({bounds(lib_.fragment_mz[f] * ms2_scale, opt_.ms2_ppm), row});
+        frag.push_back({bounds(lib.fragment_mz[f] * ms2_scale, opt_.ms2_ppm), row});
       }
       std::sort(frag.begin(), frag.end(), [](const auto& a, const auto& b) { return a.first.lo < b.first.lo; });
       const auto& lane = grid_.windows[as.window];
@@ -154,11 +175,11 @@ namespace ODIA
         j0 = j0 > 0 ? j0 - 1 : 0;
         auto j1 = static_cast<std::size_t>(std::lower_bound(ms1.rt.begin(), ms1.rt.end(), t1) - ms1.rt.begin());
         j1 = std::min(j1, ms1.rt.size() - 1);
-        const double z = opt_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib_.charge[p]);
+        const double z = opt_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib.charge[p]);
         iso.clear();
         for (int i = 0; i < n_iso; ++i)
         {
-          iso.push_back(bounds((lib_.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
+          iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
         }
         const std::size_t J = j1 - j0 + 1;
         ms1_at.assign(J * n_iso, 0.0f);
@@ -190,7 +211,6 @@ namespace ODIA
       }
       out.records.push_back(r);
     }
-    return out;
   }
 
   void Extractor::account(const std::vector<TraceRecord>& records, std::uint64_t lookups)
