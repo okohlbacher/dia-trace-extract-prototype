@@ -114,6 +114,84 @@ Windows that widen with intensity do not help.
 - **MS1:** our offset with ±2.1–2.5 ppm (about 3σ).
 - **Ours B:** unchanged, for OpenSWATH parity.
 
+### 3.1 The recommended rule, adopted (commit bbad38c)
+
+**What changed in the tool:**
+- **Mass offsets** are the *unweighted* median of the apex errors. Fragments with less than 10% of the anchor's apex signal are
+  ignored.
+  - Offsets now: −3.23 / −2.43 ppm on runs 01 / 02, against the analysis's true values of −3.29 / −2.47. The old weighted median
+    was off by about 0.55 ppm.
+- **Measured accuracy:** 5 × the 70th percentile of the residuals of strict anchors.
+  - MS2 ≈ ±5 ppm, MS1 ≈ ±2.1 ppm (DIA-NN: 2.13). The values are stable on full predicted libraries too.
+  - `-mz_tol 0` / `-mz_tol_ms1 0` use the measured values.
+- **MS1 traces are raw values at the MS1 scans** (`-ms1_axis scans`, now the default), no longer interpolated onto the cycle
+  axis. The Astral records 3 MS1 scans per cycle.
+- **Configurations:**
+  - **ours A:** MS2 ±6 ppm and the measured MS1 tolerance.
+  - **ours P:** the previous DIA-NN-parity settings (both tolerances = DIA-NN's MS2 accuracy).
+  - **ours B:** unchanged (OpenSWATH rules).
+
+**Effect** (entrapment, all IDs; median Pearson r of the monoisotopic MS1 trace, M+0):
+
+| | run 01 | run 02 | run 03 |
+|---|---|---|---|
+| ours A vs DIA-NN, MS1 M+0 | 0.978 (log2 ratio +0.02) | 0.996 (0.00) | 0.991 (0.00) |
+| ours P (wide window) vs DIA-NN, MS1 M+0 | 0.954 (+0.23) | 0.952 (+0.25) | 0.982 (+0.12) |
+| ours A vs DIA-NN, MS2 share of traces with r > 0.9 | 92.0% | 83.7% (±6 vs DIA-NN's ±8.3 ppm) | 90.6% |
+
+**Human library, the same comparison:**
+
+| | run 01 | run 02 | run 03 |
+|---|---|---|---|
+| ours A vs DIA-NN, MS1 M+0 | 0.962 (log2 ratio +0.05) | 0.995 (0.00) | 0.988 (0.00) |
+| ours P (wide window) vs DIA-NN, MS1 M+0 | 0.891 (+0.42) | 0.957 (+0.22) | 0.971 (+0.16) |
+| ours A vs DIA-NN, MS2 share of traces with r > 0.9 | 84.5% | 85.7% | 92.2% |
+| ours P vs DIA-NN, MS2 share of traces with r > 0.9 | 93.6% | 93.7% | 92.2% |
+
+- **The ours A vs ours P gap at MS2** comes from window width: ours A uses ±6 ppm, DIA-NN up to ±7.7 ppm on human runs 01 and 02.
+- **Calibration matches the entrapment runs:** offsets −3.22 / −2.43 / −2.05 ppm, measured accuracy MS2 ±4.6–5.0 and MS1
+  ±2.07–2.18 ppm.
+
+MS1 agreement is now measured at every raw MS1 scan rather than every third. Before, sampling at cycle times had smoothed away
+scan-to-scan differences, so the earlier MS1 figures were somewhat flattering.
+
+**Shape quality** on the actual exports, all IDs:
+
+| | ours A (new rule) | DIA-NN | OpenSWATH | ours A (old rule) |
+|---|---|---|---|---|
+| MS2 fragment co-elution, run 01 / 02 | **0.541 / 0.560** | 0.540 / 0.554 | 0.484 / 0.555 | 0.541 / — |
+| MS1-vs-fragment co-elution, run 01 / 02 | **0.886 / 0.889** | 0.880 / 0.895 | 0.826 / 0.802 | 0.840 / — |
+
+- Ours A now matches or beats DIA-NN on every shape metric.
+- On run 02 the ±6 ppm MS2 window beats DIA-NN's ±8.3 ppm.
+
+### 3.2 The remaining MS2 differences to DIA-NN, explained
+
+Details are in [analysis/ms2_tail.md](analysis/ms2_tail.md); example traces in `figures/ms2_tail_examples_run01.png`.
+
+**Size of the tail** (ours P vs DIA-NN, share of MS2 traces):
+
+| | r < 0.9 | l1 > 0.01 |
+|---|---|---|
+| run 01 | 3.5% | 17.7% |
+| run 02 | 2.3% | 11.2% |
+
+- **Cause: the window centre explains 100% of the tail.** DIA-NN centres its window with an m/z-dependent quadratic correction,
+  computed in float32.
+- **Test:** emulating that arithmetic exactly reproduces *every* DIA-NN trace in a 3,000-precursor sample, 0 of 35,000 traces
+  differing on either run. The emulation computes the centre as `f32(mz + t0·mz² + t1 + t2·mz)`, the margin as `f32(centre ·
+  accuracy)`, applies strict bounds and takes the maximum.
+- **Mechanism:** the two windows have the same width but are shifted by about 0.5 ppm. Only centroids in that sliver at either
+  edge differ. These are often the upward-drifted apex centroids of strong peaks.
+- **Ruled out:**
+  - window assignment (the windows don't overlap);
+  - fragment m/z (rounding differences of at most 0.06 ppm);
+  - DIA-NN's XIC span or timing;
+  - skipped spectra.
+- **Verdict:** this is a DIA-NN rule choice, not a bug and nothing on our side. Its quadratic actually describes the true mass
+  error *worse* than a constant does. Exact parity would need DIA-NN's coefficients, which it prints only at `--verbose 3`; a
+  parity mode could read them.
+
 ## 4. Performance
 
 Full tuned libraries, run 01, 64 threads, all precursors, top 6 fragments; old binary (whole library in memory) → current
@@ -149,6 +227,15 @@ node; `scripts/bench_threads.sh`, `results/threads/`):
 ³ DIA-NN can export traces only while it searches, so its time includes the search. ⁴ OpenSWATH's time includes its scoring.
 
 - **Ours A vs ours B.** Ours A pays for its self-calibration of the mass offsets (panel and calibration).
+- **Fast mzML ingest** (commit bbad38c, measured after this benchmark). Spectra are parsed straight from the file bytes, and the
+  vendor userParams are skipped. Output is byte-identical to the OpenMS parser.
+
+  | ingest, run 01 | before | after |
+  |---|---|---|
+  | CPU time | 79 s | 17 s |
+  | wall time | 3.9 s | 3.3 s |
+  | page faults | 1.55 M | 0.85 M |
+  | peak memory | 2.93 GiB | 2.40 GiB |
 - **Speed.** Ours is 4–5× faster than DIA-NN at every thread count, and 30–40× faster than OpenSWATH at 16+ threads.
 - **Where ours stops scaling.** Beyond 16–32 threads, ingesting the 5.8 GB mzML dominates our runtime; mzPeak input should help
   there.
@@ -156,8 +243,14 @@ node; `scripts/bench_threads.sh`, `results/threads/`):
 
 ## 5. Open items
 
-- **Adopt the recommended rule in ours A.** MS2: constant offset from the median apex error, ±6 ppm. MS1: our offset, ±2.1–2.5 ppm.
-- **Fix our MS2 offset bias** of about 0.55 ppm.
-- **Store MS1 on its own scan axis.** Today it is linearly interpolated onto the cycle axis.
-- **mzPeak input.** Waiting on the converter (vendor-centroided MS1) and on a parallel reader (handoffs `04`, `05`).
-- **Run ingest** still costs about 1.3 M page faults in the OpenMS mzML parser.
+- **Done (bbad38c):**
+  - recommended rule adopted;
+  - MS2 offset bias fixed;
+  - MS1 on its own scan axis;
+  - fast mzML ingest;
+  - the MS2 tail explained;
+  - Parquet footer metadata (`odia.*`) now actually written.
+- **Optional:** a DIA-NN exact-parity mode that reads DIA-NN's quadratic m/z correction from its `--verbose 3` log, emulated in
+  float32.
+- **mzPeak input:** waiting on the converter (vendor-centroided MS1) and on a parallel reader (handoffs `04`, `05`).
+- **Ingest beyond 32 threads** is now limited by reading the file (3.3 s wall, 17 s CPU).
