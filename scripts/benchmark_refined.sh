@@ -7,8 +7,12 @@
 #      DIA-NN 1.7.12 (round 2, --xic), DIATraceExtractor (-rt_mode minutes), OpenSwathWorkflow (RT in s, no iRT)
 #   4. compare_traces.py: extractor A (DIA-NN rules) vs DIA-NN and OpenSWATH; extractor B (OpenSWATH rules)
 #      vs OpenSWATH; DIA-NN vs OpenSWATH
-# Usage: [LIB=predicted.parquet] [DIALIBGEN=path] benchmark_refined.sh 01|02|03 [threads]
+# Usage: [LIB=predicted.parquet] [RECAL=refine|tuned] [DIALIBGEN=path] benchmark_refined.sh 01|02|03 [threads]
 #   LIB defaults to the human 0.11.0 library; outputs are keyed by the library name.
+#   RECAL=refine (default): LIB is a raw prediction; step 2 writes DIA-NN's observed RT (DIALibGen refine).
+#   RECAL=tuned: LIB is already recalibrated (DIALibGen -mode tune, RT in run minutes); step 2 only keeps
+#     DIA-NN's 1% FDR identifications and leaves the predicted RT untouched. The extractor also runs on
+#     the full LIB (timing only).
 set -euo pipefail
 RUN=$1; THREADS=${2:-64}
 P=/ceph/ibmi/abi/oliver/Claude/ODIA-V3
@@ -16,7 +20,9 @@ MZML=$P/benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Huma
 PRED=${LIB:-$P/library/human_UP000005640_astral_nce25.parquet}
 NAME=$(basename $PRED .parquet)
 PRED_DIANN=$P/library/diann17/$NAME.tsv   # UniprotID + ProteinName columns (DIA-NN protein groups)
-REF=$P/library/refined/${NAME}_shared_run$RUN.parquet
+RECAL=${RECAL:-refine}
+if [ $RECAL = tuned ]; then PRED_RT_SCALE=1; REF=$P/library/refined/${NAME}_ids_run$RUN.parquet
+else PRED_RT_SCALE=100; REF=$P/library/refined/${NAME}_shared_run$RUN.parquet; fi
 DLG=${DIALIBGEN:-$P/tools/DIALibGen/build/DIALibGen}
 PY=$P/tools/pyenv/bin/python
 X=$P/build/DIATraceExtractor
@@ -28,7 +34,7 @@ mkdir -p $D1/temp $O/diann/temp $P/library/refined $P/library/diann17
 
 # 0. the predicted library as a DIA-NN 1.7.12 spectral library (TSV, passed with --lib)
 if [ ! -s $PRED_DIANN ]; then
-  $PY $P/scripts/lib_to_diann17_tsv.py $PRED $PRED_DIANN.part > $PRED_DIANN.log 2>&1 && mv $PRED_DIANN.part $PRED_DIANN
+  $PY $P/scripts/lib_to_diann17_tsv.py $PRED $PRED_DIANN.part --rt_scale $PRED_RT_SCALE > $PRED_DIANN.log 2>&1 && mv $PRED_DIANN.part $PRED_DIANN
 fi
 
 # 1. round 1: DIA-NN 1.7.12 on the predicted library
@@ -37,8 +43,12 @@ if [ ! -s $D1/report.tsv ]; then
       --verbose 1 --qvalue 0.01 > diann.log 2>&1 )
 fi
 
-# 2. recalibrate the library with DIALibGen (observed RT of the 1% FDR identifications)
-if [ ! -s $REF ]; then   # DIALibGen refuses to overwrite; refinement is deterministic, so reuse
+# 2. recalibrate the library with DIALibGen (observed RT of the 1% FDR identifications),
+#    or, for a tuned library, keep only the identified precursors
+if [ $RECAL = tuned ]; then
+  [ -s $D1/report.parquet ] || $PY $P/scripts/diann17_report_to_parquet.py $D1/report.tsv $D1/report.parquet
+  [ -s $REF ] || $PY $P/scripts/filter_library.py $PRED $D1/report.parquet $REF | tee ${REF%.parquet}.filter.log
+elif [ ! -s $REF ]; then   # DIALibGen refuses to overwrite; refinement is deterministic, so reuse
 $PY $P/scripts/diann17_report_to_parquet.py $D1/report.tsv $D1/report.parquet
 ( export LD_LIBRARY_PATH=$P/tools/onnxruntime-linux-x64-1.31.0/lib DIALIBGEN_MODEL_DIR=$P/tools/DIALibGen/models \
          OPENMS_DATA_PATH=${OPENMS_DATA_PATH:-$(dirname $DLG)/../share/OpenMS}
@@ -68,6 +78,14 @@ echo "DIA-NN round 2: $(grep -oE 'Number of IDs at 0.01 FDR: [0-9]+' $O/diann/di
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
     -aggregation sum -ms1_isotope_spacing unit -threads $THREADS -out $O/odiaB.parquet -out_stats $O/odiaB.json > $O/odiaB.log 2>&1
 
+# 3c'. tuned library: the extractor on the full library (all precursors, top 6 fragments; timing and memory)
+if [ $RECAL = tuned ]; then
+  /usr/bin/time -v $X -in $MZML -lib $PRED -rt_mode minutes -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC \
+      -aggregation max -mass_calibration auto -threads $THREADS -out $O/odia_full.parquet -out_stats $O/odia_full.json \
+      > $O/odia_full.log 2>&1
+  rm -rf $O/odia_full.parquet   # 1+ GB; kept: stats, log, axes
+fi
+
 # 3d. OpenSWATH on the refined library: identity RT (no iRT), +-60 s, same full-width m/z window
 /usr/bin/time -v $B/OpenSwathWorkflow -in $MZML -tr $O/lib_openswath.tsv -out_chrom $O/osw.xic -out_features $O/osw.featureXML \
     -rt_extraction_window 120 -mz_extraction_window $FULL -mz_extraction_window_unit ppm \
@@ -83,7 +101,7 @@ $PY $P/scripts/compare_traces.py --odia $O/odiaB.parquet --axes $O/odiaB.axes.pa
     --openswath $O/osw_traces.parquet --out $O/cmpB.tsv > $O/cmpB.out 2>&1
 echo "== run $RUN (refined library)"
 grep -E 'Calibration' $O/odiaA.log | grep -oE 'MS2 offset [^;]*' || true
-for f in $O/diann/diann.log $O/odiaA.log $O/osw.log; do
+for f in $O/diann/diann.log $O/odiaA.log $O/osw.log $( [ $RECAL = tuned ] && echo $O/odia_full.log ); do
   printf '%-12s %s | %s\n' "$(basename $(dirname $f))/$(basename $f)" "$(grep -E 'Elapsed' $f | grep -oE '[0-9:.]+$')" \
     "$(grep -E 'Maximum resident' $f | grep -oE '[0-9]+$') KiB"
 done
