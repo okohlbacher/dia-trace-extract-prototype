@@ -60,9 +60,11 @@ namespace ODIA
     struct MassModel
     {
       double offset = 0, sigma = 0, accuracy = 0;
+      double coverage_width = 0;   ///< half width holding `coverage` of the true matches; 0 = not measurable
       std::size_t n = 0;
     };
-    MassModel massModel(const std::vector<std::pair<double, double>>& v, double k)
+    /// `centre`/`width`: the search window the errors were found in (the background is flat over its symmetric part).
+    MassModel massModel(const std::vector<std::pair<double, double>>& v, double k, double centre, double width, double coverage)
     {
       MassModel m;
       if (v.size() < 50) { return m; }   // too few centroids to measure a width: accuracy 0 = not measured
@@ -77,6 +79,32 @@ namespace ODIA
       std::sort(x.begin(), x.end());
       m.sigma = 1.4826 * q(x, 0.5);
       m.accuracy = std::max(k * m.sigma, 0.1);   // floor: the fixed-point m/z grid (1e-5 Th) resolves ~0.01 ppm at 1000 Th
+      // Coverage: |error - offset| binned over the symmetric part of the window; the background per bin is the median
+      // over the outer half; from the outside in, the first bin at which the matches beyond it, above background,
+      // exceed (1 - coverage) of the true matches ends the tolerance.
+      const double w = width - std::fabs(m.offset - centre);
+      constexpr int nb = 40;
+      if (w <= 0) { return m; }
+      std::vector<double> hist(nb, 0.0);
+      double inner = 0;
+      for (double ri : x)   // x is sorted |error - offset|
+      {
+        if (ri > w) { break; }
+        hist[std::min(nb - 1, static_cast<int>(ri / (w / nb)))] += 1;
+        inner += 1;
+      }
+      std::vector<double> outer(hist.begin() + nb / 2, hist.end());
+      std::sort(outer.begin(), outer.end());
+      const double b = 0.5 * (outer[outer.size() / 2 - 1] + outer[outer.size() / 2]);
+      const double signal = inner - b * nb;
+      if (inner < 50 || signal <= 0) { return m; }
+      double excess = 0, h = w / nb;
+      for (int kk = nb - 1; kk >= 0; --kk)
+      {
+        excess += hist[static_cast<std::size_t>(kk)] - b;
+        if (excess > (1.0 - coverage) * signal) { h = (kk + 1) * (w / nb); break; }
+      }
+      if (h < 0.9 * w) { m.coverage_width = h; }   // a tail reaching the window edge is not measurable here
       return m;
     }
 
@@ -93,6 +121,7 @@ namespace ODIA
       Anchor anchor;
       float score = 0;        ///< correlation x cosine of the accepted apex
       float fwhm_cycles = 0;  ///< width of the summed fragment trace at half the apex, in cycles
+      std::vector<float> coelution;   ///< mean pairwise fragment correlation when extracted at k sigma, per k of kSigmaGrid
       std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) of the fragments over the co-elution window
       std::vector<std::pair<double, double>> ms1_ppm;  ///< (ppm, intensity) of M+0 at the MS1 scans of that window
     };
@@ -122,7 +151,9 @@ namespace ODIA
     struct MassSearch
     {
       double ms2_offset = 0, ms2_width = 0, ms1_offset = 0, ms1_width = 0;
+      double ms2_sigma = 0;   ///< > 0 in stage 2: the anchors' traces are also extracted at k sigma for the tolerance choice
     };
+    constexpr double kSigmaGrid[] = {2, 3, 4, 5, 6, 8};
 
     /// Fragment m/z bounds of panel precursor p (the wide search window).
     std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const MassSearch& ms, std::uint32_t p, std::size_t F,
@@ -230,6 +261,45 @@ namespace ODIA
         if (v <= 0 || v < static_cast<float>(opt.min_relative_intensity) * strongest) { continue; }
         const double t = lib.fragment_mz[f0 + f];
         out.ms2_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v});
+      }
+      // The fragment traces at k sigma around the offset, over the co-elution window: the k at which they co-elute best
+      // is the tolerance multiple (calibrate()).
+      if (ms.ms2_sigma > 0)
+      {
+        const int hw = opt.half_window_cycles;
+        const std::size_t lo = c > static_cast<std::size_t>(hw) ? c - hw : 0, hi = std::min(C, c + hw + 1), n = hi - lo;
+        std::vector<float> tr(F * n);
+        for (double k : kSigmaGrid)
+        {
+          const double width = k * ms.ms2_sigma;
+          std::vector<std::size_t> present;
+          for (std::size_t f = 0; f < F; ++f)
+          {
+            const double t = lib.fragment_mz[f0 + f] * (1.0 + ms.ms2_offset * 1e-6), tol = t * width * 1e-6;
+            const MzFixed blo = toFixed(t - tol), bhi = toFixed(t + tol);
+            for (std::size_t cc = lo; cc < hi; ++cc)
+            {
+              tr[f * n + (cc - lo)] = maxPeak(lane.peaks, lane.peaks.cellBegin(cc), lane.peaks.cellEnd(cc), blo, bhi).first;
+            }
+            if (tr[f * n + (c - lo)] > 0) { present.push_back(f); }
+          }
+          // Mean over ALL fragment pairs; a pair with a fragment absent at the apex counts 0 (a window that drops
+          // fragments loses, a window that admits interference loses): the trade-off the multiple must settle.
+          std::vector<bool> has(F, false);
+          for (std::size_t f : present) { has[f] = true; }
+          double rsum = 0; int rn = 0;
+          for (std::size_t i = 0; i < F; ++i)
+          {
+            for (std::size_t j = i + 1; j < F; ++j)
+            {
+              ++rn;
+              if (!has[i] || !has[j]) { continue; }
+              const double r = pearson(&tr[i * n], &tr[j * n], n);
+              if (!std::isnan(r)) { rsum += r; }
+            }
+          }
+          out.coelution.push_back(static_cast<float>(rn ? rsum / rn : 0.0));
+        }
       }
       // MS1 monoisotope at the MS1 scan nearest to the apex.
       const auto& ms1 = g.ms1;
@@ -604,12 +674,12 @@ namespace ODIA
     // the tail of the true matches to be measured. So the mass model takes the anchors that pass the strict
     // co-elution criteria when there are at least 200 of them (a sample-size floor), else all used anchors.
     std::size_t mass_anchors = 0;
+    const auto strict_ok = [&](const Anchor& a) {
+      if (opt.anchor_fdr > 0) { return a.correlation * a.cosine >= res.strict_score_cut; }
+      return a.fragments >= opt.strict_min_fragments && a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
+    };
     const auto errors = [&](const std::vector<PanelResult>& results, const std::vector<Anchor>& anchors,
                             std::vector<std::pair<double, double>>& ms2, std::vector<std::pair<double, double>>& ms1) {
-      const auto strict_ok = [&](const Anchor& a) {
-        if (opt.anchor_fdr > 0) { return a.correlation * a.cosine >= res.strict_score_cut; }
-        return a.fragments >= opt.strict_min_fragments && a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
-      };
       std::size_t n_strict = 0;
       for (const auto& a : anchors) { n_strict += a.used && strict_ok(a); }
       const bool strict_only = n_strict >= 200;
@@ -628,8 +698,8 @@ namespace ODIA
     };
     std::vector<std::pair<double, double>> ms2_ppm, ms1_ppm;
     errors(stage1, a1, ms2_ppm, ms1_ppm);
-    MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma);
-    MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma);
+    MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage);
+    MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage);
 
     // Stage 2: around the stage-1 curve, relaxed criteria, the mass search narrowed around the stage-1 offsets;
     // repeated while the measured window still changes (at most search_rounds passes). Final fit and offsets.
@@ -657,7 +727,8 @@ namespace ODIA
     std::size_t stage2_decoys = 0;
     for (int round = 0; round < std::max(1, opt.search_rounds); ++round)
     {
-      const MassSearch next{m2.offset, narrowed(m2, search.ms2_width), m1.offset, narrowed(m1, search.ms1_width)};
+      MassSearch next{m2.offset, narrowed(m2, search.ms2_width), m1.offset, narrowed(m1, search.ms1_width)};
+      next.ms2_sigma = m2.sigma;
       if (round > 0 && std::fabs(next.ms2_width - search.ms2_width) < 0.25 * search.ms2_width
           && std::fabs(next.ms1_width - search.ms1_width) < 0.25 * search.ms1_width
           && std::fabs(next.ms2_offset - search.ms2_offset) < 0.25 * search.ms2_width
@@ -688,8 +759,8 @@ namespace ODIA
       double sigma2 = 0;
       res.rt_map = robustFit(res.anchors, opt, sigma2);
       errors(stage2, res.anchors, ms2_ppm, ms1_ppm);
-      m2 = massModel(ms2_ppm, opt.accuracy_sigma);
-      m1 = massModel(ms1_ppm, opt.accuracy_sigma);
+      m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage);
+      m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage);
     }
     if (const char* dump = std::getenv("ODIA_DUMP_MASS_ERRORS"))
     {
@@ -705,8 +776,27 @@ namespace ODIA
     res.rt_residual_p50 = quantile(absres, 0.50);
     res.rt_residual_p95 = quantile(absres, 0.95);
     res.rt_residual_p99 = quantile(absres, 0.99);
-    res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = m2.accuracy;
-    res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = m1.accuracy;
+    // Fragment co-elution of the mass-model anchors at k sigma (diagnostic: the curve is reported).
+    {
+      const std::size_t nk = sizeof(kSigmaGrid) / sizeof(kSigmaGrid[0]);
+      std::vector<std::vector<double>> curves(nk);
+      for (std::size_t i = 0; i < stage2.size(); ++i)
+      {
+        if (!res.anchors[i].used || !strict_ok(res.anchors[i]) || stage2[i].coelution.size() != nk) { continue; }
+        for (std::size_t k = 0; k < nk; ++k) { curves[k].push_back(stage2[i].coelution[k]); }
+      }
+      for (std::size_t k = 0; k < nk; ++k) { res.coelution_by_sigma.emplace_back(kSigmaGrid[k], curves[k].size() >= 50 ? quantile(curves[k], 0.5) : -1); }
+    }
+    // Tolerances: coverage_factor x the coverage half width (shape-adaptive), else accuracy_sigma / fallback_sigma x sigma.
+    const auto tolerance = [&](const MassModel& m, double& coverage_out) {
+      coverage_out = m.coverage_width;
+      if (m.n == 0) { return 0.0; }
+      if (opt.accuracy_sigma <= 0 && m.coverage_width > 0) { return std::max(opt.coverage_factor * m.coverage_width, 0.1); }
+      return m.accuracy;
+    };
+    res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = tolerance(m2, res.ms2_coverage_ppm);
+    res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = tolerance(m1, res.ms1_coverage_ppm);
+    res.accuracy_sigma = m2.sigma > 0 ? res.ms2_accuracy_ppm / m2.sigma : 0.0;
     res.ms2_search_ppm = search.ms2_width; res.ms1_search_ppm = search.ms1_width;
     res.strict_mass_anchors = mass_anchors;
     res.decoy_anchors = stage2_decoys;

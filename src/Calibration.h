@@ -19,7 +19,16 @@ namespace ODIA
     double search_narrow_factor = 3.0; ///< pass n+1 searches +- factor x the accuracy measured in pass n (the outer part
                                       ///< of that window measures the background of random centroids)
     int search_rounds = 3;            ///< at most this many stage-2 passes (stops when the window changes < 25%)
-    double accuracy_sigma = 6.0;      ///< extraction tolerance = this multiple of the robust (MAD) width of the apex mass errors
+    double accuracy_sigma = 6.0;      ///< > 0 (default 6): extraction tolerance = this multiple of the robust (MAD) width of the
+                                      ///< apex mass errors -- the optimum of the all-precursor trade-off on Astral and inside the
+                                      ///< anchors' co-elution plateau on Astral ([4, 8] sigma) and timsTOF ([2, 6] sigma); 5 is
+                                      ///< DIA-NN's rule. 0: coverage_factor x the half width that holds
+                                      ///< `coverage` of the true apex matches (background subtracted); shape-adaptive but
+                                      ///< unstable with few anchors or a dense background (docs/BACKLOG.md); fallback_sigma x
+                                      ///< width when the coverage cannot be measured.
+    double coverage = 0.99;
+    double coverage_factor = 1.3;     ///< flank and weak-fragment centroids err more than the apex centroids measured here
+    double fallback_sigma = 6.0;
     double min_relative_intensity = 0.0; ///< apex centroids below this share of the anchor's strongest fragment are left out of the mass model
     int top_fragments = 6;            ///< fragments per panel precursor used for co-elution
     int half_window_cycles = 0;       ///< co-elution window around a candidate apex (+- cycles); 0 = twice the median
@@ -72,6 +81,9 @@ namespace ODIA
     double peak_fwhm_cycles = 0, peak_fwhm_s = 0;   ///< median FWHM of the stage-1 anchors' summed fragment trace
     int half_window_cycles = 0;                     ///< co-elution window used in stage 2
     double score_cut = 0, strict_score_cut = 0;     ///< decoy-calibrated stage-2 score cuts (anchor_fdr; anchor_fdr / 10)
+    double accuracy_sigma = 0;                      ///< the multiple of sigma the tolerances correspond to
+    double ms2_coverage_ppm = 0, ms1_coverage_ppm = 0;   ///< half width holding `coverage` of the true apex matches
+    std::vector<std::pair<double, double>> coelution_by_sigma;   ///< (k, median fragment co-elution of the strict anchors at k sigma)
     std::size_t decoy_anchors = 0;                  ///< decoys above score_cut
     double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;
     /// Extraction accuracy (half width around the offset) = accuracy_sigma x the robust width of the apex errors.

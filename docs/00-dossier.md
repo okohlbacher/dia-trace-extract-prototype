@@ -1,4 +1,4 @@
-# ODIA-V3 trace extraction: dossier (2026-10-11)
+# ODIA-V3 trace extraction: dossier (2026-10-11, updated 2026-10-12)
 
 **Goal.** Fast, memory-efficient extraction of DIA fragment and precursor traces (XICs) from a *predicted, recalibrated*
 library, exported as Parquet/TSV for comparison with DIA-NN and OpenSWATH. Scoring, FDR and PyProphet are out of scope.
@@ -257,6 +257,25 @@ Ours A is now the recommended rule (MS2 ±6 ppm, MS1 measured); before it used D
   threads (mzML path 0.32 s; the library's decode stops scaling at ~32 threads). mzpeak-convert 0.18.0 files with
   vendor-centroided MS1 read in 3.6 s; their MS2 traces match the mzML path, the MS1 traces differ for 24% of
   precursors (vendor vs ProteoWizard centroiding). Details: `docs/08-mzpeak-reader-handoff-2.md` §6.
+
+## 6. Generality: a second instrument (timsTOF SCP, diaPASEF)
+
+ProteoBench diaPASEF module (HYE mixed-species, 25 ng, 30-min gradient, 8 TIMS ramps × 3 windows of 25 Th per cycle),
+two runs (condition A/B replicate 01), converted with mzpeak-convert 0.18.0 (6.7–6.9 GB mzPeak each), a DIALibGen
+timsTOF library of the HYE FASTA (4.15 M precursors), no reference engine (DIA-NN 1.7.12 reads no `.d`).
+
+- **Grid.** A diaPASEF frame carries three isolation windows separated by ion mobility; the loader splits each frame by
+  the per-peak mobility into its windows: 4,348 cycles × 24 windows, 104,340 window-spectra, 2.77 G points (the
+  ims-compact layout expands every TIMS scan), 21 GB grid.
+- **Calibration** (RT map and masses from the run): 146 / 142 strict anchors, 236 / 235 anchors; offsets MS2 −2.7 / −3.2
+  ppm, MS1 −3.7 / −4.0 ppm; error widths MS2 5.7 / 5.2 ppm, MS1 5.5 / 5.7 ppm (Astral: 1.0 / 0.4); peak FWHM 3
+  cycles (2.9 s); RT residual p99 55 / 60 s. Tolerances at 6σ: MS2 ±34 / ±31 ppm, MS1 ±33 / ±34 ppm.
+- **Trade-off on the anchors' traces** (±10 / 15 / 20 / 25 / 34 ppm): co-elution 0.863 / 0.872 / 0.869 / 0.869 / 0.860,
+  dropouts 6.1 / 4.5 / 3.5 / 3.3 / 2.8%: a plateau from ±15 ppm, 6σ at its upper edge.
+- **Cost.** 73 s per run at 32 threads (ingest 24 s on the per-spectrum mzPeak path, calibration 5 s, extraction
+  40–44 s), 33 GB peak RSS, 36.7 M traces.
+- **Not yet:** a trace-level comparison with another engine on this data; the mobility dimension is not used in the
+  extraction beyond the window split.
 
 ## 5. Open items
 

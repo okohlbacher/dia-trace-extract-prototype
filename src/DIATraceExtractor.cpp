@@ -172,8 +172,14 @@ protected:
     registerDoubleOption_("calibration:search_factor", "<f>", 3.0, "Narrowing factor of the mass search (see search_ppm).", false, true);
     registerIntOption_("calibration:search_rounds", "<n>", 3, "Maximum stage-2 passes (stops when the search window "
                        "changes by less than 25%).", false, true);
-    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "Measured tolerance = k x the robust width (1.4826 x MAD) "
-                          "of the apex mass errors; 6 per the tolerance trade-off analysis, 5 reproduces DIA-NN's rule.", false, true);
+    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "> 0: measured tolerance = k x the robust width (1.4826 x MAD) "
+                          "of the apex mass errors (6: the measured optimum on Astral, inside the co-elution plateau on Astral and timsTOF; "
+                          "5 is DIA-NN's rule). "
+                          "0: calibration:coverage_factor x the half width that holds calibration:coverage of the true apex matches "
+                          "(background subtracted) -- shape-adaptive, but unstable with few anchors or a dense background.", false, true);
+    registerDoubleOption_("calibration:coverage", "<f>", 0.99, "Share of the true apex matches inside the coverage half width.", false, true);
+    registerDoubleOption_("calibration:coverage_factor", "<f>", 1.3, "Tolerance = this x the coverage half width (flank and weak-fragment "
+                          "centroids err more than apex centroids).", false, true);
     registerDoubleOption_("calibration:min_relative_intensity", "<f>", 0.0, "Apex centroids below this share of the "
                           "anchor's strongest fragment are left out of the mass model (0 = all).", false, true);
     registerIntOption_("calibration:strict_min_fragments", "<n>", 5, "Stage 1: fragments with signal at an anchor apex.", false, true);
@@ -205,7 +211,7 @@ protected:
     registerDoubleOption_("calibration:min_reject", "<s>", 3.0, "Smallest rejection distance (s) of the RT refits.", false, true);
     setMinFloat_("calibration:panel_fraction", 1e-6); setMaxFloat_("calibration:panel_fraction", 1.0);
     setMinFloat_("calibration:search_ppm", 0.1); setMinFloat_("calibration:search_factor", 1.0);
-    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.1);
+    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.0); setMinFloat_("calibration:coverage", 0.5); setMaxFloat_("calibration:coverage", 0.9999); setMinFloat_("calibration:coverage_factor", 0.5);
     setMinFloat_("calibration:min_relative_intensity", 0.0); setMaxFloat_("calibration:min_relative_intensity", 1.0);
     setMinInt_("calibration:strict_min_fragments", 1); setMinInt_("calibration:min_fragments", 1);
     for (const char* o : {"calibration:strict_min_correlation", "calibration:strict_min_cosine", "calibration:min_correlation", "calibration:min_cosine"})
@@ -373,6 +379,8 @@ protected:
       copt.search_narrow_factor = getDoubleOption_("calibration:search_factor");
       copt.search_rounds = getIntOption_("calibration:search_rounds");
       copt.accuracy_sigma = getDoubleOption_("calibration:accuracy_sigma");
+      copt.coverage = getDoubleOption_("calibration:coverage");
+      copt.coverage_factor = getDoubleOption_("calibration:coverage_factor");
       copt.min_relative_intensity = getDoubleOption_("calibration:min_relative_intensity");
       copt.strict_min_fragments = getIntOption_("calibration:strict_min_fragments");
       copt.strict_min_correlation = getDoubleOption_("calibration:strict_min_correlation");
@@ -413,7 +421,9 @@ protected:
                       << " (" << cal->decoy_anchors << " decoys above it), strict cut " << cal->strict_score_cut << "; MS2 offset "
                       << cal->ms2_offset_ppm << " ppm (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
                       << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
-                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
+                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (coverage half widths " << cal->ms2_coverage_ppm << " / " << cal->ms1_coverage_ppm << " ppm; = " << cal->accuracy_sigma << " sigma; co-elution by k:"
+                      << [&] { std::string t; for (const auto& [k, r] : cal->coelution_by_sigma) { t += " " + std::to_string(static_cast<int>(k)) + ":" + (r < 0 ? std::string("-") : std::to_string(r).substr(0, 5)); } return t; }()
+                      << "; from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
                       << cal->ms2_search_ppm << " / +-" << cal->ms1_search_ppm << " ppm); " << fmt(cal->time) << std::endl;
       if (!getStringOption_("out_calibration").empty()) { ODIA::writeAnchors(getStringOption_("out_calibration"), *cal_lib, *cal); }
       }

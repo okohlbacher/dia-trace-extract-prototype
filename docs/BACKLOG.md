@@ -42,7 +42,13 @@
 - **RT model internals** (mode bins 20, mode bandwidth 15 s, min stage-2 window 30 s, min reject 3 s, LOWESS span
   0.15): configurable now; could be expressed in measured peak widths / chosen by cross-validation.
 - **Nearest-window assignment** assumes non-overlapping isolation windows; overlapping or staggered schemes untested.
-- **Generality:** validate on a second instrument (a ProteoBench timsTOF DIA module).
+- **Generality:** ProteoBench diaPASEF (timsTOF SCP) runs end to end (docs/00-dossier.md §6). Open: a reference
+  engine for the traces (DIA-NN 1.7.12 reads no `.d`; 2.x only on request); the 25-ng SCP sample yields ~145 strict
+  anchors (Astral: ~700), so the MS1 model rests on ~230 centroids.
+- **Tolerance rule:** `calibration:accuracy_sigma 0` (coverage-based, shape-adaptive) is implemented but unstable
+  with few anchors or a dense background (timsTOF B01 ±44 vs A01 ±21; full-library MS1 ±7); the co-elution-by-k
+  curve is reported in the log but too flat to choose k. Peptide decoys from the library generator would give both
+  a cleaner anchor set and a proper FDR for the acceptance thresholds.
 
 ## Open: from the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md)
 - Panel sampling (`keep_every`) only for compact Parquet libraries; TSV/TraML/PQP load the whole library for the panel.

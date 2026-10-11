@@ -28,7 +28,9 @@ interpolated. Centroids are stored as fixed-point m/z (10⁻⁵ Th steps, i.e. 0
 intensity: 8 bytes per centroid, 1.1 GB for a 141 M-centroid run.
 
 Input formats: centroided mzML, mzPeak (point or chunked layout; the MS1 spectra must be centroided in the
-file), Thermo `.raw`.
+file), Thermo `.raw`. A diaPASEF frame, which carries several isolation windows separated by ion mobility, is
+split into one spectrum per window using the per-peak mobility and the windows' mobility bands (the mobility
+dimension is otherwise not used).
 
 ## 2. Where to look
 
@@ -123,14 +125,21 @@ are at least 200 of them; at least 50 centroids are needed for a measurement):
 
 The mass search then narrows to ±3 × the tolerance around the offset (never wider than the first pass) and the
 anchors are searched again, so that the first wide pass does not bias the offset; the passes stop when the window
-and the offset change by less than a quarter of the window (at most `calibration:search_rounds`, 3). On the three Astral runs and both libraries the width is 0.84–1.08
-ppm at MS2 and 0.37–0.43 ppm at MS1, giving tolerances of ±5.0–6.5 ppm and ±2.2–2.6 ppm; the offsets are
-−3.2 / −2.4 / −2.0 ppm (MS2) and +1.3 / +1.2 / +1.4 ppm (MS1) on runs 01 / 02 / 03. The multiple 6 is the one
-constant of this rule; it was chosen on the measured trade-off between captured signal and interference (the
-±6 ppm optimum in `analysis/trace_quality.md`), and 5 reproduces DIA-NN's rule. A 99%-coverage point of the apex
-errors, parametric or not, came out too narrow (±3–4 ppm) because apex centroids of confident anchors are the
-best-measured points in the run; the flanks and the weak fragments the traces must also capture have larger
-errors.
+and the offset change by less than a quarter of the window (at most `calibration:search_rounds`, 3).
+
+The width is stable: 0.92–1.08 ppm at MS2 and 0.37–0.43 ppm at MS1 on the three Astral runs and both libraries
+(offsets −3.2 / −2.4 / −2.0 ppm at MS2, +1.3 / +1.2 / +1.4 at MS1 on runs 01 / 02 / 03), 5.2–5.7 and 5.3–5.7 ppm on
+two timsTOF SCP diaPASEF runs (offsets −2.7 / −3.2 and −3.7 / −4.0). The multiple 6 is the one constant of the rule.
+It rests on measured trade-offs: the Astral analysis on all identified precursors put the optimum at ±6 ppm
+(`analysis/trace_quality.md`), and re-extracting the calibration anchors at k × σ, the fragment co-elution (with a
+dropped fragment counting as zero) reaches a plateau over k = 4…8 on Astral and k = 2…6 on timsTOF, so 6 lies
+inside both; 5 is DIA-NN's rule. On timsTOF this gives ±26–34 ppm (σ 5.2–5.7 ppm), where re-extracting the
+anchors at ±10…34 ppm shows co-elution flat from ±15 ppm and dropouts still falling at ±34. Two shape-adaptive alternatives
+were measured and are kept as options: the half width holding 99% of the background-subtracted apex matches
+(`calibration:accuracy_sigma 0`), which fits both instruments when the anchors are many and clean but is unstable
+with a few hundred anchors or a dense background, and choosing k by the co-elution curve, which is too flat to
+decide. A 99% coverage of apex errors alone is too narrow: apex centroids of confident anchors are the
+best-measured points, the flanks and weak fragments err more.
 
 The whole calibration takes about one second (the anchor search uses at most 32 threads). The thresholds above
 are `-calibration:*` options, except the 6 fragments per panel precursor and the sample-size floors (50 anchors,
