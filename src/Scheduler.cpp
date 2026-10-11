@@ -1,7 +1,9 @@
 // ODIA-V3 trace extractor -- central scheduling of library reading, extraction and writing.
 #include "Scheduler.h"
+#include "Profile.h"
 
 #include <algorithm>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -30,20 +32,46 @@ namespace ODIA
     // ODIA_PROFILE=1: sample the scheduler state twice a second (stderr).
     std::thread monitor;
     bool stop = false;
+    const char* timeline_path = std::getenv("ODIA_PROFILE_TIMELINE");
     if (std::getenv("ODIA_PROFILE") != nullptr)
     {
-      monitor = std::thread([&] {
+      monitor = std::thread([&, timeline_path] {
+        // ODIA_PROFILE_TIMELINE=file: every 100 ms one TSV row (per-class active workers, idle workers, queues,
+        // process CPU in the interval); stderr gets a line every 0.5 s.
+        std::FILE* tl = timeline_path ? std::fopen(timeline_path, "w") : nullptr;
+        if (tl)
+        {
+          std::fprintf(tl, "t\tread\textract\tencode\twrite\tidle\toutstanding\tunissued\tloaded_parts\tunwritten\t"
+                           "encode_queue\tpool_free\tcommit_part\tprocess_cpu\n");
+        }
+        const auto cpu_now = [] {
+          timespec ts{};
+          ::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+          return ts.tv_sec + ts.tv_nsec * 1e-9;
+        };
+        double cpu_last = cpu_now(), t_last = 0;
+        int ticks = 0;
         Lock lock(mtx_);
         while (!stop)
         {
-          cv_mon_.wait_for(lock, std::chrono::milliseconds(500));
+          cv_mon_.wait_for(lock, std::chrono::milliseconds(tl ? 100 : 500));
           if (stop) { break; }
-          std::fprintf(stderr, "[sched %6.1f s] active read %d extract %d encode %d write %d | outstanding %zu unissued %zu "
+          const double t = std::chrono::duration<double>(clk::now() - t0).count(), cpu = cpu_now();
+          if (tl)
+          {
+            std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\n", t, active_[0], active_[1],
+                         active_[2], active_[3], waiting_, outstanding_, unissued_, loaded_.size(), unwritten_,
+                         encode_queue_.size(), pool_.available(), commit_part_, (cpu - cpu_last) / std::max(1e-9, t - t_last));
+          }
+          cpu_last = cpu; t_last = t;
+          if (tl && ++ticks % 5 != 0) { continue; }
+          std::fprintf(stderr, "[sched %6.1f s] active read %d extract %d encode %d write %d idle %d | outstanding %zu unissued %zu "
                        "loaded parts %zu (commit part %zu unit %zu) | encode queue %zu unwritten %zu | pool free %zu\n",
-                       std::chrono::duration<double>(clk::now() - t0).count(), active_[0], active_[1], active_[2], active_[3],
+                       t, active_[0], active_[1], active_[2], active_[3], waiting_,
                        outstanding_, unissued_, loaded_.size(), commit_part_, commit_unit_, encode_queue_.size(), unwritten_,
                        pool_.available());
         }
+        if (tl) { std::fclose(tl); }
       });
     }
     for (auto& t : pool) { t.join(); }
@@ -77,9 +105,49 @@ namespace ODIA
       if (tryRead_(lock, true)) { continue; }
       if (tryExtract_(lock)) { continue; }
       if (tryRead_(lock, false)) { continue; }
-      cv_.wait(lock);
+      if (prof::enabled())
+      {
+        const char* why = whyIdle_();
+        ++waiting_;
+        const std::uint64_t t0 = prof::nowNs();
+        cv_.wait(lock);
+        prof::counter(std::string("sched.idle.") + why).add(prof::nowNs() - t0);
+        --waiting_;
+      }
+      else { cv_.wait(lock); }
     }
     cv_.notify_all();
+  }
+
+  void ExtractionScheduler::relock_(Lock& lock)
+  {
+    if (!prof::enabled()) { lock.lock(); return; }
+    static prof::Counter& c = prof::counter("sched.lock_acquire");
+    const std::uint64_t t0 = prof::nowNs();
+    lock.lock();
+    c.add(prof::nowNs() - t0);
+  }
+
+  const char* ExtractionScheduler::whyIdle_() const
+  {
+    bool queued = false, queued_free = false;
+    for (std::size_t s = 0; s < sink_queue_.size(); ++s)
+    {
+      if (sink_queue_[s].empty()) { continue; }
+      queued = true;
+      if (!sink_busy_[s]) { queued_free = true; }
+    }
+    if (unissued_ > 0)
+    {
+      if (unwritten_ >= opt_.max_unwritten) { return queued && !queued_free ? "unwritten_cap(sinks_busy)" : "unwritten_cap(awaiting_encode)"; }
+      if (outstanding_ >= opt_.ahead) { return "ordered_window_full"; }
+      if (loaded_.empty() || loaded_.begin()->first != commit_part_) { return "next_part_not_loaded"; }
+      return "buffer_pool_empty";
+    }
+    if (commit_part_ >= reader_.parts()) { return queued ? "drain(writes_serial)" : "drain(encode)"; }
+    for (bool b : source_busy_) { if (b) { return "awaiting_library_read"; } }
+    if (queued && !queued_free) { return "sinks_busy"; }
+    return "read_ahead_limit";
   }
 
   void ExtractionScheduler::fail_()
@@ -157,13 +225,13 @@ namespace ODIA
     }
     catch (...)
     {
-      lock.lock();
+      relock_(lock);
       sink_busy_[best] = false;
       end_(SchedulerStats::Write, t0);
       fail_();
       return true;
     }
-    lock.lock();
+    relock_(lock);
     if (--item->sinks_left == 0) { --unwritten_; }
     sink_busy_[best] = false;
     end_(SchedulerStats::Write, t0);
@@ -189,13 +257,13 @@ namespace ODIA
     }
     catch (...)
     {
-      lock.lock();
+      relock_(lock);
       --encoding_;
       end_(SchedulerStats::Encode, t0);
       fail_();
       return true;
     }
-    lock.lock();
+    relock_(lock);
     --encoding_;
     end_(SchedulerStats::Encode, t0);
     item->ready = true;
@@ -224,13 +292,13 @@ namespace ODIA
       }
       catch (...)
       {
-        lock.lock();
+        relock_(lock);
         source_busy_[src] = false;
         end_(SchedulerStats::Read, t0);
         fail_();
         return true;
       }
-      lock.lock();
+      relock_(lock);
       source_busy_[src] = false;
       end_(SchedulerStats::Read, t0);
       unissued_ += part->plan.units.size();
@@ -279,12 +347,12 @@ namespace ODIA
       }
       catch (...)
       {
-        lock.lock();
+        relock_(lock);
         end_(SchedulerStats::Extract, t0);
         fail_();
         return true;
       }
-      lock.lock();
+      relock_(lock);
       end_(SchedulerStats::Extract, t0);
       keep->parked.emplace(unit, std::move(block));
       tryCommit_(lock);
@@ -310,7 +378,7 @@ namespace ODIA
           begun_ = true;
           lock.unlock();
           if (on_part) { on_part(part->lib, part->plan); }
-          lock.lock();
+          relock_(lock);
         }
         if (commit_unit_ == part->plan.units.size())
         {
@@ -325,7 +393,7 @@ namespace ODIA
         auto node = part->parked.extract(p);
         lock.unlock();
         if (on_unit) { on_unit(*node.mapped()); }
-        lock.lock();
+        relock_(lock);
         --outstanding_;
         ++commit_unit_;
         auto item = std::make_shared<Item>();
@@ -339,7 +407,7 @@ namespace ODIA
       }
       catch (...)
       {
-        if (!lock.owns_lock()) { lock.lock(); }
+        if (!lock.owns_lock()) { relock_(lock); }
         fail_();
       }
     }

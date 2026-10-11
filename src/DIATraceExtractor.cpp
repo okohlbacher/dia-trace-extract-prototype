@@ -6,6 +6,7 @@
 #include "Extractor.h"
 #include "Library.h"
 #include "Pipeline.h"
+#include "Profile.h"
 #include "RtMap.h"
 #include "RunGrid.h"
 #include "Scheduler.h"
@@ -406,6 +407,7 @@ protected:
                     << " with " << threads << " threads" << mem() << std::endl;
     OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points in " << writer.shardCount() << " Parquet part(s) (busiest writer "
                     << writer.busySeconds() << " s, final drain " << t_close.wall << " s)" << std::endl;
+    if (ODIA::prof::enabled()) { ODIA::prof::report(stderr); }
     if (std::getenv("ODIA_PROFILE") != nullptr)
     {
       auto* ap = ODIA::arrowPool();

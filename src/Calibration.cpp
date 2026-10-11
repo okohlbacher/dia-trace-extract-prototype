@@ -278,7 +278,8 @@ namespace ODIA
           }
           return r;
         },
-        [&](std::vector<PanelResult>&& r) { for (auto& x : r) { all.push_back(std::move(x)); } });
+        [&](std::vector<PanelResult>&& r) { for (auto& x : r) { all.push_back(std::move(x)); } },
+        prior ? "calib.stage2_panel" : "calib.stage1_panel");
       return all;
     }
 

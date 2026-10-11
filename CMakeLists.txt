@@ -34,6 +34,7 @@ endif()
 add_library(odia_traces STATIC
   src/Library.cpp
   src/MzMLFast.cpp
+  src/Profile.cpp
   src/RtMap.cpp
   src/RunGrid.cpp
   src/ArrowPool.cpp

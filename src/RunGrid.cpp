@@ -1,6 +1,7 @@
 // ODIA-V3 trace extractor -- compact grid representation of a DIA run on ONE global RT axis.
 #include "RunGrid.h"
 #include "MzMLFast.h"
+#include "Profile.h"
 
 #include "Pipeline.h"
 
@@ -251,6 +252,7 @@ namespace ODIA
         return false;
       }
 
+      const std::uint64_t t_marks = prof::nowNs();
       // 1. Markup positions, found in parallel over 1 MiB blocks.
       enum class Mark : unsigned char { spectrum, list_start, list_end, run_end, declaration };
       const auto is_tag = [](std::string_view text, std::string_view name) {
@@ -313,6 +315,7 @@ namespace ODIA
         }
       }
       marks = {};
+      if (prof::enabled()) { prof::counter("ingest.1_mark_scan(wall)").add(prof::nowNs() - t_marks); }
       if (!good || run_end == none || starts.size() < 64) { return false; }
 
       // 2. Header (everything before the first spectrum) with the spectrumList count made per chunk.
@@ -371,10 +374,16 @@ namespace ODIA
           // Fast path: the spectra parsed straight from the file bytes (MzMLFast), into reused buffers.
           thread_local std::string raw;
           thread_local std::vector<unsigned char> s1, s2;
-          raw.resize(to - from);
-          file.seekg(static_cast<std::streamoff>(from));
-          file.read(raw.data(), static_cast<std::streamsize>(to - from));
+          {
+            static prof::Counter& c_read = prof::counter("ingest.chunk_read");
+            prof::Scope sc(c_read);
+            raw.resize(to - from);
+            file.seekg(static_cast<std::streamoff>(from));
+            file.read(raw.data(), static_cast<std::streamsize>(to - from));
+          }
           if (!file) { throw std::runtime_error("mzML chunk read failed"); }
+          static prof::Counter& c_parse = prof::counter("ingest.chunk_parse_fast");
+          prof::Scope sc_parse(c_parse);
           if (fast)
           {
             std::vector<Decoded> out(first[c + 1] - first[c]);
@@ -409,7 +418,7 @@ namespace ODIA
           }
           return out;
         },
-        [&](std::vector<Decoded>&& v) { for (auto& d : v) { route(std::move(d)); } });
+        [&](std::vector<Decoded>&& v) { for (auto& d : v) { route(std::move(d)); } }, "ingest.3_chunks");
       if (std::getenv("ODIA_PROFILE") != nullptr)
       {
         std::fprintf(stderr, "[ingest] %zu of %zu chunks parsed by the fast mzML parser\n", fast_chunks.load(), used);
@@ -577,7 +586,10 @@ namespace ODIA
       producer.join();
       if (error) { std::rethrow_exception(error); }
     }
-    router.finish();
+    {
+      prof::Scope sc(prof::counter("ingest.4_router_finish(wall)"));
+      router.finish();
+    }
 
     for (auto& w : g.windows)
     {
@@ -588,6 +600,7 @@ namespace ODIA
     g.ms1.peaks.intensity.shrink_to_fit();
     if (g.windows.empty()) { throw std::runtime_error("no MS2 isolation windows in " + filename); }
     // m/z bucket index per lane (the extraction's merge join jumps over m/z gaps with it).
+    prof::Scope sc_index(prof::counter("ingest.5_bucket_index(wall)"));
 #pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, decode_threads))
     for (std::ptrdiff_t w = -1; w < static_cast<std::ptrdiff_t>(g.windows.size()); ++w)
     {

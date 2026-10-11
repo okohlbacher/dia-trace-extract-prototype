@@ -86,6 +86,8 @@ namespace ODIA
     using Lock = std::unique_lock<std::mutex>;
 
     void worker_();
+    void relock_(Lock& lock);       // lock.lock(), timed under ODIA_PROFILE (contention on the central lock)
+    const char* whyIdle_() const;   // why a worker found nothing to do (ODIA_PROFILE), lock held
     bool tryWrite_(Lock& lock);
     bool tryEncode_(Lock& lock);
     bool tryRead_(Lock& lock, bool low_water_only);
@@ -118,6 +120,7 @@ namespace ODIA
     std::uint64_t unit_seq_ = 0;
     bool committing_ = false, begun_ = false;
     int active_[SchedulerStats::classes] = {};
+    int waiting_ = 0;                  // workers blocked in cv_.wait
     std::exception_ptr error_;
     std::vector<std::size_t> sinks_scratch_;
 
