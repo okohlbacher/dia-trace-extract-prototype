@@ -22,7 +22,14 @@ namespace ODIA
     double accuracy_sigma = 6.0;      ///< extraction tolerance = this multiple of the robust (MAD) width of the apex mass errors
     double min_relative_intensity = 0.0; ///< apex centroids below this share of the anchor's strongest fragment are left out of the mass model
     int top_fragments = 6;            ///< fragments per panel precursor used for co-elution
-    int half_window_cycles = 4;       ///< co-elution window around a candidate apex (+- cycles)
+    int half_window_cycles = 0;       ///< co-elution window around a candidate apex (+- cycles); 0 = twice the median
+                                      ///< peak FWHM of the stage-1 anchors, at least 3 (stage 1 itself uses seed_window_cycles)
+    int seed_window_cycles = 4;       ///< stage-1 window when half_window_cycles is measured
+    double anchor_fdr = 0.0;          ///< stage 2: accept anchors above the score at which shifted-fragment decoys make up
+                                      ///< this share of the accepted anchors; 0 (default) = the fixed min_correlation /
+                                      ///< min_library_cosine. Off by default: see docs/BACKLOG.md (decoys of this kind do
+                                      ///< not model the false anchors, which are real peptides' fragments)
+    double decoy_shift = 0.4;         ///< Th added to every fragment m/z of a decoy copy of a panel precursor
     int candidates = 5;               ///< local maxima of the summed trace evaluated per precursor
     // Stage 1 (whole run, no prior): strict co-elution criteria.
     int strict_min_fragments = 5;
@@ -62,6 +69,10 @@ namespace ODIA
     std::size_t stage1_anchors = 0, stage1_used = 0;
     double stage2_window_s = 0;
     double rt_residual_p50 = 0, rt_residual_p95 = 0, rt_residual_p99 = 0;  ///< |residual|, s, used anchors
+    double peak_fwhm_cycles = 0, peak_fwhm_s = 0;   ///< median FWHM of the stage-1 anchors' summed fragment trace
+    int half_window_cycles = 0;                     ///< co-elution window used in stage 2
+    double score_cut = 0, strict_score_cut = 0;     ///< decoy-calibrated stage-2 score cuts (anchor_fdr; anchor_fdr / 10)
+    std::size_t decoy_anchors = 0;                  ///< decoys above score_cut
     double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;
     /// Extraction accuracy (half width around the offset) = accuracy_sigma x the robust width of the apex errors.
     double ms2_accuracy_ppm = 0, ms1_accuracy_ppm = 0;

@@ -9,9 +9,8 @@
 - Open (reader): decode scales to ~10-14 cores only (the library serialises row-group decoding per archive:
   `docs/read-path-performance.md` of the submodule); open() 0.17 s and the metadata pass 0.2 s are serial.
   Target was <= 0.5 s. The chunked/numpress decode (0.18.0) is 4x slower than the point layout.
-- Open (build): the library needs Boost.JSON, absent from the OpenMS vcpkg tree; built against the conda
-  environment's Boost 1.92, whose `lib` lands on the rpath (its libstdc++ 3.4.36 is newer than the system's
-  3.4.33, so this works, but a vcpkg `boost-json` port would be cleaner).
+- Build: `boost-json` and `boost-program-options` added to the OpenMS vcpkg manifest (2026-10-11); no conda
+  dependency any more.
 - Open (converter): the MS1 centroiding difference (24% of MS1 traces differ from the mzML) is a centroider
   difference, not a defect; decide which centroids are the reference.
 
@@ -27,10 +26,16 @@
   of the mass model once the background component is validated on a full predicted library.
 - **RT window.** Now fixed `-rt_window 60`. Explore: peak width and RT-map uncertainty as a function of RT from the
   calibration anchors (iterative refinement, iterative re-extraction with a narrowed window).
-- **Co-elution window ±4 cycles** (`calibration:half_window_cycles`): open question whether to derive it from the
-  measured peak width in cycles of the strict anchors (cycle time and chromatography dependent).
-- **Anchor acceptance thresholds** (correlation 0.90/0.80, cosine 0.85/0.75, fragments 5/4): open; a decoy-calibrated
-  score cut-off (same scoring on decoys or mass-shifted fragments, cut at ~1% false anchors) would replace them.
+- **Co-elution window**: now measured (stage 2 uses twice the median FWHM of the stage-1 anchors, ≥ 3 cycles; stage
+  1 keeps a seed of ±4). On Astral the FWHM is 2 cycles (3.3 s), giving ±4 as before.
+- **Anchor acceptance thresholds** (correlation 0.90/0.80, cosine 0.85/0.75, fragments 5/4): a decoy-calibrated score
+  cut is implemented (`calibration:anchor_fdr`, decoys = fragment windows shifted by `calibration:decoy_shift` Th)
+  but **off by default**: on Astral runs 01/02 such decoys almost never show 4 fragments at one apex, the cut
+  collapsed to a negative score, noisy anchors entered (error width 0.93 → 1.18 ppm, tolerance ±5.5 → ±7.1 ppm) and
+  DIA-NN agreement fell from 91.2% to 86.3%. False anchors are real peptides' fragments; peptide-like decoys from
+  the library generator (`-generation:decoys`) are the right calibration set. Open.
+- **RT window**: `-rt_window 0` = measured (99th percentile of the anchor residuals + peak width; 36–53 s on Astral);
+  the default stays 60 s. Iterative re-extraction with a narrowed window: open.
 - **Apex intensity cutoff** (`calibration:min_relative_intensity`, now 0): evaluate 0 vs 0.1 with the mixture fit.
 - **RT model internals** (mode bins 20, mode bandwidth 15 s, min stage-2 window 30 s, min reject 3 s, LOWESS span
   0.15): configurable now; could be expressed in measured peak widths / chosen by cross-validation.

@@ -153,7 +153,8 @@ protected:
     registerStringOption_("rt_anchor_model", "<model>", "lowess", "Model fitted to the anchors.", false);
     setValidStrings_("rt_anchor_model", {"linear", "b_spline", "lowess", "interpolated"});
     registerDoubleOption_("rt_window", "<s>", 60.0, "Half width (seconds) of the extraction window around the "
-                          "mapped RT; <= 0 extracts the whole run.", false);
+                          "mapped RT; 0 = measured (99th percentile of the calibration anchors' RT residuals plus the peak width); "
+                          "negative extracts the whole run.", false);
 
     registerDoubleOption_("mz_tol", "<ppm>", 0.0, "Fragment tolerance, +- ppm (half width). 0 (default) = the MS2 accuracy measured "
                           "by -mass_calibration auto (calibration:accuracy_sigma x the robust error width; about 6 ppm on Astral).", false);
@@ -185,7 +186,13 @@ protected:
                           "at an anchor apex.", false, true);
     registerDoubleOption_("calibration:min_cosine", "<c>", 0.75, "Stage 2: cosine of sqrt(apex) vs sqrt(library) "
                           "intensities at an anchor apex.", false, true);
-    registerIntOption_("calibration:half_window_cycles", "<n>", 4, "Co-elution window around a candidate apex (+- cycles).", false, true);
+    registerIntOption_("calibration:half_window_cycles", "<n>", 0, "Co-elution window around a candidate apex (+- cycles); 0 = twice the "
+                       "median peak width (FWHM, cycles) of the stage-1 anchors, at least 3.", false, true);
+    registerIntOption_("calibration:seed_window_cycles", "<n>", 4, "Stage-1 co-elution window when half_window_cycles is 0.", false, true);
+    registerDoubleOption_("calibration:anchor_fdr", "<f>", 0.0, "Stage 2 accepts anchors above the score (correlation x cosine) at "
+                          "which decoys (fragment windows shifted by calibration:decoy_shift) are this share of the anchors; 0 = fixed "
+                          "min_correlation / min_cosine.", false, true);
+    registerDoubleOption_("calibration:decoy_shift", "<Th>", 0.4, "m/z shift of the decoy fragment windows.", false, true);
     registerIntOption_("calibration:candidates", "<n>", 5, "Local maxima of the summed fragment trace tried per precursor.", false, true);
     registerIntOption_("calibration:mode_bins", "<n>", 20, "Library-RT bins of the initial RT curve (run-RT mode per bin).", false, true);
     registerDoubleOption_("calibration:mode_bandwidth", "<s>", 15.0, "Half width (s) of the window that finds the run-RT mode "
@@ -205,7 +212,8 @@ protected:
     {
       setMinFloat_(o, -1.0); setMaxFloat_(o, 1.0);
     }
-    setMinInt_("calibration:half_window_cycles", 1); setMinInt_("calibration:candidates", 1); setMinInt_("calibration:mode_bins", 1);
+    setMinInt_("calibration:half_window_cycles", 0); setMinInt_("calibration:seed_window_cycles", 1);
+    setMinFloat_("calibration:anchor_fdr", 0.0); setMaxFloat_("calibration:anchor_fdr", 0.5); setMinFloat_("calibration:decoy_shift", 0.05); setMinInt_("calibration:candidates", 1); setMinInt_("calibration:mode_bins", 1);
     setMinFloat_("calibration:mode_bandwidth", 0.01); setMinFloat_("calibration:min_window", 0.0);
     setMinFloat_("calibration:lowess_span", 0.01); setMaxFloat_("calibration:lowess_span", 1.0);
     setMinInt_("calibration:rejection_rounds", 0); setMinFloat_("calibration:min_reject", 0.0);
@@ -373,6 +381,9 @@ protected:
       copt.min_correlation = getDoubleOption_("calibration:min_correlation");
       copt.min_library_cosine = getDoubleOption_("calibration:min_cosine");
       copt.half_window_cycles = getIntOption_("calibration:half_window_cycles");
+      copt.seed_window_cycles = getIntOption_("calibration:seed_window_cycles");
+      copt.anchor_fdr = getDoubleOption_("calibration:anchor_fdr");
+      copt.decoy_shift = getDoubleOption_("calibration:decoy_shift");
       copt.candidates = getIntOption_("calibration:candidates");
       copt.mode_bins = getIntOption_("calibration:mode_bins");
       copt.mode_bandwidth_s = getDoubleOption_("calibration:mode_bandwidth");
@@ -397,7 +408,9 @@ protected:
                       << " used), stage 2 window +-" << cal->stage2_window_s << " s; "
                       << cal->anchors.size() << " anchors from a panel of " << cal->panel << ", "
                       << cal->used << " used; RT residual |p50/p95/p99| " << cal->rt_residual_p50 << " / "
-                      << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; MS2 offset "
+                      << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; peak FWHM " << cal->peak_fwhm_cycles << " cycles ("
+                      << cal->peak_fwhm_s << " s), co-elution window +-" << cal->half_window_cycles << " cycles; score cut " << cal->score_cut
+                      << " (" << cal->decoy_anchors << " decoys above it), strict cut " << cal->strict_score_cut << "; MS2 offset "
                       << cal->ms2_offset_ppm << " ppm (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
                       << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
                       << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
@@ -435,6 +448,12 @@ protected:
     eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
     eopt.rt_half_window = getDoubleOption_("rt_window");
+    if (eopt.rt_half_window == 0.0)
+    {
+      if (!cal) { OPENMS_LOG_ERROR << "-rt_window 0 (measured) needs -mass_calibration auto or -rt_mode auto." << std::endl; return ILLEGAL_PARAMETERS; }
+      eopt.rt_half_window = cal->rt_residual_p99 + cal->peak_fwhm_s;
+      OPENMS_LOG_INFO << "RT window: +-" << eopt.rt_half_window << " s (measured)" << std::endl;
+    }
     eopt.aggregate_sum = getStringOption_("aggregation") == "sum";
     eopt.extract_ms1 = getIntOption_("ms1_isotopes") >= 0;
     eopt.ms1_isotopes = std::max(0, getIntOption_("ms1_isotopes"));

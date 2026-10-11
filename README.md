@@ -15,15 +15,13 @@ GCC ≥ 13. In this project OpenMS is built at `OpenMS/OpenMS-build` (`cmake --p
 
 The mzPeak reader/writer is the mzpeak-openms library (git submodule `external/mzpeak`, tag
 `partitioned-read-2026-10-11`), built here against the same Arrow. It needs Boost ≥ 1.89 with `json` and
-`program_options`, which the OpenMS vcpkg tree lacks: point `MZPEAK_BOOST_DIR` at a `BoostConfig.cmake` directory
-that has them (here: the conda environment `/ceph/ibmi/abi/oliver/envs/mzpeak`; its `lib` ends up on the binary's
-rpath).
+`program_options`: the OpenMS vcpkg manifest here lists `boost-json` and `boost-program-options`, so the OpenMS
+vcpkg tree provides them; another `BoostConfig.cmake` directory can be given with `MZPEAK_BOOST_DIR`.
 
 ```bash
 git submodule update --init
 O=$PWD/OpenMS/OpenMS-build
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic" \
-      -DMZPEAK_BOOST_DIR=/ceph/ibmi/abi/oliver/envs/mzpeak/lib/cmake/Boost-1.92.0
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic"
 cmake --build build -j 16
 ctest --test-dir build        # OpenSWATH parity + thread determinism
 ```

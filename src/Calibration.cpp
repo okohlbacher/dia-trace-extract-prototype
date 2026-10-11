@@ -91,6 +91,8 @@ namespace ODIA
     {
       bool accepted = false;
       Anchor anchor;
+      float score = 0;        ///< correlation x cosine of the accepted apex
+      float fwhm_cycles = 0;  ///< width of the summed fragment trace at half the apex, in cycles
       std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) of the fragments over the co-elution window
       std::vector<std::pair<double, double>> ms1_ppm;  ///< (ppm, intensity) of M+0 at the MS1 scans of that window
     };
@@ -112,6 +114,8 @@ namespace ODIA
     {
       int min_fragments;
       double min_correlation, min_cosine;
+      double min_score = -1;     ///< when >= 0: accept by correlation x cosine >= min_score instead of the two thresholds
+      double decoy_shift_th = 0; ///< when != 0: score a decoy (every fragment window shifted by this many Th)
     };
 
     /// Where to look for the centroids: the targets shifted by `offset` ppm, +- `width` ppm.
@@ -121,13 +125,14 @@ namespace ODIA
     };
 
     /// Fragment m/z bounds of panel precursor p (the wide search window).
-    std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const MassSearch& ms, std::uint32_t p, std::size_t F)
+    std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const MassSearch& ms, std::uint32_t p, std::size_t F,
+                                                            double shift_th = 0)
     {
       std::vector<std::pair<MzFixed, MzFixed>> bounds(F);
       const std::uint32_t f0 = lib.fragment_begin[p];
       for (std::size_t f = 0; f < F; ++f)
       {
-        const double t = lib.fragment_mz[f0 + f] * (1.0 + ms.ms2_offset * 1e-6), tol = t * ms.ms2_width * 1e-6;
+        const double t = (lib.fragment_mz[f0 + f] + shift_th) * (1.0 + ms.ms2_offset * 1e-6), tol = t * ms.ms2_width * 1e-6;
         bounds[f] = {toFixed(t - tol), toFixed(t + tol)};
       }
       return bounds;
@@ -189,16 +194,23 @@ namespace ODIA
         }
         const double cosine = nx > 0 && ny > 0 ? dot / std::sqrt(nx * ny) : 0.0;
         const double score = corr * cosine;
-        if (score > best_score && corr >= crit.min_correlation && cosine >= crit.min_cosine)
+        const bool ok = crit.min_score >= 0 ? score >= crit.min_score : (corr >= crit.min_correlation && cosine >= crit.min_cosine);
+        if (score > best_score && ok)
         {
           best_score = score;
           out.accepted = true;
+          out.score = static_cast<float>(score);
+          // width at half the apex of the summed trace (cycles), bounded by 4 windows
+          std::size_t l = c, r = c;
+          while (l > 0 && c - l < static_cast<std::size_t>(4 * hw) && sum[l - 1] > 0.5 * sum[c]) { --l; }
+          while (r + 1 < C && r - c < static_cast<std::size_t>(4 * hw) && sum[r + 1] > 0.5 * sum[c]) { ++r; }
+          out.fwhm_cycles = static_cast<float>(r - l + 1);
           out.anchor = {p, lib.library_rt[p], g.cycle_rt[c], static_cast<std::uint32_t>(c),
                         static_cast<std::uint8_t>(std::min<std::size_t>(present.size(), 255)),
                         static_cast<float>(corr), static_cast<float>(cosine), 0.0f, false};
         }
       }
-      if (!out.accepted) { return out; }
+      if (!out.accepted || crit.decoy_shift_th != 0) { return out; }
 
       // Mass errors at the apex: observed m/z of the most intense centroid per fragment (random centroids inside the
       // search window are the background the robust statistics of massModel tolerate; calibration:min_relative_intensity
@@ -246,7 +258,7 @@ namespace ODIA
 
       // Whole-run traces of the top fragments (max centroid within the wide window).
       std::vector<float> tile(F * C, 0.0f);
-      const auto bounds = fragmentBounds(lib, ms, p, F);
+      const auto bounds = fragmentBounds(lib, ms, p, F, crit.decoy_shift_th);
       std::vector<float> sum(C, 0.0f);
       // Gather the range plus the co-elution margin so windows at its edges are complete.
       const std::size_t g_lo = c_lo > static_cast<std::size_t>(opt.half_window_cycles) ? c_lo - opt.half_window_cycles : 0;
@@ -355,7 +367,7 @@ namespace ODIA
         {
           const std::uint32_t p = panel[members[m]];
           Fs[m] = std::min<std::size_t>(lib.fragmentsOf(p), static_cast<std::size_t>(opt.top_fragments));
-          bounds[m] = fragmentBounds(lib, ms, p, Fs[m]);
+          bounds[m] = fragmentBounds(lib, ms, p, Fs[m], crit.decoy_shift_th);
           first_row[m + 1] = first_row[m] + Fs[m];
           for (std::size_t f = 0; f < Fs[m]; ++f)
           {
@@ -549,7 +561,9 @@ namespace ODIA
     // Stage 1: whole run, strict criteria; robust initial curve from run-RT modes, then a fit.
     const Criteria strict{opt.strict_min_fragments, opt.strict_min_correlation, opt.strict_min_cosine};
     MassSearch search{0.0, opt.search_ppm, 0.0, opt.search_ppm};
-    auto stage1 = examinePanel(lib, grid, opt, panel, strict, search, nullptr, 0.0);
+    CalibrationOptions opt1 = opt;   // stage 1: the seed co-elution window
+    opt1.half_window_cycles = opt.half_window_cycles > 0 ? opt.half_window_cycles : opt.seed_window_cycles;
+    auto stage1 = examinePanel(lib, grid, opt1, panel, strict, search, nullptr, 0.0);
     res.stage1_anchors = stage1.size();
     if (stage1.size() < 50)
     {
@@ -569,6 +583,19 @@ namespace ODIA
     for (auto& a : a1) { a.used = std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt)); }
     double sigma1 = 0;
     RtMap map1 = robustFit(a1, opt, sigma1);
+    // Peak width from the strict anchors (median FWHM of the summed trace): the stage-2 co-elution window when it is
+    // not given, and reported for the RT window.
+    {
+      std::vector<double> w;
+      for (std::size_t i = 0; i < stage1.size(); ++i) { if (a1[i].used) { w.push_back(stage1[i].fwhm_cycles); } }
+      res.peak_fwhm_cycles = quantile(w, 0.5);
+      const double cycle_s = grid.cycles() > 1 ? (grid.cycle_rt.back() - grid.cycle_rt.front()) / (grid.cycles() - 1) : 0.0;
+      res.peak_fwhm_s = res.peak_fwhm_cycles * cycle_s;
+    }
+    CalibrationOptions opt2 = opt;
+    opt2.half_window_cycles = opt.half_window_cycles > 0 ? opt.half_window_cycles
+                                                         : std::clamp(static_cast<int>(std::lround(2.0 * res.peak_fwhm_cycles)), 3, 64);   // twice the peak width each side
+    res.half_window_cycles = opt2.half_window_cycles;
     res.stage1_used = static_cast<std::size_t>(std::count_if(a1.begin(), a1.end(), [](const Anchor& a) { return a.used; }));
 
     // Mass errors of the anchors used in a fit; the mass model (offset, background, tolerance) per level.
@@ -580,6 +607,7 @@ namespace ODIA
     const auto errors = [&](const std::vector<PanelResult>& results, const std::vector<Anchor>& anchors,
                             std::vector<std::pair<double, double>>& ms2, std::vector<std::pair<double, double>>& ms1) {
       const auto strict_ok = [&](const Anchor& a) {
+        if (opt.anchor_fdr > 0) { return a.correlation * a.cosine >= res.strict_score_cut; }
         return a.fragments >= opt.strict_min_fragments && a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
       };
       std::size_t n_strict = 0;
@@ -606,8 +634,27 @@ namespace ODIA
     // Stage 2: around the stage-1 curve, relaxed criteria, the mass search narrowed around the stage-1 offsets;
     // repeated while the measured window still changes (at most search_rounds passes). Final fit and offsets.
     res.stage2_window_s = std::max(4.0 * sigma1, opt.min_window_s);
-    const Criteria relaxed{opt.min_fragments, opt.min_correlation, opt.min_library_cosine};
+    Criteria relaxed{opt.min_fragments, opt.min_correlation, opt.min_library_cosine};
     std::vector<PanelResult> stage2;
+    // Decoy-calibrated acceptance: every panel precursor is also scored with its fragment windows shifted by
+    // decoy_shift Th (random centroids); the score cut is the smallest score at which decoys are <= anchor_fdr of
+    // the accepted anchors. Decided once, on the first stage-2 pass; later passes reuse the cut.
+    const auto scoreCut = [&](std::vector<PanelResult>& targets, const std::vector<PanelResult>& decoys, double fdr) {
+      std::vector<double> t, d;
+      for (const auto& x : targets) { t.push_back(x.score); }
+      for (const auto& x : decoys) { d.push_back(x.score); }
+      std::sort(t.begin(), t.end()); std::sort(d.begin(), d.end());
+      double cut = 1.0;
+      for (std::size_t i = 0; i < t.size(); ++i)   // descending score: the lowest score that still keeps the FDR
+      {
+        const double sc = t[t.size() - 1 - i];
+        const double nd = static_cast<double>(d.end() - std::lower_bound(d.begin(), d.end(), sc));
+        if (nd > fdr * static_cast<double>(i + 1)) { break; }
+        cut = sc;
+      }
+      return cut;
+    };
+    std::size_t stage2_decoys = 0;
     for (int round = 0; round < std::max(1, opt.search_rounds); ++round)
     {
       const MassSearch next{m2.offset, narrowed(m2, search.ms2_width), m1.offset, narrowed(m1, search.ms1_width)};
@@ -617,7 +664,20 @@ namespace ODIA
           && std::fabs(next.ms1_offset - search.ms1_offset) < 0.25 * search.ms1_width) { break; }
       search = next;
       ++res.search_rounds;
-      stage2 = examinePanel(lib, grid, opt, panel, relaxed, search, &map1, res.stage2_window_s);
+      if (opt.anchor_fdr > 0 && relaxed.min_score < 0)
+      {
+        Criteria open = relaxed;
+        open.min_correlation = -1; open.min_cosine = -1;   // everything co-eluting at all: the cut decides
+        auto targets = examinePanel(lib, grid, opt2, panel, open, search, &map1, res.stage2_window_s);
+        Criteria decoy = open;
+        decoy.decoy_shift_th = opt.decoy_shift;
+        const auto decoys = examinePanel(lib, grid, opt2, panel, decoy, search, &map1, res.stage2_window_s);
+        res.score_cut = scoreCut(targets, decoys, opt.anchor_fdr);
+        res.strict_score_cut = scoreCut(targets, decoys, opt.anchor_fdr / 10);
+        relaxed.min_score = res.score_cut;
+        stage2_decoys = static_cast<std::size_t>(std::count_if(decoys.begin(), decoys.end(), [&](const PanelResult& x) { return x.score >= res.score_cut; }));
+      }
+      stage2 = examinePanel(lib, grid, opt2, panel, relaxed, search, &map1, res.stage2_window_s);
       res.anchors.clear();
       for (auto& x : stage2)
       {
@@ -649,6 +709,7 @@ namespace ODIA
     res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = m1.accuracy;
     res.ms2_search_ppm = search.ms2_width; res.ms1_search_ppm = search.ms1_width;
     res.strict_mass_anchors = mass_anchors;
+    res.decoy_anchors = stage2_decoys;
     res.ms2_mass_points = ms2_ppm.size();
     res.ms1_mass_points = ms1_ppm.size();
     res.time = stageClock() - t0;
