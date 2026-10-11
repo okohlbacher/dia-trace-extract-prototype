@@ -1,11 +1,19 @@
 # Backlog
 
-## In progress elsewhere
-- **mzPeak reader for files from the latest mzpeak-convert** (okohlbacher/mzPeakConverter, now v0.17.2;
-  0.7.0 is outdated, not to be used). Separate agent, PR to OpenMS-mzPeakRW. Our requirements for a
-  parallel, partitioned read API: docs/04-mzpeak-reader-handoff.md. The vendored reader reads 0 spectra from
-  0.17.2 files. MS1 is profile-only in 0.17.2 Thermo output; vendor-centroided MS1 requested from the converter (docs/05-mzpeak-converter-handoff.md). When it lands:
-  re-vendor, feed partitions into the ordered ingest pipeline, benchmark vs mzML (cold/warm cache).
+## mzPeak (2026-10-11: mzpeak-openms `partitioned-read-2026-10-11` integrated, submodule external/mzpeak)
+- Done: 0.17.2/0.18.0 files read fully (empty spectra kept); partitioned parallel read straight into the peak pool;
+  `MzMLToMzPeak` rewritten on the library's streaming writer (RT seconds in, minutes stored);
+  `results/mzpeak/run01_openms.mzpeak` regenerated. Point-layout run 01: traces byte-identical to the mzML path;
+  ingest 0.85 s at 64 threads (mzML 0.32 s). 0.18.0 (numpress, vendor-centroided MS1): MS2 99.99% identical,
+  MS1 76% identical (vendor vs ProteoWizard centroiding), ingest 3.6 s.
+- Open (reader): decode scales to ~10-14 cores only (the library serialises row-group decoding per archive:
+  `docs/read-path-performance.md` of the submodule); open() 0.17 s and the metadata pass 0.2 s are serial.
+  Target was <= 0.5 s. The chunked/numpress decode (0.18.0) is 4x slower than the point layout.
+- Open (build): the library needs Boost.JSON, absent from the OpenMS vcpkg tree; built against the conda
+  environment's Boost 1.92, whose `lib` lands on the rpath (its libstdc++ 3.4.36 is newer than the system's
+  3.4.33, so this works, but a vcpkg `boost-json` port would be cleaner).
+- Open (converter): the MS1 centroiding difference (24% of MS1 traces differ from the mzML) is a centroider
+  difference, not a defect; decide which centroids are the reference.
 
 ## Waiting
 - **DIALibGen PR #4** (plain string columns): after merge, regenerate the libraries and re-measure load

@@ -9,7 +9,7 @@
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
-#include "mzpeak/MzPeakFile.h"
+#include <mzpeak.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -28,6 +28,8 @@
 #include <map>
 #include <mutex>
 #include <numeric>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -240,6 +242,111 @@ namespace ODIA
     /// Returns false (caller falls back to the streaming parser) for compressed files, unexpected
     /// layout (a comment/DOCTYPE inside the run, not exactly one spectrum list, a count attribute that
     /// does not match the spectra found, very few spectra) or a chunk that fails to parse.
+    /// mzPeak through the mzpeak-openms library: the metadata table once (one record per spectrum, including
+    /// spectra without peaks), then the signal tables in partitions of whole row groups decoded concurrently
+    /// (one Spectra per thread, the library's rule) straight into the pool; routed in spectrum order.
+    void loadMzPeak(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)
+    {
+      static prof::Counter& c_open = prof::counter("ingest.mzpeak_1_open");
+      static prof::Counter& c_meta = prof::counter("ingest.mzpeak_2_metadata");
+      static prof::Counter& c_decode = prof::counter("ingest.mzpeak_3_decode");
+      static prof::Counter& c_route = prof::counter("ingest.mzpeak_4_route");
+      const int n_threads = std::max(1, threads);
+      std::optional<MzPeak::Index> index;
+      std::vector<std::unique_ptr<MzPeak::Spectra>> readers;
+      {
+        prof::Scope sc(c_open);
+        index.emplace(MzPeak::open(filename));
+        for (int t = 0; t < n_threads; ++t)
+        {
+          readers.emplace_back(new MzPeak::Spectra(index->spectra(MzPeak::MetadataDetail::Minimal)));
+        }
+      }
+      const std::size_t n = readers[0]->size();
+      std::vector<Decoded> meta(n);
+      {
+        prof::Scope sc(c_meta);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+          const MzPeak::Spectrum s = (*readers[0])[i];
+          const MzPeak::SpectrumMetadata& md = s.metadata();
+          Decoded& d = meta[i];
+          d.index = static_cast<std::uint32_t>(i);
+          d.rt = md.retention_time.value_or(0.0);   // seconds (the reader converts from the file's minutes)
+          d.ms_level = md.ms_level.value_or(0);
+          if (d.ms_level >= 2 && !md.precursors.empty())
+          {
+            const MzPeak::PrecursorInfo& p = md.precursors.front();
+            const MzPeak::IsolationWindow& w = p.isolation_window;
+            if (w.target_mz)
+            {
+              d.target = *w.target_mz;
+              d.lower = d.target - w.lower_offset.value_or(0.0f);
+              d.upper = d.target + w.upper_offset.value_or(0.0f);
+            }
+            else if (!p.selected_ions.empty() && p.selected_ions.front().selected_ion_mz)
+            {
+              d.target = d.lower = d.upper = *p.selected_ions.front().selected_ion_mz;
+            }
+          }
+        }
+      }
+      // Partitions of roughly equal point count; a thread decodes a partition into pool ranges claimed per spectrum.
+      const auto parts = readers[0]->partitions(static_cast<std::size_t>(4) * static_cast<std::size_t>(n_threads));
+      std::atomic<std::size_t> next{0};
+      std::exception_ptr error;
+      std::mutex error_mtx;
+      {
+        prof::Scope sc(c_decode);
+        auto work = [&](int t) {
+          try
+          {
+            std::vector<std::pair<MzFixed, float>> sorted;
+            for (std::size_t k; (k = next.fetch_add(1)) < parts.size();)
+            {
+              readers[static_cast<std::size_t>(t)]->decode(parts[k], [&](std::uint64_t i, std::span<const double> mz, std::span<const float> in) {
+                Decoded& d = meta[i];
+                d.n = static_cast<std::uint32_t>(mz.size());
+                if (d.n == 0 || (d.ms_level != 1 && d.ms_level != 2)) { return; }
+                d.in_pool = true;
+                d.pool_begin = pool.claim(d.n);
+                MzFixed* pm = pool.mz() + d.pool_begin;
+                float* pi = pool.intensity() + d.pool_begin;
+                bool unsorted = false;
+                for (std::size_t j = 0; j < d.n; ++j)
+                {
+                  pm[j] = toFixed(mz[j]);
+                  pi[j] = in[j];
+                  unsorted |= j > 0 && pm[j] < pm[j - 1];
+                }
+                if (unsorted)
+                {
+                  sorted.resize(d.n);
+                  for (std::size_t j = 0; j < d.n; ++j) { sorted[j] = {pm[j], pi[j]}; }
+                  std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                  for (std::size_t j = 0; j < d.n; ++j) { pm[j] = sorted[j].first; pi[j] = sorted[j].second; }
+                  d.was_unsorted = true;
+                }
+              });
+            }
+          }
+          catch (...)
+          {
+            std::lock_guard lock(error_mtx);
+            if (!error) { error = std::current_exception(); }
+            next = parts.size();
+          }
+        };
+        std::vector<std::thread> pool_threads;
+        for (int t = 1; t < n_threads; ++t) { pool_threads.emplace_back(work, t); }
+        work(0);
+        for (auto& th : pool_threads) { th.join(); }
+      }
+      if (error) { std::rethrow_exception(error); }
+      prof::Scope sc(c_route);
+      for (auto& d : meta) { route(std::move(d)); }
+    }
+
     bool loadChunked(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)
     {
       using Size = std::size_t;
@@ -561,52 +668,7 @@ namespace ODIA
     }
     else if (hasExtension(filename, ".mzpeak"))
     {
-      // mzPeak through the vendored OpenMS MzPeakFile reader (the only mzPeak reader we use), streamed spectrum
-      // by spectrum. Each spectrum goes straight into the pool (no intermediate vectors) and is routed as it
-      // arrives. The reader's transform() is serial and dominates (~85% of ingest); handing spectra to other
-      // threads for conversion was measured and gained nothing, so this stays on the reader's thread.
-      static prof::Counter& c_cb = prof::counter("ingest.mzpeak_callback");
-      OpenMS::MzPeakFile file;
-      OpenMS::MSDataTransformingConsumer consumer;
-      std::uint32_t index = 0;
-      std::uint64_t n_level[3] = {0, 0, 0}, n_peaks[3] = {0, 0, 0}, n_prec = 0, n_profile[3] = {0, 0, 0};
-      PeakPool& pool = *g.pool;
-      consumer.setSpectraProcessingFunc([&](OpenMS::MSSpectrum& s) {
-        prof::Scope sc(c_cb);
-        const int l = std::min<int>(2, static_cast<int>(s.getMSLevel()));
-        ++n_level[l]; n_peaks[l] += s.size(); n_prec += !s.getPrecursors().empty();
-        n_profile[l] += s.getType(false) == OpenMS::MSSpectrum::SpectrumType::PROFILE;
-        Decoded d;
-        d.index = index++;
-        d.rt = s.getRT();
-        d.ms_level = static_cast<int>(s.getMSLevel());
-        if (d.ms_level >= 2 && !s.getPrecursors().empty())
-        {
-          const auto& p = s.getPrecursors()[0];
-          d.target = p.getMZ();
-          d.lower = p.getMZ() - p.getIsolationWindowLowerOffset();
-          d.upper = p.getMZ() + p.getIsolationWindowUpperOffset();
-        }
-        if (!s.isSorted()) { s.sortByPosition(); d.was_unsorted = true; }
-        d.n = static_cast<std::uint32_t>(s.size());
-        if (d.n > 0 && (d.ms_level == 1 || d.ms_level == 2))
-        {
-          d.in_pool = true;
-          d.pool_begin = pool.claim(d.n);
-          MzFixed* mz = pool.mz() + d.pool_begin;
-          float* in = pool.intensity() + d.pool_begin;
-          for (std::size_t i = 0; i < s.size(); ++i) { mz[i] = toFixed(s[i].getMZ()); in[i] = s[i].getIntensity(); }
-        }
-        router.route(std::move(d));
-      });
-      file.transform(filename, &consumer, true, true);
-      if (std::getenv("ODIA_PROFILE"))
-      {
-        std::fprintf(stderr, "[mzpeak] MS1 %llu spectra (%llu profile) %llu peaks; MS2 %llu spectra (%llu profile) %llu peaks; "
-                     "with precursor %llu; other %llu\n", (unsigned long long)n_level[1], (unsigned long long)n_profile[1],
-                     (unsigned long long)n_peaks[1], (unsigned long long)n_level[2], (unsigned long long)n_profile[2],
-                     (unsigned long long)n_peaks[2], (unsigned long long)n_prec, (unsigned long long)n_level[0]);
-      }
+      loadMzPeak(filename, decode_threads, *g.pool, [&](Decoded&& d) { router.route(std::move(d)); });
     }
     else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, [&](Decoded&& d) { router.route(std::move(d)); }))
     {

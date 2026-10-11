@@ -1,0 +1,3 @@
+[submodule "external/mzpeak"]
+	path = external/mzpeak
+	url = https://github.com/okohlbacher/mzpeak-openms.git

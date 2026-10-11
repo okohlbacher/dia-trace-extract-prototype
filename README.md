@@ -12,9 +12,17 @@ Benchmark (ProteoBench Astral entrapment): [docs/02-benchmark-astral.md](docs/02
 Needs an OpenMS develop (≥ 3.7) build tree with its vcpkg dependencies (Arrow/Parquet), CMake ≥ 3.24,
 GCC ≥ 13. In this project OpenMS is built at `OpenMS/OpenMS-build` (`cmake --preset linux-x64-release`).
 
+The mzPeak reader/writer is the mzpeak-openms library (git submodule `external/mzpeak`, tag
+`partitioned-read-2026-10-11`), built here against the same Arrow. It needs Boost ≥ 1.89 with `json` and
+`program_options`, which the OpenMS vcpkg tree lacks: point `MZPEAK_BOOST_DIR` at a `BoostConfig.cmake` directory
+that has them (here: the conda environment `/ceph/ibmi/abi/oliver/envs/mzpeak`; its `lib` ends up on the binary's
+rpath).
+
 ```bash
+git submodule update --init
 O=$PWD/OpenMS/OpenMS-build
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic" \
+      -DMZPEAK_BOOST_DIR=/ceph/ibmi/abi/oliver/envs/mzpeak/lib/cmake/Boost-1.92.0
 cmake --build build -j 16
 ctest --test-dir build        # OpenSWATH parity + thread determinism
 ```
@@ -22,23 +30,28 @@ ctest --test-dir build        # OpenSWATH parity + thread determinism
 ## Use
 
 ```bash
-# self-calibrated (RT map + mass offsets from the run itself)
-build/DIATraceExtractor -in run.mzML -lib library.parquet \
-  -rt_mode auto -mass_calibration auto -rt_window 60 -mz_tol 6 -mz_tol_ms1 6 \
+# defaults: mass offsets and tolerances measured from the run (self-calibration), +-60 s around the library RT
+# (here in run minutes, as DIALibGen's tuned libraries carry), max over the centroids, MS1 on its own scans
+build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes \
   -threads 64 -out traces.parquet -out_stats stats.json -out_calibration anchors.tsv
+# predicted RT in library units: also fit the RT map from the run
+build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode auto -threads 64 -out traces.parquet
 
 # or with external anchors / a fixed mass correction
 build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode anchors -rt_anchors anchors.tsv \
   -mz_offset -2.5 -mz_offset_ms1 0.5 -threads 64 -out traces.parquet
 ```
 
-- Input: centroided mzML (streamed) or Thermo `.raw`; libraries: DIA-NN/DIALibGen `.parquet`/`.tsv`,
+- Input: centroided mzML (parsed in parallel chunks), mzPeak `.mzpeak` (partitioned parallel read; MS1 must be
+  centroided in the file, e.g. mzpeak-convert `--representation centroid --representation-levels 1`) or Thermo
+  `.raw`; libraries: DIA-NN/DIALibGen `.parquet`/`.tsv`,
   OpenSWATH `.tsv`/`.pqp`/`.TraML`; `-ids` restricts to a precursor list; `-top_fragments` (default 6).
 - RT: `-rt_mode identity|minutes|linear|trafo|anchors|auto` maps library RT to run seconds (`auto`:
   self-calibration from co-eluting anchors); `-rt_window` is
   a half width (≤ 0 = whole run).
-- m/z: `-mz_tol`/`-mz_tol_ms1` are ± ppm half widths; `-mz_offset*` apply a mass correction;
-  `-aggregation sum` (OpenSWATH) or `max` (DIA-NN); `-ms1_isotopes` (default 2);
+- m/z: `-mz_tol`/`-mz_tol_ms1` are ± ppm half widths (default 0 = measured: `calibration:accuracy_sigma` × the
+  robust width of the apex mass errors of the calibration anchors); `-mass_calibration auto` (default) measures
+  the offsets, `-mz_offset*` set them; `-aggregation max` (default) or `sum` (OpenSWATH); `-ms1_isotopes` (default 2);
   `-ms1_isotope_spacing unit` reproduces OpenSWATH's charge-independent isotope positions.
 - Output: traces Parquet (one row per trace on the global cycle axis, intensity as float32 blob or
   `-encoding log8`), `<out>.axes.parquet` (global axis, exact acquisition times), optional long TSV.
@@ -55,7 +68,8 @@ row = t.iloc[0]; y = np.frombuffer(row.intensity, "<f4"); rt = cycle_rt[row.cycl
 
 | path | content |
 |---|---|
-| `src/` | the tool (`DIATraceExtractor`), library readers, run grid, extractor, writer; `OpenSwathXicToTraces` |
+| `src/` | the tool (`DIATraceExtractor`), library readers, run grid, calibration, extractor, writer; `OpenSwathXicToTraces`, `MzMLToMzPeak` |
+| `external/mzpeak` | mzpeak-openms (submodule): mzPeak reader and writer |
 | `tests/` | ctest: OpenSWATH parity on OpenMS test data, thread determinism |
 | `scripts/` | benchmark driver, DIA-NN 1.7.12 `.xic` reader, library converters, trace comparison |
 | `docs/` | design, benchmark reports |

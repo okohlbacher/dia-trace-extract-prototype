@@ -42,17 +42,17 @@ add_library(odia_traces STATIC
   src/Extractor.cpp
   src/Scheduler.cpp
   src/TraceWriter.cpp
-  src/Calibration.cpp
-  src/mzpeak/MzPeakFile.cpp)
+  src/Calibration.cpp)
 target_include_directories(odia_traces PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-# The vendored mzPeak reader uses nlohmann/json; OpenMS ships it (header-only) but does not export it.
-find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
-          HINTS ${OpenMS_DIR}/../src/openms/extern/nlohmann_json/include ${OpenMS_DIR}/vcpkg_installed/x64-linux-dynamic/include)
-if(NOT NLOHMANN_JSON_INCLUDE_DIR)
-  message(FATAL_ERROR "nlohmann/json.hpp not found; set NLOHMANN_JSON_INCLUDE_DIR")
+# mzPeak reader/writer: the mzpeak-openms library (git submodule external/mzpeak, tag partitioned-read-2026-10-11),
+# built here against the same Arrow as OpenMS. It needs Boost >= 1.89 with json and program_options, which the
+# OpenMS vcpkg tree lacks: point MZPEAK_BOOST_DIR at a BoostConfig.cmake directory that has them.
+set(MZPEAK_BOOST_DIR "" CACHE PATH "Directory of a BoostConfig.cmake (Boost >= 1.89 with json, program_options) for external/mzpeak")
+if(MZPEAK_BOOST_DIR)
+  set(Boost_DIR "${MZPEAK_BOOST_DIR}" CACHE PATH "" FORCE)
 endif()
-target_include_directories(odia_traces SYSTEM PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
-target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX ZLIB::ZLIB)
+add_subdirectory(external/mzpeak EXCLUDE_FROM_ALL)
+target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX ZLIB::ZLIB mzpeak)
 target_compile_options(odia_traces PRIVATE -Wall -Wextra)
 
 add_executable(DIATraceExtractor src/DIATraceExtractor.cpp)
@@ -67,6 +67,6 @@ endif()
 add_executable(OpenSwathXicToTraces src/OpenSwathXicToTraces.cpp)
 target_link_libraries(OpenSwathXicToTraces PRIVATE OpenMS ${ODIA_ARROW} ${ODIA_PARQUET})
 
-# Helper: mzML -> mzPeak with the vendored MzPeakFile writer.
-add_executable(MzMLToMzPeak src/mzpeak/MzMLToMzPeak.cpp)
+# Helper: mzML -> mzPeak (point layout, split metadata) with the mzpeak-openms streaming writer.
+add_executable(MzMLToMzPeak src/MzMLToMzPeak.cpp)
 target_link_libraries(MzMLToMzPeak PRIVATE odia_traces)

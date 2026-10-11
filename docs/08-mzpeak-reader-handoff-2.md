@@ -75,3 +75,29 @@ File: fork-written point layout, `results/mzpeak/run01_openms.mzpeak` (1.08 GB, 
 - Equivalence: trace hash of the fork point-layout file against the current build (6c405adf555fb43f). For 0.17.2,
   MS2-only comparison against the mzML run within the numpress tolerance.
 - Code: `src/RunGrid.cpp` (mzPeak branch of `RunGrid::load`); repo okohlbacher/dia-trace-extract-prototype.
+
+## 6. Outcome (2026-10-11, tag `partitioned-read-2026-10-11`)
+
+- Integrated as a git submodule (`external/mzpeak`), built against OpenMS's Arrow 24; the vendored OpenMS-mzPeakRW
+  reader is gone. The extractor opens the archive once, reads the metadata once, and decodes `partitions(4 x threads)`
+  with one `Spectra` per thread straight into its peak pool (`src/RunGrid.cpp`, `loadMzPeak`).
+- Both §3 defects are fixed: the 0.17.2 and 0.18.0 files read 2,928 MS1 + 292,883 MS2 spectra including the 23 empty
+  ones; the cycle/window grid is identical to the mzML path's (217 empty cells).
+- `run01_openms.mzpeak` regenerated with `MzMLToMzPeak` on the library's `RunArchiveWriter` (seconds in, minutes
+  stored): traces byte-identical to the mzML path (1,205,873 rows, ID library; axes equal to 1e-12 s).
+- Timing, run 01, warm cache, node `data` (2 x 56 cores):
+
+  | file | ingest wall | open | metadata | decode | CPU |
+  |---|---|---|---|---|---|
+  | point layout (our writer), 64 threads | 0.85 s | 0.17 s | 0.20 s | 0.47 s | 12.1 s |
+  | point layout, 32 / 16 / 8 threads | 0.86 / 1.02 / 1.42 s | | | 0.48 / 0.66 / 1.06 s | |
+  | 0.18.0 (chunked numpress, vendor-centroided MS1), 64 threads | 3.6 s | 1.1 s | 0.3 s | 2.7 s | 40 s |
+  | mzML (our chunked parser), 64 threads | 0.32 s | | | | 8.2 s |
+
+  The decode stops scaling at 32 threads (12-14 cores busy): the row-group cache serialises decoding per archive.
+  To reach the <= 0.5 s target: a per-partition (per-`Spectra`) decode path without the shared lock, and a faster
+  chunked/numpress decode (0.18.0 is 4x slower than the point layout for 1.4x the points).
+- Answer to §4 of your note: the Astral benchmark data are the ProteoBench DIA entrapment module
+  (https://proteobench.readthedocs.io/en/stable/modules/dia/entrapment-dia-astral/), raw files and FASTA at
+  https://proteobench.cubimed.rub.de/raws/DIA-astral-entrapment/ (`all_data_Entrapment_DIA_Astral.tar.gz`); no
+  PRIDE/ProteomeXchange accession is listed.

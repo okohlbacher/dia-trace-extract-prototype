@@ -356,8 +356,18 @@ protected:
       copt.rejection_rounds = getIntOption_("calibration:rejection_rounds");
       copt.min_reject_s = getDoubleOption_("calibration:min_reject");
       copt.threads = threads;
-      cal = ODIA::calibrate(*cal_lib, grid, copt);
-      releaseFreedMemory();   // the per-window calibration tiles (up to ~0.5 GiB) go back before extraction
+      try { cal = ODIA::calibrate(*cal_lib, grid, copt); }
+      catch (const std::runtime_error& e)
+      {
+        // Too few anchors (a small file, a library with no peptides in the run). Without a measured RT map or
+        // measured tolerances there is nothing to extract with; with explicit ones, go on uncorrected.
+        const bool need = mode == "auto" || getDoubleOption_("mz_tol") <= 0 || getDoubleOption_("mz_tol_ms1") <= 0;
+        if (need) { OPENMS_LOG_ERROR << e.what() << " (needed for -rt_mode auto or a measured tolerance; give -mz_tol/-mz_tol_ms1 or -mass_calibration off)" << std::endl; return INPUT_FILE_CORRUPT; }
+        OPENMS_LOG_WARN << e.what() << "; mass calibration skipped: no mass correction, the given tolerances." << std::endl;
+      }
+      if (cal)
+      {
+      releaseFreedMemory();   // the per-window calibration tiles go back before extraction
       OPENMS_LOG_INFO << "Calibration: stage 1 " << cal->stage1_anchors << " anchors (" << cal->stage1_used
                       << " used), stage 2 window +-" << cal->stage2_window_s << " s; "
                       << cal->anchors.size() << " anchors from a panel of " << cal->panel << ", "
@@ -368,6 +378,7 @@ protected:
                       << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
                       << cal->ms2_search_ppm << " / +-" << cal->ms1_search_ppm << " ppm); " << fmt(cal->time) << std::endl;
       if (!getStringOption_("out_calibration").empty()) { ODIA::writeAnchors(getStringOption_("out_calibration"), *cal_lib, *cal); }
+      }
     }
     ODIA::RtMap rt_map;
     if (mode == "identity") { rt_map = ODIA::RtMap::identity(); }
@@ -394,8 +405,8 @@ protected:
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
       OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (measured)" << std::endl;
     }
-    eopt.ms2_ppm_offset = mass_auto ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
-    eopt.ms1_ppm_offset = mass_auto ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
+    eopt.ms2_ppm_offset = cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
+    eopt.ms1_ppm_offset = cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
     eopt.rt_half_window = getDoubleOption_("rt_window");
     eopt.aggregate_sum = getStringOption_("aggregation") == "sum";
     eopt.extract_ms1 = getIntOption_("ms1_isotopes") >= 0;
