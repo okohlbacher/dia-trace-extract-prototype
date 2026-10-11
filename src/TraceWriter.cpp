@@ -1,6 +1,7 @@
 // ODIA-V3 trace extractor -- trace export.
 #include "TraceWriter.h"
 #include "ArrowPool.h"
+#include "ArrowCheck.h"
 
 #include <arrow/api.h>
 #include <arrow/io/file.h>
@@ -20,15 +21,6 @@ namespace ODIA
 {
   namespace
   {
-    void check(const arrow::Status& s)
-    {
-      if (!s.ok()) { throw std::runtime_error("Arrow: " + s.ToString()); }
-    }
-    template <typename T> T check(arrow::Result<T> r)
-    {
-      if (!r.ok()) { throw std::runtime_error("Arrow: " + r.status().ToString()); }
-      return std::move(r).ValueUnsafe();
-    }
     template <typename B> std::shared_ptr<arrow::Array> finish(B& b)
     {
       std::shared_ptr<arrow::Array> a;

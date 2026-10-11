@@ -4,8 +4,9 @@ A standalone OpenMS (TOPP-style, C++23) tool that extracts DIA traces — fragme
 XICs — for a predicted, recalibrated spectral library, fast and with little memory, and exports them
 for point-by-point comparison with DIA-NN's and OpenSWATH's traces. Extraction only (no scoring/FDR).
 
-Design and validation: [docs/01-trace-extractor-design.md](docs/01-trace-extractor-design.md).
-Benchmark (ProteoBench Astral entrapment): [docs/02-benchmark-astral.md](docs/02-benchmark-astral.md).
+How it works (grid, criteria, calibration, parallel layout): [docs/EXTRACTION.md](docs/EXTRACTION.md).
+Results and history: [docs/00-dossier.md](docs/00-dossier.md); design notes [docs/01-trace-extractor-design.md](docs/01-trace-extractor-design.md);
+benchmark (ProteoBench Astral entrapment): [docs/02-benchmark-astral.md](docs/02-benchmark-astral.md).
 
 ## Build
 

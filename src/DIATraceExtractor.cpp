@@ -439,6 +439,7 @@ protected:
     wcfg.ms1_scan_axis = eopt.ms1_scan_axis;
     wcfg.metadata = {{"input", in}, {"library", lib_file}, {"rt_map", rt_map.describe()},
                      {"mz_tol_ppm", std::to_string(eopt.ms2_ppm)}, {"mz_tol_ms1_ppm", std::to_string(eopt.ms1_ppm)},
+                     {"mz_offset_ppm", std::to_string(eopt.ms2_ppm_offset)}, {"mz_offset_ms1_ppm", std::to_string(eopt.ms1_ppm_offset)},
                      {"aggregation", getStringOption_("aggregation")},
                      {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
                      {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};

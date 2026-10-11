@@ -252,13 +252,17 @@ Ours A is now the recommended rule (MS2 ±6 ppm, MS1 measured); before it used D
 - **Scaling.** Ours flattens beyond 32 threads at this size (1.8 s, of which ingest 0.3 s, panel and calibration ~1 s);
   on the full 7 M library extraction still scales to 64 threads.
 - **OpenSWATH stops scaling at 8 threads,** while its memory grows to 14 GiB.
-- **mzPeak input** goes through the OpenMS mzPeak reader (only); its serial `transform()` takes ~8 s for run 01, against
-  0.3 s for our mzML path. Requests to the reader agent: `docs/08-mzpeak-reader-handoff-2.md`.
+- **mzPeak input** goes through the mzpeak-openms library (submodule `external/mzpeak`, partitioned parallel read
+  into the peak pool). Run 01 as a point-layout file: traces byte-identical to the mzML path, ingest 0.85 s at 64
+  threads (mzML path 0.32 s; the library's decode stops scaling at ~32 threads). mzpeak-convert 0.18.0 files with
+  vendor-centroided MS1 read in 3.6 s; their MS2 traces match the mzML path, the MS1 traces differ for 24% of
+  precursors (vendor vs ProteoWizard centroiding). Details: `docs/08-mzpeak-reader-handoff-2.md` §6.
 
 ## 5. Open items
 
-- **mzPeak:** waiting on the OpenMS mzPeak reader (0.17.2 support, empty spectra, a partitioned parallel API; handoffs `04`,
-  `08`) and on vendor-centroided MS1 from the converter (handoff `05`).
+- **mzPeak:** integrated (mzpeak-openms `partitioned-read-2026-10-11`). Open: the reader's decode scales to ~12 cores
+  only (ingest 0.85 s vs the 0.5 s target); the chunked/numpress decode is 4x slower than the point layout; the MS1
+  centroiding reference (vendor vs ProteoWizard) is undecided.
 - **DIALibGen PR #4:** after the merge, regenerate the libraries and re-measure library loading.
 - **50K shared library (Justin).**
 - **Lower priority:** scheduling beyond 64 threads; a compact-v2 library layout.

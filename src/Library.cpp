@@ -1,6 +1,7 @@
 // ODIA-V3 trace extractor -- library readers.
 #include "Library.h"
 #include "ArrowPool.h"
+#include "ArrowCheck.h"
 
 #include <OpenMS/ANALYSIS/OPENSWATH/TransitionPQPFile.h>
 #include <OpenMS/ANALYSIS/OPENSWATH/TransitionTSVFile.h>
@@ -146,15 +147,6 @@ namespace ODIA
       std::unordered_map<std::string, std::size_t> index_;
     };
 
-    void check(const arrow::Status& s)
-    {
-      if (!s.ok()) { throw std::runtime_error("Arrow: " + s.ToString()); }
-    }
-    template <typename T> T check(arrow::Result<T> r)
-    {
-      if (!r.ok()) { throw std::runtime_error("Arrow: " + r.status().ToString()); }
-      return std::move(r).ValueUnsafe();
-    }
 
     std::shared_ptr<arrow::Array> column(const arrow::RecordBatch& batch, const char* name,
                                          const std::shared_ptr<arrow::DataType>& to, bool required = true)

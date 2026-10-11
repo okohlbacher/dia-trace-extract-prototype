@@ -79,23 +79,6 @@ namespace ODIA
       return m;
     }
 
-    /// Weighted median and weighted MAD-based sigma.
-    [[maybe_unused]] std::pair<double, double> weightedCentre(std::vector<std::pair<double, double>> v)
-    {
-      if (v.empty()) { return {0.0, 0.0}; }
-      auto wmedian = [](std::vector<std::pair<double, double>>& x) {
-        std::sort(x.begin(), x.end());
-        double total = 0;
-        for (const auto& [val, w] : x) { total += w; }
-        double acc = 0;
-        for (const auto& [val, w] : x) { acc += w; if (acc >= total / 2) { return val; } }
-        return x.back().first;
-      };
-      const double m = wmedian(v);
-      for (auto& [val, w] : v) { val = std::fabs(val - m); }
-      return {m, 1.4826 * wmedian(v)};
-    }
-
     double quantile(std::vector<double> v, double q)
     {
       if (v.empty()) { return 0.0; }

@@ -130,7 +130,7 @@ python3 scripts/analyze_contention2.py results/contention2 results/contention2/a
 - `ODIA_PROFILE=1`: per-task CPU, faults and context switches; lock waits; scheduler idle reasons.
 - `ODIA_PROFILE_TIMELINE=file`: a 100 ms timeline.
 - `ODIA_ALLOW_PTRACE=1`: lets gdb stack samples attach.
-- `ODIA_POOL_NO_ACCOUNT=1`: the H2 test.
+- `ODIA_POOL_NO_ACCOUNT=1`: the H2 test (knob removed after the per-thread pool front end landed).
 
 ## Follow-up: global peak pool (2026-10-11)
 

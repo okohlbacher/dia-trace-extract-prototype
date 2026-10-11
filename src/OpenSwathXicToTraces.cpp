@@ -4,6 +4,8 @@
 // which decodes the numpress/zlib arrays.
 #include <OpenMS/FORMAT/XICParquetFile.h>
 
+#include "ArrowCheck.h"
+
 #include <arrow/api.h>
 #include <arrow/io/file.h>
 #include <parquet/arrow/writer.h>
@@ -15,15 +17,7 @@
 
 namespace
 {
-  void check(const arrow::Status& s)
-  {
-    if (!s.ok()) { throw std::runtime_error("Arrow: " + s.ToString()); }
-  }
-  template <typename T> T check(arrow::Result<T> r)
-  {
-    if (!r.ok()) { throw std::runtime_error("Arrow: " + r.status().ToString()); }
-    return std::move(r).ValueUnsafe();
-  }
+  using ODIA::check;
 
   /// OpenSWATH writes "b2^1" and "Precursor_i0"; the comparison layout uses "b2" and "M+0".
   std::string normaliseAnnotation(const std::string& a, std::int64_t ms_level)

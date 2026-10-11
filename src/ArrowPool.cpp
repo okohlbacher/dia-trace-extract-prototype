@@ -36,16 +36,6 @@ namespace ODIA
     return (std::size_t{1} << k) + sub * (std::size_t{1} << k) / 4;
   }
 
-  namespace
-  {
-    // ODIA_POOL_NO_ACCOUNT=1 (diagnosis only): skip the shared byte/peak/total/count atomics, to measure their cost.
-    bool noAccount()
-    {
-      static const bool off = std::getenv("ODIA_POOL_NO_ACCOUNT") != nullptr;
-      return off;
-    }
-  }
-
   /// Per-thread front end: a few free blocks per class and pending statistics, owned by one thread.
   struct RecyclingPool::Local
   {
@@ -101,7 +91,6 @@ namespace ODIA
 
   void RecyclingPool::account_(int64_t delta)
   {
-    if (noAccount()) { return; }
     if (Local* l = local_())
     {
       l->delta += delta;
