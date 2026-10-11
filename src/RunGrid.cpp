@@ -254,49 +254,160 @@ namespace ODIA
       const int n_threads = std::max(1, threads);
       std::optional<MzPeak::Index> index;
       std::vector<std::unique_ptr<MzPeak::Spectra>> readers;
+      const auto openReaders = [&](MzPeak::MetadataDetail detail) {
+        readers.clear();
+        for (int t = 0; t < n_threads; ++t) { readers.emplace_back(new MzPeak::Spectra(index->spectra(detail))); }
+      };
       {
         prof::Scope sc(c_open);
         index.emplace(MzPeak::open(filename));
-        for (int t = 0; t < n_threads; ++t)
-        {
-          readers.emplace_back(new MzPeak::Spectra(index->spectra(MzPeak::MetadataDetail::Minimal)));
-        }
+        openReaders(MzPeak::MetadataDetail::Minimal);
       }
       const std::size_t n = readers[0]->size();
       std::vector<Decoded> meta(n);
-      {
-        prof::Scope sc(c_meta);
+      // diaPASEF: a frame is one spectrum with several isolation windows over disjoint mobility bands; its peaks
+      // are split by their mobility into one sub-spectrum per window (`multi`). Without bands the windows are
+      // merged into one (their union), which loses the mobility selectivity.
+      struct Win { double target, lower, upper, im_lo, im_hi; };
+      std::vector<std::vector<Win>> multi(n);
+      std::size_t n_multi = 0, n_merged = 0;
+      const auto readMeta = [&]() {
+        n_multi = n_merged = 0;
         for (std::size_t i = 0; i < n; ++i)
         {
           const MzPeak::Spectrum s = (*readers[0])[i];
           const MzPeak::SpectrumMetadata& md = s.metadata();
           Decoded& d = meta[i];
+          d = Decoded{};
+          multi[i].clear();
           d.index = static_cast<std::uint32_t>(i);
           if (!md.retention_time) { throw std::runtime_error("mzPeak: spectrum " + std::to_string(i) + " has no retention time"); }
           d.rt = *md.retention_time;   // seconds (the reader converts from the file's minutes)
           d.ms_level = md.ms_level.value_or(0);
-          if (d.ms_level >= 2 && !md.precursors.empty())
+          if (d.ms_level < 2 || md.precursors.empty()) { continue; }
+          if (md.precursors.size() > 1 && std::getenv("ODIA_PROFILE") && i < 3)
           {
-            const MzPeak::PrecursorInfo& p = md.precursors.front();
+            // diagnostic: what the reader hands over for a multi-window spectrum
+            std::fprintf(stderr, "[mzpeak] spectrum %zu: %zu precursors;", i, md.precursors.size());
+            for (const auto& pr : md.precursors)
+            {
+              std::fprintf(stderr, " [target %.2f ions %zu", pr.isolation_window.target_mz.value_or(0.0f), pr.selected_ions.size());
+              if (!pr.selected_ions.empty())
+              {
+                const auto& ion = pr.selected_ions.front();
+                std::fprintf(stderr, " im %s/%s params %zu", ion.ion_mobility_lower_limit ? "y" : "-", ion.ion_mobility_upper_limit ? "y" : "-", ion.parameters.size());
+                for (const auto& c : ion.parameters) { std::fprintf(stderr, " (%s=%s)", c.accession ? c.accession->c_str() : "?", c.value ? c.value->c_str() : "null"); }
+              }
+              std::fprintf(stderr, "]");
+            }
+            std::fprintf(stderr, "\n");
+          }
+          std::vector<Win> wins;
+          bool bands = true;
+          for (const MzPeak::PrecursorInfo& p : md.precursors)
+          {
             const MzPeak::IsolationWindow& w = p.isolation_window;
+            Win x{0, 0, 0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
             if (w.target_mz)
             {
-              d.target = *w.target_mz;
-              d.lower = d.target - w.lower_offset.value_or(0.0f);
-              d.upper = d.target + w.upper_offset.value_or(0.0f);
+              x.target = *w.target_mz;
+              x.lower = x.target - w.lower_offset.value_or(0.0f);
+              x.upper = x.target + w.upper_offset.value_or(0.0f);
             }
-            else if (!p.selected_ions.empty() && p.selected_ions.front().selected_ion_mz)
+            else if (!p.selected_ions.empty() && p.selected_ions.front().selected_ion_mz) { x.target = x.lower = x.upper = *p.selected_ions.front().selected_ion_mz; }
+            else { continue; }
+            // The ion that belongs to this window: a writer that leaves precursor_index NULL (mzpeak-convert 0.18) makes
+            // the reader attach every ion to the first precursor, so the ions of the whole spectrum are matched by
+            // their selected m/z to the window target.
+            const MzPeak::SelectedIonInfo* best = nullptr;
+            double best_d = std::numeric_limits<double>::infinity();
+            for (const MzPeak::PrecursorInfo& q : md.precursors)
             {
-              d.target = d.lower = d.upper = *p.selected_ions.front().selected_ion_mz;
+              for (const MzPeak::SelectedIonInfo& ion : q.selected_ions)
+              {
+                const double dmz = ion.selected_ion_mz ? std::fabs(*ion.selected_ion_mz - x.target) : (&q == &p ? 0.0 : std::numeric_limits<double>::infinity());
+                if (dmz < best_d) { best_d = dmz; best = &ion; }
+              }
             }
+            if (best)
+            {
+              const MzPeak::SelectedIonInfo& ion = *best;
+              if (ion.ion_mobility_lower_limit) { x.im_lo = *ion.ion_mobility_lower_limit; }
+              if (ion.ion_mobility_upper_limit) { x.im_hi = *ion.ion_mobility_upper_limit; }
+              for (const MzPeak::CvParam& c : ion.parameters)   // mzpeak-convert writes the band as parameters
+              {
+                if (!c.accession || !c.value) { continue; }
+                if (*c.accession == "MZP:1000006") { x.im_lo = std::stod(*c.value); }
+                else if (*c.accession == "MZP:1000007") { x.im_hi = std::stod(*c.value); }
+              }
+            }
+            bands = bands && x.im_lo == x.im_lo && x.im_hi == x.im_hi;
+            wins.push_back(x);
           }
+          if (wins.empty()) { continue; }
+          if (wins.size() == 1 || !bands)
+          {
+            // one window, or several without mobility bands: their union
+            d.target = 0; d.lower = wins.front().lower; d.upper = wins.front().upper;
+            for (const Win& x : wins) { d.target += x.target / static_cast<double>(wins.size()); d.lower = std::min(d.lower, x.lower); d.upper = std::max(d.upper, x.upper); }
+            n_merged += wins.size() > 1;
+          }
+          else
+          {
+            multi[i] = std::move(wins);
+            ++n_multi;
+          }
+        }
+      };
+      {
+        prof::Scope sc(c_meta);
+        readMeta();
+        bool any_multi_precursor = false;
+        for (std::size_t i = 0; i < n && !any_multi_precursor; ++i) { any_multi_precursor = multi[i].size() > 1 || (meta[i].ms_level >= 2 && n_merged > 0); }
+        if (n_merged > 0)
+        {
+          // The bands may be CV parameters that only the full metadata detail keeps: read again at full detail.
+          openReaders(MzPeak::MetadataDetail::Full);
+          readMeta();
+        }
+        if (n_merged > 0)
+        {
+          std::fprintf(stderr, "[mzpeak] warning: %zu spectra carry several isolation windows without mobility bands; their windows were merged\n", n_merged);
         }
       }
       // Partitions of roughly equal point count; a thread decodes a partition into pool ranges claimed per spectrum.
+      // Multi-window spectra are skipped here and decoded below with their mobility array.
       const auto parts = readers[0]->partitions(static_cast<std::size_t>(4) * static_cast<std::size_t>(n_threads));
       std::atomic<std::size_t> next{0};
       std::exception_ptr error;
       std::mutex error_mtx;
+      const auto store = [&](Decoded& d, const double* mz, const float* in, std::size_t count, std::vector<std::pair<MzFixed, float>>& sorted) {
+        d.n = static_cast<std::uint32_t>(count);
+        if (d.n == 0 || (d.ms_level != 1 && d.ms_level != 2)) { return; }
+        d.in_pool = true;
+        d.pool_begin = pool.claim(d.n);
+        MzFixed* pm = pool.mz() + d.pool_begin;
+        float* pi = pool.intensity() + d.pool_begin;
+        bool unsorted = false;
+        for (std::size_t j = 0; j < d.n; ++j)
+        {
+          pm[j] = toFixed(mz[j]);
+          pi[j] = in[j];
+          unsorted |= j > 0 && pm[j] < pm[j - 1];
+        }
+        if (unsorted)
+        {
+          sorted.resize(d.n);
+          for (std::size_t j = 0; j < d.n; ++j) { sorted[j] = {pm[j], pi[j]}; }
+          std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+          for (std::size_t j = 0; j < d.n; ++j) { pm[j] = sorted[j].first; pi[j] = sorted[j].second; }
+          d.was_unsorted = true;
+        }
+      };
+      std::vector<std::vector<Decoded>> extra(n);   // the sub-spectra of multi-window spectra
+      std::vector<std::size_t> multi_idx;
+      for (std::size_t i = 0; i < n; ++i) { if (!multi[i].empty()) { multi_idx.push_back(i); } }
+      std::atomic<std::size_t> next_multi{0};
       {
         prof::Scope sc(c_decode);
         auto work = [&](int t) {
@@ -306,29 +417,33 @@ namespace ODIA
             for (std::size_t k; (k = next.fetch_add(1)) < parts.size();)
             {
               readers[static_cast<std::size_t>(t)]->decode(parts[k], [&](std::uint64_t i, std::span<const double> mz, std::span<const float> in) {
-                Decoded& d = meta[i];
-                d.n = static_cast<std::uint32_t>(mz.size());
-                if (d.n == 0 || (d.ms_level != 1 && d.ms_level != 2)) { return; }
-                d.in_pool = true;
-                d.pool_begin = pool.claim(d.n);
-                MzFixed* pm = pool.mz() + d.pool_begin;
-                float* pi = pool.intensity() + d.pool_begin;
-                bool unsorted = false;
-                for (std::size_t j = 0; j < d.n; ++j)
-                {
-                  pm[j] = toFixed(mz[j]);
-                  pi[j] = in[j];
-                  unsorted |= j > 0 && pm[j] < pm[j - 1];
-                }
-                if (unsorted)
-                {
-                  sorted.resize(d.n);
-                  for (std::size_t j = 0; j < d.n; ++j) { sorted[j] = {pm[j], pi[j]}; }
-                  std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-                  for (std::size_t j = 0; j < d.n; ++j) { pm[j] = sorted[j].first; pi[j] = sorted[j].second; }
-                  d.was_unsorted = true;
-                }
+                if (!multi[i].empty()) { return; }
+                store(meta[i], mz.data(), in.data(), mz.size(), sorted);
               });
+            }
+            std::vector<double> bmz;
+            std::vector<float> bin;
+            for (std::size_t k; (k = next_multi.fetch_add(1)) < multi_idx.size();)
+            {
+              const std::size_t i = multi_idx[k];
+              const MzPeak::Spectrum s = (*readers[static_cast<std::size_t>(t)])[i];
+              const std::vector<double>& mz = s.mz();
+              const std::vector<float>& in = s.intensity();
+              const std::vector<double>& mob = s.ion_mobility_array();
+              if (mob.size() != mz.size()) { throw std::runtime_error("mzPeak: spectrum " + std::to_string(i) + " has isolation windows with mobility bands but no per-peak mobility array"); }
+              for (const Win& w : multi[i])
+              {
+                bmz.clear(); bin.clear();
+                for (std::size_t j = 0; j < mz.size(); ++j)
+                {
+                  if (mob[j] >= w.im_lo && mob[j] <= w.im_hi) { bmz.push_back(mz[j]); bin.push_back(in[j]); }
+                }
+                Decoded d;
+                d.index = meta[i].index; d.rt = meta[i].rt; d.ms_level = meta[i].ms_level;
+                d.target = w.target; d.lower = w.lower; d.upper = w.upper;
+                store(d, bmz.data(), bin.data(), bmz.size(), sorted);
+                extra[i].push_back(std::move(d));
+              }
             }
           }
           catch (...)
@@ -336,6 +451,7 @@ namespace ODIA
             std::lock_guard lock(error_mtx);
             if (!error) { error = std::current_exception(); }
             next = parts.size();
+            next_multi = multi_idx.size();
           }
         };
         std::vector<std::thread> pool_threads;
@@ -344,8 +460,16 @@ namespace ODIA
         for (auto& th : pool_threads) { th.join(); }
       }
       if (error) { std::rethrow_exception(error); }
+      if (n_multi > 0 && std::getenv("ODIA_PROFILE"))
+      {
+        std::fprintf(stderr, "[mzpeak] %zu spectra split by mobility into %zu windows each (first)\n", n_multi, multi[multi_idx.front()].size());
+      }
       prof::Scope sc(c_route);
-      for (auto& d : meta) { route(std::move(d)); }
+      for (std::size_t i = 0; i < n; ++i)
+      {
+        if (extra[i].empty()) { route(std::move(meta[i])); }
+        else { for (auto& d : extra[i]) { route(std::move(d)); } }
+      }
     }
 
     bool loadChunked(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)

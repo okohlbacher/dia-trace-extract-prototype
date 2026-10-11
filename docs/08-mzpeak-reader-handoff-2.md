@@ -101,3 +101,21 @@ File: fork-written point layout, `results/mzpeak/run01_openms.mzpeak` (1.08 GB, 
   (https://proteobench.readthedocs.io/en/stable/modules/dia/entrapment-dia-astral/), raw files and FASTA at
   https://proteobench.cubimed.rub.de/raws/DIA-astral-entrapment/ (`all_data_Entrapment_DIA_Astral.tar.gz`); no
   PRIDE/ProteomeXchange accession is listed.
+
+## 7. diaPASEF (timsTOF SCP, ProteoBench diaPASEF module, mzpeak-convert 0.18.0; 2026-10-11)
+
+File: `ttSCP_diaPASEF_Condition_A_Sample_Alpha_01_11494.d` → 6.9 GB mzPeak (ims-compact chunked). 4,348 MS1 frames,
+34,780 MS2 frames with **3 isolation windows each** (25 Th, 200 Th apart, over disjoint mobility bands recorded as
+`MZP:1000006/7` parameters of the selected ions). The extractor splits every frame by the per-peak mobility into
+one sub-spectrum per window (24 windows, 2.77 G points, 21 GB grid). Two things on the reader side:
+
+1. **Ions attach to the wrong precursor.** The converter leaves `precursor_index` NULL in `spectra_metadata_selected_ions`;
+   the reader's (source_index, precursor_index) join then hangs all three ions on the first precursor. We match
+   ions to windows by `selected_ion_mz` ourselves; positional matching in the reader would be the fix.
+2. **The partitioned sink has no mobility.** `Spectra::decode` passes (index, mz, intensity) only, so a frame that
+   must be split goes through `Spectrum::ion_mobility_array()` per spectrum: 20 s for 34,780 frames (the
+   point-layout Astral run takes 0.5 s through the sink). A `std::span<const double> mobility` argument on the
+   sink (empty when the file has none) would let the partitioned path serve diaPASEF too.
+3. Minor: the mobility band is only available at `MetadataDetail::Full` (it lives in the ion's parameters), so a
+   diaPASEF file forces the full metadata detail; promoting `MZP:1000006/7` to the `ion_mobility_lower/upper_limit`
+   fields at every detail level would avoid that.

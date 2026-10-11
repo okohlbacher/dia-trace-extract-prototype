@@ -6,6 +6,8 @@
   `results/mzpeak/run01_openms.mzpeak` regenerated. Point-layout run 01: traces byte-identical to the mzML path;
   ingest 0.85 s at 64 threads (mzML 0.32 s). 0.18.0 (numpress, vendor-centroided MS1): MS2 99.99% identical,
   MS1 76% identical (vendor vs ProteoWizard centroiding), ingest 3.6 s.
+- Open (reader): diaPASEF goes through the per-spectrum path (no mobility in the partitioned sink): 20 s ingest;
+  ions attached to the first precursor when precursor_index is NULL (handoff 08 §7).
 - Open (reader): decode scales to ~10-14 cores only (the library serialises row-group decoding per archive:
   `docs/read-path-performance.md` of the submodule); open() 0.17 s and the metadata pass 0.2 s are serial.
   Target was <= 0.5 s. The chunked/numpress decode (0.18.0) is 4x slower than the point layout.
