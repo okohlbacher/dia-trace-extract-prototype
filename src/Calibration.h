@@ -13,8 +13,14 @@ namespace ODIA
 {
   struct CalibrationOptions
   {
-    std::size_t panel = 200000;       ///< precursors sampled (stratified over library RT)
-    double search_ppm = 20.0;         ///< uncalibrated half-width for the panel extraction
+    std::size_t panel = 0;            ///< precursors sampled (stratified over library RT); 0 = panel_fraction of the eligible
+    double panel_fraction = 0.05;
+    double search_ppm = 50.0;         ///< first-pass half width (uncalibrated); later passes narrow around the measured offset
+    double search_narrow_factor = 3.0; ///< pass n+1 searches +- factor x the accuracy measured in pass n (the outer part
+                                      ///< of that window measures the background of random centroids)
+    int search_rounds = 3;            ///< at most this many stage-2 passes (stops when the window changes < 25%)
+    double accuracy_sigma = 6.0;      ///< extraction tolerance = this multiple of the robust (MAD) width of the apex mass errors
+    double min_relative_intensity = 0.0; ///< apex centroids below this share of the anchor's strongest fragment are left out of the mass model
     int top_fragments = 6;            ///< fragments per panel precursor used for co-elution
     int half_window_cycles = 4;       ///< co-elution window around a candidate apex (+- cycles)
     int candidates = 5;               ///< local maxima of the summed trace evaluated per precursor
@@ -56,10 +62,11 @@ namespace ODIA
     double stage2_window_s = 0;
     double rt_residual_p50 = 0, rt_residual_p95 = 0, rt_residual_p99 = 0;  ///< |residual|, s, used anchors
     double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;
-    /// Extraction accuracy (half width) from the residuals around the offset: 5 x their 70th percentile
-    /// (DIA-NN's rule for its MS1 accuracy).
+    /// Extraction accuracy (half width around the offset) = accuracy_sigma x the robust width of the apex errors.
     double ms2_accuracy_ppm = 0, ms1_accuracy_ppm = 0;
-    std::size_t strict_mass_anchors = 0;   ///< anchors the accuracies come from (0 = all used anchors)
+    double ms2_search_ppm = 0, ms1_search_ppm = 0;            ///< half width of the final search pass
+    int search_rounds = 0;                                    ///< stage-2 passes run
+    std::size_t strict_mass_anchors = 0;                      ///< anchors the mass model comes from
     std::uint64_t ms2_mass_points = 0, ms1_mass_points = 0;
     StageTime time;
   };

@@ -5,6 +5,7 @@
 #include "Profile.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <omp.h>
 #include <cstring>
 #include <new>
@@ -50,34 +51,32 @@ namespace ODIA
       return sxx > 0 && syy > 0 ? sxy / std::sqrt(sxx * syy) : std::numeric_limits<double>::quiet_NaN();
     }
 
-    /// Median and MAD-based sigma, unweighted (the intensities are ignored), plus 5 x the 70th percentile of
-    /// the absolute residuals around the median.
-    struct Centre { double median = 0, sigma = 0, accuracy = 0; };
-    Centre robustCentre(std::vector<std::pair<double, double>> v)
+    /// Offset and extraction tolerance from the apex mass errors (ppm, relative to the uncorrected targets) found in
+    /// the search window. Unweighted (the intensities are ignored: strong centroids drift upward on Astral, which
+    /// biased a weighted median). Offset = median; sigma = 1.4826 x the median absolute deviation (robust to the
+    /// random centroids of false anchors); accuracy = `k` sigma. Both scale with the instrument's error width; the
+    /// multiple k is the only fixed constant (6: see docs/analysis/trace_quality.md, 5 reproduces DIA-NN's rule).
+    struct MassModel
     {
-      Centre c;
-      if (v.empty()) { return c; }
+      double offset = 0, sigma = 0, accuracy = 0;
+      std::size_t n = 0;
+    };
+    MassModel massModel(const std::vector<std::pair<double, double>>& v, double k)
+    {
+      MassModel m;
+      if (v.empty()) { return m; }
       std::vector<double> x;
       x.reserve(v.size());
       for (const auto& [val, w] : v) { x.push_back(val); }
       std::sort(x.begin(), x.end());
       const auto q = [](const std::vector<double>& s, double f) { return s[static_cast<std::size_t>(f * (s.size() - 1) + 0.5)]; };
-      c.median = q(x, 0.5);
-      for (auto& val : x) { val = std::fabs(val - c.median); }
+      m.offset = q(x, 0.5);
+      m.n = x.size();
+      for (auto& val : x) { val = std::fabs(val - m.offset); }
       std::sort(x.begin(), x.end());
-      c.sigma = 1.4826 * q(x, 0.5);
-      c.accuracy = 5.0 * q(x, 0.7);
-      return c;
-    }
-
-    /// Quantile of |value| (values already centred).
-    double robustAbsQuantile(const std::vector<std::pair<double, double>>& v, double f)
-    {
-      std::vector<double> x;
-      for (const auto& [val, w] : v) { x.push_back(std::fabs(val)); }
-      if (x.empty()) { return 0.0; }
-      std::sort(x.begin(), x.end());
-      return x[static_cast<std::size_t>(f * (x.size() - 1) + 0.5)];
+      m.sigma = 1.4826 * q(x, 0.5);
+      m.accuracy = std::max(k * m.sigma, 0.1);   // floor: the fixed-point m/z grid (1e-5 Th) resolves ~0.01 ppm at 1000 Th
+      return m;
     }
 
     /// Weighted median and weighted MAD-based sigma.
@@ -108,8 +107,8 @@ namespace ODIA
     {
       bool accepted = false;
       Anchor anchor;
-      std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) at the apex
-      std::pair<double, double> ms1_ppm{0, 0};         ///< (ppm, intensity) of M+0 at the nearest MS1 scan
+      std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) of the fragments over the co-elution window
+      std::vector<std::pair<double, double>> ms1_ppm;  ///< (ppm, intensity) of M+0 at the MS1 scans of that window
     };
 
     std::size_t nearestWindow(const RunGrid& g, double mz)
@@ -131,15 +130,20 @@ namespace ODIA
       double min_correlation, min_cosine;
     };
 
+    /// Where to look for the centroids: the targets shifted by `offset` ppm, +- `width` ppm.
+    struct MassSearch
+    {
+      double ms2_offset = 0, ms2_width = 0, ms1_offset = 0, ms1_width = 0;
+    };
+
     /// Fragment m/z bounds of panel precursor p (the wide search window).
-    std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const CalibrationOptions& opt, std::uint32_t p,
-                                                            std::size_t F)
+    std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const MassSearch& ms, std::uint32_t p, std::size_t F)
     {
       std::vector<std::pair<MzFixed, MzFixed>> bounds(F);
       const std::uint32_t f0 = lib.fragment_begin[p];
       for (std::size_t f = 0; f < F; ++f)
       {
-        const double t = lib.fragment_mz[f0 + f], tol = t * opt.search_ppm * 1e-6;
+        const double t = lib.fragment_mz[f0 + f] * (1.0 + ms.ms2_offset * 1e-6), tol = t * ms.ms2_width * 1e-6;
         bounds[f] = {toFixed(t - tol), toFixed(t + tol)};
       }
       return bounds;
@@ -149,7 +153,8 @@ namespace ODIA
     /// per-cycle sum (summed in fragment order); apex mass errors and the MS1 error of an accepted anchor.
     PanelResult scoreTile(const Library& lib, const RunGrid& g, const CalibrationOptions& opt, std::uint32_t p,
                           const WindowLane& lane, std::size_t F, const std::vector<std::pair<MzFixed, MzFixed>>& bounds,
-                          const float* tile, const float* sum, std::size_t c_lo, std::size_t c_hi, const Criteria& crit)
+                          const float* tile, const float* sum, std::size_t c_lo, std::size_t c_hi, const Criteria& crit,
+                          const MassSearch& ms)
     {
       PanelResult out;
       const std::size_t C = g.cycles();
@@ -210,9 +215,9 @@ namespace ODIA
       }
       if (!out.accepted) { return out; }
 
-      // Mass errors at the apex: observed m/z of the most intense centroid per fragment, for fragments with at
-      // least 10% of the anchor's strongest apex signal (a weak "fragment" is often a random centroid inside the
-      // wide search window, which would inflate the residual quantiles behind the measured accuracy).
+      // Mass errors at the apex: observed m/z of the most intense centroid per fragment (random centroids inside the
+      // search window are the background the robust statistics of massModel tolerate; calibration:min_relative_intensity
+      // can additionally drop weak fragments).
       const std::size_t c = out.anchor.apex_cycle;
       const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
       std::vector<std::pair<float, MzFixed>> apex(F);
@@ -225,7 +230,7 @@ namespace ODIA
       for (std::size_t f = 0; f < F; ++f)
       {
         const auto [v, m] = apex[f];
-        if (v <= 0 || v < 0.1f * strongest) { continue; }
+        if (v <= 0 || v < static_cast<float>(opt.min_relative_intensity) * strongest) { continue; }
         const double t = lib.fragment_mz[f0 + f];
         out.ms2_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v});
       }
@@ -235,16 +240,16 @@ namespace ODIA
       {
         auto j = static_cast<std::size_t>(std::lower_bound(ms1.rt.begin(), ms1.rt.end(), out.anchor.run_rt) - ms1.rt.begin());
         if (j == ms1.rt.size() || (j > 0 && out.anchor.run_rt - ms1.rt[j - 1] < ms1.rt[j] - out.anchor.run_rt)) { --j; }
-        const double t = lib.precursor_mz[p], tol = t * opt.search_ppm * 1e-6;
-        const auto [v, m] = maxPeak(ms1.peaks, ms1.peaks.cellBegin(j), ms1.peaks.cellEnd(j), toFixed(t - tol), toFixed(t + tol));
-        if (v > 0) { out.ms1_ppm = {(fromFixed(m) - t) / t * 1e6, v}; }
+        const double t = lib.precursor_mz[p], tc = t * (1.0 + ms.ms1_offset * 1e-6), tol = tc * ms.ms1_width * 1e-6;
+        const auto [v, m] = maxPeak(ms1.peaks, ms1.peaks.cellBegin(j), ms1.peaks.cellEnd(j), toFixed(tc - tol), toFixed(tc + tol));
+        if (v > 0) { out.ms1_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v}); }
       }
       return out;
     }
 
     /// Look for a co-eluting apex of panel precursor p within global cycles [c_lo, c_hi).
     PanelResult examine(const Library& lib, const RunGrid& g, const CalibrationOptions& opt, std::uint32_t p,
-                        std::size_t c_lo, std::size_t c_hi, const Criteria& crit)
+                        std::size_t c_lo, std::size_t c_hi, const Criteria& crit, const MassSearch& ms)
     {
       PanelResult out;
       const std::size_t w = nearestWindow(g, lib.precursor_mz[p]);
@@ -256,7 +261,7 @@ namespace ODIA
 
       // Whole-run traces of the top fragments (max centroid within the wide window).
       std::vector<float> tile(F * C, 0.0f);
-      const auto bounds = fragmentBounds(lib, opt, p, F);
+      const auto bounds = fragmentBounds(lib, ms, p, F);
       std::vector<float> sum(C, 0.0f);
       // Gather the range plus the co-elution margin so windows at its edges are complete.
       const std::size_t g_lo = c_lo > static_cast<std::size_t>(opt.half_window_cycles) ? c_lo - opt.half_window_cycles : 0;
@@ -273,7 +278,7 @@ namespace ODIA
         }
       }
 
-      return scoreTile(lib, g, opt, p, lane, F, bounds, tile.data(), sum.data(), c_lo, c_hi, crit);
+      return scoreTile(lib, g, opt, p, lane, F, bounds, tile.data(), sum.data(), c_lo, c_hi, crit, ms);
     }
   }
 
@@ -284,7 +289,7 @@ namespace ODIA
     /// binary search per fragment and spectrum). Same traces as examine() (same maximum, same tie rule, sums in
     /// fragment order), hence the same anchors; results in panel order.
     std::vector<PanelResult> examineWholeRun(const Library& lib, const RunGrid& g, const CalibrationOptions& opt,
-                                             const std::vector<std::uint32_t>& panel, const Criteria& crit)
+                                             const std::vector<std::uint32_t>& panel, const Criteria& crit, const MassSearch& ms)
     {
       static prof::Counter& c_win = prof::counter("calib.stage1_window");
       const std::size_t C = g.cycles(), W = g.windows.size();
@@ -340,7 +345,7 @@ namespace ODIA
         {
           const std::uint32_t p = panel[members[m]];
           Fs[m] = std::min<std::size_t>(lib.fragmentsOf(p), static_cast<std::size_t>(opt.top_fragments));
-          bounds[m] = fragmentBounds(lib, opt, p, Fs[m]);
+          bounds[m] = fragmentBounds(lib, ms, p, Fs[m]);
           first_row[m + 1] = first_row[m] + Fs[m];
           for (std::size_t f = 0; f < Fs[m]; ++f)
           {
@@ -375,7 +380,7 @@ namespace ODIA
             if (lane.peaks.cellBegin(c) == lane.peaks.cellEnd(c)) { continue; }
             for (std::size_t f = 0; f < Fs[m]; ++f) { sum[c] += tile[f * C + c]; }
           }
-          PanelResult x = scoreTile(lib, g, opt, panel[members[m]], lane, Fs[m], bounds[m], tile, sum.data(), 0, C, crit);
+          PanelResult x = scoreTile(lib, g, opt, panel[members[m]], lane, Fs[m], bounds[m], tile, sum.data(), 0, C, crit, ms);
           if (x.accepted) { found[w].emplace_back(members[m], std::move(x)); }
         }
       }
@@ -390,11 +395,11 @@ namespace ODIA
 
     /// Examine the panel in parallel; results are returned in panel order (deterministic).
     std::vector<PanelResult> examinePanel(const Library& lib, const RunGrid& g, const CalibrationOptions& opt,
-                                          const std::vector<std::uint32_t>& panel, const Criteria& crit,
+                                          const std::vector<std::uint32_t>& panel, const Criteria& crit, const MassSearch& ms,
                                           const RtMap* prior, double window_s)
     {
       std::vector<PanelResult> all;
-      if (!prior) { return examineWholeRun(lib, g, opt, panel, crit); }
+      if (!prior) { return examineWholeRun(lib, g, opt, panel, crit, ms); }
       constexpr std::size_t chunk = 256;
       const std::size_t units = (panel.size() + chunk - 1) / chunk;
       orderedParallel(
@@ -410,7 +415,7 @@ namespace ODIA
               lo = g.lowerCycle(t - window_s);
               hi = g.upperCycle(t + window_s);
             }
-            PanelResult x = examine(lib, g, opt, panel[i], lo, hi, crit);
+            PanelResult x = examine(lib, g, opt, panel[i], lo, hi, crit, ms);
             if (x.accepted) { r.push_back(std::move(x)); }
           }
           return r;
@@ -467,6 +472,10 @@ namespace ODIA
     /// LOWESS (or other model) with iterative rejection; marks `used` and residuals on the anchors.
     RtMap robustFit(std::vector<Anchor>& anchors, const CalibrationOptions& opt, double& sigma)
     {
+      if (std::count_if(anchors.begin(), anchors.end(), [](const Anchor& a) { return a.used; }) < 10)
+      {
+        throw std::runtime_error("calibration: fewer than 10 usable anchors; supply -rt_anchors instead");
+      }
       RtMap map;
       for (int round = 0; ; ++round)
       {
@@ -510,13 +519,15 @@ namespace ODIA
     std::stable_sort(eligible.begin(), eligible.end(),
                      [&](std::uint32_t a, std::uint32_t b) { return lib.library_rt[a] < lib.library_rt[b]; });
     std::vector<std::uint32_t> panel;
-    const std::size_t n = std::min(opt.panel, eligible.size());
+    const std::size_t want = opt.panel > 0 ? opt.panel : static_cast<std::size_t>(std::llround(opt.panel_fraction * static_cast<double>(eligible.size())));
+    const std::size_t n = std::min(want, eligible.size());
     for (std::size_t i = 0; i < n; ++i) { panel.push_back(eligible[i * eligible.size() / std::max<std::size_t>(1, n)]); }
     res.panel = panel.size();
 
     // Stage 1: whole run, strict criteria; robust initial curve from run-RT modes, then a fit.
     const Criteria strict{opt.strict_min_fragments, opt.strict_min_correlation, opt.strict_min_cosine};
-    auto stage1 = examinePanel(lib, grid, opt, panel, strict, nullptr, 0.0);
+    MassSearch search{0.0, opt.search_ppm, 0.0, opt.search_ppm};
+    auto stage1 = examinePanel(lib, grid, opt, panel, strict, search, nullptr, 0.0);
     res.stage1_anchors = stage1.size();
     if (stage1.size() < 50)
     {
@@ -525,62 +536,94 @@ namespace ODIA
     }
     std::vector<Anchor> a1;
     for (const auto& x : stage1) { a1.push_back(x.anchor); }
-    const auto kept = modeFilter(a1, opt.mode_bins, opt.mode_bandwidth_s, 4 * opt.mode_bandwidth_s);
+    // Bins need a handful of anchors each; with few anchors (small panel or library) the mode filter is skipped.
+    const int bins = std::max(1, std::min(opt.mode_bins, static_cast<int>(a1.size() / 10)));
+    const auto kept = modeFilter(a1, bins, opt.mode_bandwidth_s, 4 * opt.mode_bandwidth_s);
+    const bool filter = kept.size() >= 20;
     for (auto& a : a1)
     {
-      a.used = std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt));
+      a.used = !filter || std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt));
     }
     double sigma1 = 0;
     RtMap map1 = robustFit(a1, opt, sigma1);
     res.stage1_used = static_cast<std::size_t>(std::count_if(a1.begin(), a1.end(), [](const Anchor& a) { return a.used; }));
 
-    // Stage 2: around the stage-1 curve, relaxed criteria; final fit and mass offsets.
+    // Mass errors of the anchors used in a fit; the mass model (offset, background, tolerance) per level.
+    // Mass errors of the anchors used in a fit. With a full predicted library many relaxed anchors are false (a
+    // co-eluting peak matched to an absent peptide) and their centroids are random: a background too dense for
+    // the tail of the true matches to be measured. So the mass model takes the anchors that pass the strict
+    // co-elution criteria when there are at least 200 of them (a sample-size floor), else all used anchors.
+    std::size_t mass_anchors = 0;
+    const auto errors = [&](const std::vector<PanelResult>& results, const std::vector<Anchor>& anchors,
+                            std::vector<std::pair<double, double>>& ms2, std::vector<std::pair<double, double>>& ms1) {
+      const auto strict_ok = [&](const Anchor& a) {
+        return a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
+      };
+      std::size_t n_strict = 0;
+      for (const auto& a : anchors) { n_strict += a.used && strict_ok(a); }
+      const bool strict_only = n_strict >= 200;
+      ms2.clear(); ms1.clear(); mass_anchors = 0;
+      for (std::size_t i = 0; i < results.size(); ++i)
+      {
+        if (!anchors[i].used || (strict_only && !strict_ok(anchors[i]))) { continue; }
+        ++mass_anchors;
+        ms2.insert(ms2.end(), results[i].ms2_ppm.begin(), results[i].ms2_ppm.end());
+        ms1.insert(ms1.end(), results[i].ms1_ppm.begin(), results[i].ms1_ppm.end());
+      }
+    };
+    // The next pass searches +- factor x the measured accuracy around the measured offset.
+    const auto narrowed = [&](const MassModel& m, double previous_width) {
+      return m.n > 0 ? std::min(opt.search_ppm, opt.search_narrow_factor * m.accuracy) : previous_width;
+    };
+    std::vector<std::pair<double, double>> ms2_ppm, ms1_ppm;
+    errors(stage1, a1, ms2_ppm, ms1_ppm);
+    MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma);
+    MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma);
+
+    // Stage 2: around the stage-1 curve, relaxed criteria, the mass search narrowed around the stage-1 offsets;
+    // repeated while the measured window still changes (at most search_rounds passes). Final fit and offsets.
     res.stage2_window_s = std::max(4.0 * sigma1, opt.min_window_s);
     const Criteria relaxed{opt.min_fragments, opt.min_correlation, opt.min_library_cosine};
-    auto stage2 = examinePanel(lib, grid, opt, panel, relaxed, &map1, res.stage2_window_s);
-    std::vector<std::pair<double, double>> ms2_ppm, ms1_ppm;
-    for (auto& x : stage2)
+    std::vector<PanelResult> stage2;
+    for (int round = 0; round < std::max(1, opt.search_rounds); ++round)
     {
-      x.anchor.used = true;
-      res.anchors.push_back(x.anchor);
-    }
-    if (res.anchors.size() < 50) { throw std::runtime_error("calibration: too few stage-2 anchors"); }
-    double sigma2 = 0;
-    res.rt_map = robustFit(res.anchors, opt, sigma2);
-    // Mass errors from anchors that fit the RT model. The accuracy (spread) is taken from the anchors that also
-    // pass the strict co-elution criteria when there are enough of them: with a full predicted library some
-    // relaxed anchors are false (a co-eluting peak matched to an absent peptide), and their mass errors spread
-    // over the whole search window -- harmless for the median offset, not for the 70th percentile.
-    std::vector<std::pair<double, double>> ms2_strict, ms1_strict;
-    for (std::size_t i = 0; i < stage2.size(); ++i)
-    {
-      if (!res.anchors[i].used) { continue; }
-      ms2_ppm.insert(ms2_ppm.end(), stage2[i].ms2_ppm.begin(), stage2[i].ms2_ppm.end());
-      if (stage2[i].ms1_ppm.second > 0) { ms1_ppm.push_back(stage2[i].ms1_ppm); }
-      if (res.anchors[i].correlation >= opt.strict_min_correlation && res.anchors[i].cosine >= opt.strict_min_cosine)
+      const MassSearch next{m2.offset, narrowed(m2, search.ms2_width), m1.offset, narrowed(m1, search.ms1_width)};
+      if (round > 0 && std::fabs(next.ms2_width - search.ms2_width) < 0.25 * search.ms2_width
+          && std::fabs(next.ms1_width - search.ms1_width) < 0.25 * search.ms1_width) { break; }
+      search = next;
+      ++res.search_rounds;
+      stage2 = examinePanel(lib, grid, opt, panel, relaxed, search, &map1, res.stage2_window_s);
+      res.anchors.clear();
+      for (auto& x : stage2)
       {
-        ms2_strict.insert(ms2_strict.end(), stage2[i].ms2_ppm.begin(), stage2[i].ms2_ppm.end());
-        if (stage2[i].ms1_ppm.second > 0) { ms1_strict.push_back(stage2[i].ms1_ppm); }
+        x.anchor.used = true;
+        res.anchors.push_back(x.anchor);
       }
+      if (res.anchors.size() < 50) { throw std::runtime_error("calibration: too few stage-2 anchors"); }
+      double sigma2 = 0;
+      res.rt_map = robustFit(res.anchors, opt, sigma2);
+      errors(stage2, res.anchors, ms2_ppm, ms1_ppm);
+      m2 = massModel(ms2_ppm, opt.accuracy_sigma);
+      m1 = massModel(ms1_ppm, opt.accuracy_sigma);
+    }
+    if (const char* dump = std::getenv("ODIA_DUMP_MASS_ERRORS"))
+    {
+      // Diagnostic: the apex mass errors behind the mass model (ppm, intensity), one line per centroid.
+      std::ofstream o(dump);
+      o << "level\tppm\tintensity\n";
+      for (const auto& [e, w] : ms2_ppm) { o << "2\t" << e << '\t' << w << '\n'; }
+      for (const auto& [e, w] : ms1_ppm) { o << "1\t" << e << '\t' << w << '\n'; }
     }
     std::vector<double> absres;
+    res.used = 0;
     for (const auto& a : res.anchors) { if (a.used) { absres.push_back(std::fabs(a.residual)); ++res.used; } }
     res.rt_residual_p50 = quantile(absres, 0.50);
     res.rt_residual_p95 = quantile(absres, 0.95);
     res.rt_residual_p99 = quantile(absres, 0.99);
-    const Centre c2 = robustCentre(ms2_ppm), c1 = robustCentre(ms1_ppm);
-    res.ms2_offset_ppm = c2.median; res.ms2_sigma_ppm = c2.sigma; res.ms2_accuracy_ppm = c2.accuracy;
-    res.ms1_offset_ppm = c1.median; res.ms1_sigma_ppm = c1.sigma; res.ms1_accuracy_ppm = c1.accuracy;
-    constexpr std::size_t min_strict = 200;
-    if (ms1_strict.size() >= min_strict)
-    {
-      // spread around the offset of all anchors
-      for (auto& e : ms2_strict) { e.first -= res.ms2_offset_ppm; }
-      for (auto& e : ms1_strict) { e.first -= res.ms1_offset_ppm; }
-      res.ms2_accuracy_ppm = 5.0 * robustAbsQuantile(ms2_strict, 0.7);
-      res.ms1_accuracy_ppm = 5.0 * robustAbsQuantile(ms1_strict, 0.7);
-      res.strict_mass_anchors = ms1_strict.size();
-    }
+    res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = m2.accuracy;
+    res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = m1.accuracy;
+    res.ms2_search_ppm = search.ms2_width; res.ms1_search_ppm = search.ms1_width;
+    res.strict_mass_anchors = mass_anchors;
     res.ms2_mass_points = ms2_ppm.size();
     res.ms1_mass_points = ms1_ppm.size();
     res.time = stageClock() - t0;

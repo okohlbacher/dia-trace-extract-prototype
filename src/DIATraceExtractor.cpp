@@ -147,26 +147,51 @@ protected:
     registerDoubleOption_("rt_window", "<s>", 60.0, "Half width (seconds) of the extraction window around the "
                           "mapped RT; <= 0 extracts the whole run.", false);
 
-    registerDoubleOption_("mz_tol", "<ppm>", 10.0, "Fragment tolerance, +- ppm (half width). 0 = the MS2 accuracy measured "
-                          "by -mass_calibration auto (5 x 70th percentile of the apex residuals; about 6 ppm on Astral).", false);
-    registerDoubleOption_("mz_tol_ms1", "<ppm>", 10.0, "MS1 tolerance, +- ppm (half width). 0 = the MS1 accuracy measured "
-                          "by -mass_calibration auto (5 x 70th percentile of the MS1 apex residuals; about 2.1 ppm on Astral).", false);
-    registerStringOption_("mass_calibration", "<mode>", "off", "auto: measure the fragment and MS1 mass offsets "
+    registerDoubleOption_("mz_tol", "<ppm>", 0.0, "Fragment tolerance, +- ppm (half width). 0 (default) = the MS2 accuracy measured "
+                          "by -mass_calibration auto (calibration:accuracy_sigma x the robust error width; about 6 ppm on Astral).", false);
+    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm (half width). 0 (default) = the MS1 accuracy measured "
+                          "by -mass_calibration auto (calibration:accuracy_sigma x the robust MS1 error width; about 2.4 ppm on Astral).", false);
+    registerStringOption_("mass_calibration", "<mode>", "auto", "auto (default): measure the fragment and MS1 mass offsets "
                           "from the run (calibration anchors) and apply them instead of -mz_offset*.", false);
     setValidStrings_("mass_calibration", {"off", "auto"});
     registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV; usable as -rt_anchors).", false);
-    registerIntOption_("calibration:panel", "<n>", 200000, "Precursors sampled for calibration (stratified over "
-                       "library RT; never restricted by -ids).", false, true);
-    registerDoubleOption_("calibration:search_ppm", "<ppm>", 20.0, "Uncalibrated half width for the panel.", false, true);
+    registerIntOption_("calibration:panel", "<n>", 0, "Precursors sampled for calibration (stratified over library RT; "
+                       "never restricted by -ids); 0 = calibration:panel_fraction of the eligible precursors.", false, true);
+    registerDoubleOption_("calibration:panel_fraction", "<f>", 0.05, "Share of the eligible precursors in the panel.", false, true);
+    registerDoubleOption_("calibration:search_ppm", "<ppm>", 50.0, "First-pass mass search half width (uncalibrated). Later "
+                          "passes search +- calibration:search_factor x the measured accuracy around the measured offset.", false, true);
+    registerDoubleOption_("calibration:search_factor", "<f>", 3.0, "Narrowing factor of the mass search (see search_ppm).", false, true);
+    registerIntOption_("calibration:search_rounds", "<n>", 3, "Maximum stage-2 passes (stops when the search window "
+                       "changes by less than 25%).", false, true);
+    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "Measured tolerance = k x the robust width (1.4826 x MAD) "
+                          "of the apex mass errors; 6 per the tolerance trade-off analysis, 5 reproduces DIA-NN's rule.", false, true);
+    registerDoubleOption_("calibration:min_relative_intensity", "<f>", 0.0, "Apex centroids below this share of the "
+                          "anchor's strongest fragment are left out of the mass model (0 = all).", false, true);
+    registerIntOption_("calibration:strict_min_fragments", "<n>", 5, "Stage 1: fragments with signal at an anchor apex.", false, true);
+    registerDoubleOption_("calibration:strict_min_correlation", "<r>", 0.9, "Stage 1: mean pairwise fragment correlation "
+                          "at an anchor apex.", false, true);
+    registerDoubleOption_("calibration:strict_min_cosine", "<c>", 0.85, "Stage 1: cosine of sqrt(apex) vs sqrt(library) "
+                          "intensities.", false, true);
+    registerIntOption_("calibration:min_fragments", "<n>", 4, "Stage 2: fragments with signal at an anchor apex.", false, true);
     registerDoubleOption_("calibration:min_correlation", "<r>", 0.8, "Stage 2: mean pairwise fragment correlation "
-                          "at an anchor apex (stage 1 uses 0.9).", false, true);
+                          "at an anchor apex.", false, true);
     registerDoubleOption_("calibration:min_cosine", "<c>", 0.75, "Stage 2: cosine of sqrt(apex) vs sqrt(library) "
-                          "intensities at an anchor apex (stage 1 uses 0.85).", false, true);
+                          "intensities at an anchor apex.", false, true);
+    registerIntOption_("calibration:half_window_cycles", "<n>", 4, "Co-elution window around a candidate apex (+- cycles).", false, true);
+    registerIntOption_("calibration:candidates", "<n>", 5, "Local maxima of the summed fragment trace tried per precursor.", false, true);
+    registerIntOption_("calibration:mode_bins", "<n>", 20, "Library-RT bins of the initial RT curve (run-RT mode per bin).", false, true);
+    registerDoubleOption_("calibration:mode_bandwidth", "<s>", 15.0, "Half width (s) of the window that finds the run-RT mode "
+                          "per bin; anchors farther than 4 x this from the mode curve are dropped.", false, true);
+    registerDoubleOption_("calibration:min_window", "<s>", 30.0, "Smallest stage-2 RT search half width (s); the width is "
+                          "max(4 sigma of the stage-1 fit, this).", false, true);
     registerDoubleOption_("calibration:lowess_span", "<f>", 0.15, "LOWESS span of the RT model.", false, true);
+    registerIntOption_("calibration:rejection_rounds", "<n>", 3, "Refits of the RT model, each dropping anchors beyond "
+                       "max(3 sigma, calibration:min_reject).", false, true);
+    registerDoubleOption_("calibration:min_reject", "<s>", 3.0, "Smallest rejection distance (s) of the RT refits.", false, true);
     registerDoubleOption_("mz_offset", "<ppm>", 0.0, "Fragment mass correction (ppm added to the target).", false);
     registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 mass correction (ppm added to the target).", false);
-    registerStringOption_("aggregation", "<mode>", "sum", "Combine centroids within tolerance: sum (OpenSWATH) "
-                          "or max (DIA-NN).", false);
+    registerStringOption_("aggregation", "<mode>", "max", "Combine centroids within tolerance: max (default, as DIA-NN) "
+                          "or sum (as OpenSWATH).", false);
     setValidStrings_("aggregation", {"sum", "max"});
     registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (raw values; times on axes lane -2) "
                           "or interpolated linearly onto the global cycle axis (cycles).", false);
@@ -262,7 +287,9 @@ protected:
       // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
       // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
       // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
-      const auto panel_size = static_cast<std::uint64_t>(std::max(1, getIntOption_("calibration:panel")));
+      const auto panel_size = static_cast<std::uint64_t>(getIntOption_("calibration:panel") > 0
+          ? getIntOption_("calibration:panel")
+          : std::max(1.0, getDoubleOption_("calibration:panel_fraction") * static_cast<double>(library.rows())));
       const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
       const int panel_threads = std::max(4, threads - ingest_threads);
       panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads] {
@@ -303,11 +330,31 @@ protected:
                       << ODIA::stageClock().wall - t_wait0.wall << " s)" << mem() << std::endl;
       const ODIA::Library* cal_lib = &panel_lib;
       ODIA::CalibrationOptions copt;
-      copt.panel = static_cast<std::size_t>(getIntOption_("calibration:panel"));
+      // The absolute panel size (calibration:panel, else panel_fraction of the whole library): the panel library
+      // above already holds only ~2x that many rows, so calibrate() must not apply the fraction again.
+      copt.panel = static_cast<std::size_t>(getIntOption_("calibration:panel") > 0
+          ? getIntOption_("calibration:panel")
+          : std::max(1.0, getDoubleOption_("calibration:panel_fraction") * static_cast<double>(library.rows())));
+      copt.panel_fraction = getDoubleOption_("calibration:panel_fraction");
       copt.search_ppm = getDoubleOption_("calibration:search_ppm");
+      copt.search_narrow_factor = getDoubleOption_("calibration:search_factor");
+      copt.search_rounds = getIntOption_("calibration:search_rounds");
+      copt.accuracy_sigma = getDoubleOption_("calibration:accuracy_sigma");
+      copt.min_relative_intensity = getDoubleOption_("calibration:min_relative_intensity");
+      copt.strict_min_fragments = getIntOption_("calibration:strict_min_fragments");
+      copt.strict_min_correlation = getDoubleOption_("calibration:strict_min_correlation");
+      copt.strict_min_cosine = getDoubleOption_("calibration:strict_min_cosine");
+      copt.min_fragments = getIntOption_("calibration:min_fragments");
       copt.min_correlation = getDoubleOption_("calibration:min_correlation");
       copt.min_library_cosine = getDoubleOption_("calibration:min_cosine");
+      copt.half_window_cycles = getIntOption_("calibration:half_window_cycles");
+      copt.candidates = getIntOption_("calibration:candidates");
+      copt.mode_bins = getIntOption_("calibration:mode_bins");
+      copt.mode_bandwidth_s = getDoubleOption_("calibration:mode_bandwidth");
+      copt.min_window_s = getDoubleOption_("calibration:min_window");
       copt.lowess_span = getDoubleOption_("calibration:lowess_span");
+      copt.rejection_rounds = getIntOption_("calibration:rejection_rounds");
+      copt.min_reject_s = getDoubleOption_("calibration:min_reject");
       copt.threads = threads;
       cal = ODIA::calibrate(*cal_lib, grid, copt);
       releaseFreedMemory();   // the per-window calibration tiles (up to ~0.5 GiB) go back before extraction
@@ -318,7 +365,8 @@ protected:
                       << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; MS2 offset "
                       << cal->ms2_offset_ppm << " ppm (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
                       << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
-                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm; " << fmt(cal->time) << std::endl;
+                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
+                      << cal->ms2_search_ppm << " / +-" << cal->ms1_search_ppm << " ppm); " << fmt(cal->time) << std::endl;
       if (!getStringOption_("out_calibration").empty()) { ODIA::writeAnchors(getStringOption_("out_calibration"), *cal_lib, *cal); }
     }
     ODIA::RtMap rt_map;
@@ -336,13 +384,13 @@ protected:
     eopt.ms1_ppm = getDoubleOption_("mz_tol_ms1");
     if (eopt.ms2_ppm <= 0.0)
     {
-      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol 0 (measured MS2 accuracy) needs -mass_calibration auto." << std::endl; return ILLEGAL_PARAMETERS; }
+      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol 0 (measured MS2 accuracy) needs -mass_calibration auto; with it off, give -mz_tol <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms2_ppm = cal->ms2_accuracy_ppm;
       OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (measured)" << std::endl;
     }
     if (eopt.ms1_ppm <= 0.0)
     {
-      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol_ms1 0 (measured MS1 accuracy) needs -mass_calibration auto." << std::endl; return ILLEGAL_PARAMETERS; }
+      if (!cal) { OPENMS_LOG_ERROR << "-mz_tol_ms1 0 (measured MS1 accuracy, the default) needs -mass_calibration auto; with it off, give -mz_tol_ms1 <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
       OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (measured)" << std::endl;
     }
@@ -487,6 +535,8 @@ protected:
            << ", \"ms1_offset_ppm\": " << cal->ms1_offset_ppm << ", \"ms1_sigma_ppm\": " << cal->ms1_sigma_ppm
            << ", \"ms2_accuracy_ppm\": " << cal->ms2_accuracy_ppm << ", \"ms1_accuracy_ppm\": " << cal->ms1_accuracy_ppm
            << ", \"strict_mass_anchors\": " << cal->strict_mass_anchors
+           << ", \"ms2_search_ppm\": " << cal->ms2_search_ppm << ", \"ms1_search_ppm\": " << cal->ms1_search_ppm
+           << ", \"search_rounds\": " << cal->search_rounds
            << ", \"time\": " << json(cal->time) << "},\n";
       }
       js << "  \"peak_rss_gib\": " << peakRssGiB() << "\n"
