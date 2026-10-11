@@ -47,6 +47,7 @@ namespace ODIA
     {
       const double mz = lib.precursor_mz[p];
       const double rt = rt_map_(lib.library_rt[p]);
+      if (!(rt == rt)) { ++plan.without_window; continue; }   // NaN RT: no window, and it would break the sort below
       std::int64_t best = -1;
       double best_dist = std::numeric_limits<double>::infinity();
       bool any = false;
@@ -245,6 +246,7 @@ namespace ODIA
       r.rt_center = static_cast<float>(as.rt_center);
       r.cycle_begin = static_cast<std::uint32_t>(lo);
       r.cycles = static_cast<std::uint32_t>(hi > lo ? hi - lo : 0);
+      if (lib.fragmentsOf(p) > 65535) { throw std::runtime_error("precursor " + std::string(lib.precursor_id[p]) + " has more than 65535 fragments"); }
       r.fragments = static_cast<std::uint16_t>(lib.fragmentsOf(p));
       r.isotopes = static_cast<std::uint8_t>(n_iso);
       const auto rec = static_cast<std::uint32_t>(out.records.size());

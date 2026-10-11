@@ -38,9 +38,9 @@ build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes \
 # predicted RT in library units: also fit the RT map from the run
 build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode auto -threads 64 -out traces.parquet
 
-# or with external anchors / a fixed mass correction
+# or with external anchors / a fixed mass correction and fixed tolerances
 build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode anchors -rt_anchors anchors.tsv \
-  -mz_offset -2.5 -mz_offset_ms1 0.5 -threads 64 -out traces.parquet
+  -mass_calibration off -mz_offset -2.5 -mz_offset_ms1 0.5 -mz_tol 6 -mz_tol_ms1 2.5 -threads 64 -out traces.parquet
 ```
 
 - Input: centroided mzML (parsed in parallel chunks), mzPeak `.mzpeak` (partitioned parallel read; MS1 must be
@@ -54,15 +54,17 @@ build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode anchors -rt_a
   robust width of the apex mass errors of the calibration anchors); `-mass_calibration auto` (default) measures
   the offsets, `-mz_offset*` set them; `-aggregation max` (default) or `sum` (OpenSWATH); `-ms1_isotopes` (default 2);
   `-ms1_isotope_spacing unit` reproduces OpenSWATH's charge-independent isotope positions.
-- Output: traces Parquet (one row per trace on the global cycle axis, intensity as float32 blob or
-  `-encoding log8`), `<out>.axes.parquet` (global axis, exact acquisition times), optional long TSV.
+- Output: traces Parquet (one row per trace; MS2 rows on the global cycle axis, MS1 rows on the MS1 scan axis;
+  intensity as float32 blob or `-encoding log8`), `<out>.axes.parquet` (both axes, exact acquisition times),
+  optional long TSV.
 
 ```python
 import numpy as np, pyarrow.parquet as pq
 t = pq.read_table("traces.parquet").to_pandas()
 axes = pq.read_table("traces.axes.parquet").to_pandas()
 cycle_rt = axes[axes.lane == -1].sort_values("cycle").rt.to_numpy()
-row = t.iloc[0]; y = np.frombuffer(row.intensity, "<f4"); rt = cycle_rt[row.cycle_begin:row.cycle_begin + len(y)]
+row = t[t.ms_level == 2].iloc[0]   # MS1 rows index axes[axes.lane == -2] instead
+y = np.frombuffer(row.intensity, "<f4"); rt = cycle_rt[row.cycle_begin:row.cycle_begin + len(y)]
 ```
 
 ## Layout

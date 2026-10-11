@@ -37,6 +37,18 @@
 - **Nearest-window assignment** assumes non-overlapping isolation windows; overlapping or staggered schemes untested.
 - **Generality:** validate on a second instrument (a ProteoBench timsTOF DIA module).
 
+## Open: from the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md)
+- Panel sampling (`keep_every`) only for compact Parquet libraries; TSV/TraML/PQP load the whole library for the panel.
+- A precursor whose MS2 cycle range is empty gets no MS1 trace either (MS1-only extraction at the run's edges).
+- `TraceWriter` removes every `part-*` file in the output directory before writing.
+- `RecyclingPool::ReleaseUnused` leaves the per-thread caches (threads x 2 MiB) mapped; `putLarge_` can overshoot
+  the cache cap by one block per thread.
+- Error exits leak the in-flight unit's trace blocks (process ends anyway); `tryCommit_` erases a `loaded_` node
+  the caller's range-for is bound to (safe only because it returns immediately).
+- Tie order of centroids equal at 1e-5 Th differs between the fast and the OpenMS mzML parser (matters for `sum`
+  in the last float bit only).
+- Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
+
 ## Open
 - Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).

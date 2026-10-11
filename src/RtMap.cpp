@@ -50,9 +50,28 @@ namespace ODIA
     if (!in) { throw std::runtime_error("cannot open " + filename); }
     std::vector<std::pair<double, double>> points;
     std::string line;
+    int used_col = -1;
     while (std::getline(in, line))
     {
       if (line.empty() || line[0] == '#') { continue; }
+      if (used_col < 0 && line.rfind("library_rt", 0) == 0)
+      {
+        // our -out_calibration header: remember where `used` is, so rejected anchors are not refitted
+        std::size_t col = 0;
+        for (std::size_t b = 0; b <= line.size(); ++col)
+        {
+          const std::size_t e = std::min(line.find('\t', b), line.size());
+          if (line.compare(b, e - b, "used") == 0) { used_col = static_cast<int>(col); }
+          b = e + 1;
+        }
+        continue;
+      }
+      if (used_col >= 0)
+      {
+        std::size_t b = 0;
+        for (int col = 0; col < used_col && b < line.size(); ++col) { b = line.find('\t', b) + 1; }
+        if (b < line.size() && line[b] == '0') { continue; }
+      }
       const auto sep = line.find_first_of("\t,; ");
       if (sep == std::string::npos) { continue; }
       double x = 0, y = 0;

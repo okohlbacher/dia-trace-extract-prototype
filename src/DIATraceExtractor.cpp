@@ -98,7 +98,15 @@ namespace
   std::string escape(const std::string& s)
   {
     std::string o;
-    for (char c : s) { if (c == '"' || c == '\\') { o += '\\'; } o += c; }
+    for (char c : s)
+    {
+      if (c == '"' || c == '\\') { o += '\\'; o += c; }
+      else if (c == '\n') { o += "\\n"; }
+      else if (c == '\t') { o += "\\t"; }
+      else if (c == '\r') { o += "\\r"; }
+      else if (static_cast<unsigned char>(c) < 0x20) { o += '?'; }
+      else { o += c; }
+    }
     return o;
   }
 }
@@ -188,6 +196,19 @@ protected:
     registerIntOption_("calibration:rejection_rounds", "<n>", 3, "Refits of the RT model, each dropping anchors beyond "
                        "max(3 sigma, calibration:min_reject).", false, true);
     registerDoubleOption_("calibration:min_reject", "<s>", 3.0, "Smallest rejection distance (s) of the RT refits.", false, true);
+    setMinFloat_("calibration:panel_fraction", 1e-6); setMaxFloat_("calibration:panel_fraction", 1.0);
+    setMinFloat_("calibration:search_ppm", 0.1); setMinFloat_("calibration:search_factor", 1.0);
+    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.1);
+    setMinFloat_("calibration:min_relative_intensity", 0.0); setMaxFloat_("calibration:min_relative_intensity", 1.0);
+    setMinInt_("calibration:strict_min_fragments", 1); setMinInt_("calibration:min_fragments", 1);
+    for (const char* o : {"calibration:strict_min_correlation", "calibration:strict_min_cosine", "calibration:min_correlation", "calibration:min_cosine"})
+    {
+      setMinFloat_(o, -1.0); setMaxFloat_(o, 1.0);
+    }
+    setMinInt_("calibration:half_window_cycles", 1); setMinInt_("calibration:candidates", 1); setMinInt_("calibration:mode_bins", 1);
+    setMinFloat_("calibration:mode_bandwidth", 0.01); setMinFloat_("calibration:min_window", 0.0);
+    setMinFloat_("calibration:lowess_span", 0.01); setMaxFloat_("calibration:lowess_span", 1.0);
+    setMinInt_("calibration:rejection_rounds", 0); setMinFloat_("calibration:min_reject", 0.0);
     registerDoubleOption_("mz_offset", "<ppm>", 0.0, "Fragment mass correction (ppm added to the target).", false);
     registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 mass correction (ppm added to the target).", false);
     registerStringOption_("aggregation", "<mode>", "max", "Combine centroids within tolerance: max (default, as DIA-NN) "
@@ -198,6 +219,7 @@ protected:
     setValidStrings_("ms1_axis", {"scans", "cycles"});
     registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotopes after the monoisotope (-1 disables MS1).", false);
     setMinInt_("ms1_isotopes", -1);
+    setMaxInt_("ms1_isotopes", 200);
     registerStringOption_("ms1_isotope_spacing", "<mode>", "charge", "MS1 isotope k at mz + k*1.00336/z (charge) "
                           "or at mz + k*1.00336 regardless of charge (unit; what OpenSWATH extracts).", false);
     setValidStrings_("ms1_isotope_spacing", {"charge", "unit"});
@@ -208,6 +230,7 @@ protected:
                           "per point, log-spaced below the per-trace maximum).", false);
     setValidStrings_("encoding", {"float32", "log8"});
     registerDoubleOption_("log8_decades", "<n>", 6.0, "Dynamic range of the log8 encoding (decades).", false, true);
+    setMinFloat_("log8_decades", 0.1);
     registerFlag_("expand_rt", "Also write the RT list per trace row (convenience; larger file).");
     registerFlag_("skip_empty", "Do not write traces that are all zero.");
     registerIntOption_("ingest_threads", "<n>", 0, "Threads for the mzML ingest (parallel chunk parsing; 1 = serial "
@@ -287,10 +310,12 @@ protected:
       // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
       // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
       // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
+      // Row count of the whole library: `library` is already restricted when -ids is given to a non-compact format.
+      const std::uint64_t all_rows = lopt.keep_ids.empty() ? library.rows() : ODIA::LibraryReader(lib_file, ODIA::LibraryLoadOptions{}).rows();
       const auto panel_size = static_cast<std::uint64_t>(getIntOption_("calibration:panel") > 0
           ? getIntOption_("calibration:panel")
-          : std::max(1.0, getDoubleOption_("calibration:panel_fraction") * static_cast<double>(library.rows())));
-      const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
+          : std::max(1.0, getDoubleOption_("calibration:panel_fraction") * static_cast<double>(all_rows)));
+      const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, all_rows / (2 * panel_size)));
       const int panel_threads = std::max(4, threads - ingest_threads);
       panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads] {
         const ODIA::StageTime t0 = ODIA::stageClock();
@@ -357,7 +382,7 @@ protected:
       copt.min_reject_s = getDoubleOption_("calibration:min_reject");
       copt.threads = threads;
       try { cal = ODIA::calibrate(*cal_lib, grid, copt); }
-      catch (const std::runtime_error& e)
+      catch (const std::exception& e)
       {
         // Too few anchors (a small file, a library with no peptides in the run). Without a measured RT map or
         // measured tolerances there is nothing to extract with; with explicit ones, go on uncorrected.
@@ -397,16 +422,18 @@ protected:
     {
       if (!cal) { OPENMS_LOG_ERROR << "-mz_tol 0 (measured MS2 accuracy) needs -mass_calibration auto; with it off, give -mz_tol <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms2_ppm = cal->ms2_accuracy_ppm;
+      if (eopt.ms2_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS2 accuracy could not be measured (too few apex centroids); give -mz_tol <ppm>." << std::endl; return INPUT_FILE_CORRUPT; }
       OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (measured)" << std::endl;
     }
     if (eopt.ms1_ppm <= 0.0)
     {
       if (!cal) { OPENMS_LOG_ERROR << "-mz_tol_ms1 0 (measured MS1 accuracy, the default) needs -mass_calibration auto; with it off, give -mz_tol_ms1 <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
+      if (eopt.ms1_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS1 accuracy could not be measured (too few MS1 centroids); give -mz_tol_ms1 <ppm>." << std::endl; return INPUT_FILE_CORRUPT; }
       OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (measured)" << std::endl;
     }
-    eopt.ms2_ppm_offset = cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
-    eopt.ms1_ppm_offset = cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
+    eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
+    eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
     eopt.rt_half_window = getDoubleOption_("rt_window");
     eopt.aggregate_sum = getStringOption_("aggregation") == "sum";
     eopt.extract_ms1 = getIntOption_("ms1_isotopes") >= 0;
@@ -505,6 +532,7 @@ protected:
     if (!stats_file.empty())
     {
       std::ofstream js(stats_file);
+      if (!js) { OPENMS_LOG_ERROR << "cannot write " << stats_file << std::endl; return CANNOT_WRITE_OUTPUT_FILE; }
       js << std::setprecision(10) << "{\n"
          << "  \"input\": \"" << escape(in) << "\",\n"
          << "  \"library\": \"" << escape(lib_file) << "\",\n"

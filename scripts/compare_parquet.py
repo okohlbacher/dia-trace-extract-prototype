@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""Exit 0 iff two DIATraceExtractor Parquet files hold identical tables."""
-import sys, pyarrow.parquet as pq
-a, b = pq.read_table(sys.argv[1]), pq.read_table(sys.argv[2])
-print("rows", a.num_rows, b.num_rows, "identical:", a.equals(b))
-sys.exit(0 if a.equals(b) else 1)
+"""Exit 0 iff two DIATraceExtractor outputs (files or part directories) are byte-identical and hold identical tables."""
+import hashlib, os, sys, pyarrow.parquet as pq
+def files(p): return sorted(os.path.join(p, f) for f in os.listdir(p)) if os.path.isdir(p) else [p]
+def digest(p):
+    h = hashlib.sha256()
+    for f in files(p): h.update(open(f, "rb").read())
+    return h.hexdigest()
+a, b = sys.argv[1], sys.argv[2]
+ta, tb = pq.read_table(a), pq.read_table(b)
+same_bytes, same_table = digest(a) == digest(b), ta.equals(tb)
+print("rows", ta.num_rows, tb.num_rows, "identical table:", same_table, "identical bytes:", same_bytes)
+sys.exit(0 if same_bytes and same_table else 1)

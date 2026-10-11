@@ -27,6 +27,7 @@ namespace ODIA
     prof::Counter* c_make = tag && prof::enabled() ? &prof::counter(std::string(tag) + ".make") : nullptr;
     prof::Counter* c_commit = c_make ? &prof::counter(std::string(tag) + ".commit") : nullptr;
     prof::Counter* c_wait = c_make ? &prof::counter(std::string(tag) + ".ahead_wait") : nullptr;
+    ahead = std::max<std::size_t>(ahead, 1);   // 0 would make the worker holding `next` wait for itself
     using Result = decltype(make(std::size_t{0}));
     std::mutex mtx;
     std::condition_variable cv;

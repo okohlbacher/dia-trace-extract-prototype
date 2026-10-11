@@ -272,7 +272,8 @@ namespace ODIA
           const MzPeak::SpectrumMetadata& md = s.metadata();
           Decoded& d = meta[i];
           d.index = static_cast<std::uint32_t>(i);
-          d.rt = md.retention_time.value_or(0.0);   // seconds (the reader converts from the file's minutes)
+          if (!md.retention_time) { throw std::runtime_error("mzPeak: spectrum " + std::to_string(i) + " has no retention time"); }
+          d.rt = *md.retention_time;   // seconds (the reader converts from the file's minutes)
           d.ms_level = md.ms_level.value_or(0);
           if (d.ms_level >= 2 && !md.precursors.empty())
           {
@@ -534,6 +535,7 @@ namespace ODIA
           chunk += "</spectrumList>" + end_of_run;
           OpenMS::MzMLFile mzml;
           mzml.getOptions().setSkipXMLChecks(true);
+          mzml.getOptions().setPrecursorMZSelectedIon(false);   // window = isolation target, as in the fast parser
           OpenMS::PeakMap part;
           mzml.loadBuffer(chunk, part);
           if (part.size() != first[c + 1] - first[c]) { throw std::runtime_error("mzML chunk spectrum count mismatch"); }
@@ -652,7 +654,9 @@ namespace ODIA
       std::error_code ec;
       const std::uint64_t bytes = std::filesystem::file_size(filename, ec);
       const std::uint64_t est = ec ? (std::uint64_t(1) << 32) : bytes;
-      g.pool = std::make_unique<PeakPool>(std::max<std::uint64_t>(est / 2, std::uint64_t(1) << 26)
+      // Virtual only (MAP_NORESERVE): file bytes of peaks for mzML (plain base64 needs >= 8 bytes per peak; zlib'd
+      // arrays rarely beat 2:1), four times that for compressed formats; a run that exceeds it fails cleanly.
+      g.pool = std::make_unique<PeakPool>(std::max<std::uint64_t>(est, std::uint64_t(1) << 26)
                                           * (hasExtension(filename, ".mzml") ? 1 : 4));
     }
     Router router(g);
@@ -661,7 +665,9 @@ namespace ODIA
     {
       omp_set_num_threads(std::max(1, decode_threads));
       OpenMS::MSExperiment exp;
-      OpenMS::FileHandler().loadExperiment(filename, exp, {OpenMS::FileTypes::RAW});
+      OpenMS::FileHandler fh;
+      fh.getOptions().setPrecursorMZSelectedIon(false);
+      fh.loadExperiment(filename, exp, {OpenMS::FileTypes::RAW});
       exp.sortSpectra(false);
       std::uint32_t index = 0;
       for (auto& s : exp.getSpectra()) { router.route(decode(s, index++)); }
@@ -692,6 +698,7 @@ namespace ODIA
         {
           OpenMS::MzMLFile file;
           file.getOptions().setSkipXMLChecks(true);
+          file.getOptions().setPrecursorMZSelectedIon(false);
           OpenMS::MSDataTransformingConsumer consumer;
           std::vector<Decoded> batch;
           std::uint32_t index = 0;
@@ -745,6 +752,10 @@ namespace ODIA
     {
       prof::Scope sc(prof::counter("ingest.4_router_finish(wall)"));
       router.finish();
+      if (!std::is_sorted(g.cycle_rt.begin(), g.cycle_rt.end()))
+      {
+        throw std::runtime_error("run: the MS2 spectra are not in acquisition-time order (the grid needs an ascending cycle axis)");
+      }
     }
 
     // Every lane reads the pool.

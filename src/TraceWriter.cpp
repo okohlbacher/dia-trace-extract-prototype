@@ -385,7 +385,7 @@ namespace ODIA
     }
     else
     {
-      if (!e.tsv.empty()) { std::fwrite(e.tsv.data(), 1, e.tsv.size(), tsv_); }
+      if (!e.tsv.empty() && std::fwrite(e.tsv.data(), 1, e.tsv.size(), tsv_) != e.tsv.size()) { throw std::runtime_error("TSV write failed"); }
       tsv_busy_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
     // Rows and points are counted once per unit: on its Parquet part, or on the TSV without Parquet.
@@ -413,6 +413,6 @@ namespace ODIA
     }
     for (auto& t : closers) { t.join(); }
     for (auto& e : errors) { if (e) { std::rethrow_exception(e); } }
-    if (tsv_) { std::fclose(tsv_); tsv_ = nullptr; }
+    if (tsv_) { const bool ok = std::fclose(tsv_) == 0; tsv_ = nullptr; if (!ok) { throw std::runtime_error("TSV close failed"); } }
   }
 }

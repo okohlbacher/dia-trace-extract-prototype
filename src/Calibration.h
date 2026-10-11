@@ -48,6 +48,7 @@ namespace ODIA
     std::uint32_t precursor = 0;
     double library_rt = 0, run_rt = 0;   ///< run_rt = global cycle time of the apex (s)
     std::uint32_t apex_cycle = 0;
+    std::uint8_t fragments = 0;          ///< fragments with signal at the apex
     float correlation = 0, cosine = 0;
     float residual = 0;                  ///< run_rt - map(library_rt) after the final fit
     bool used = false;                   ///< survived outlier rejection

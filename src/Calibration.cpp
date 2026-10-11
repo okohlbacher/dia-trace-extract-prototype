@@ -5,6 +5,7 @@
 #include "Profile.h"
 
 #include <algorithm>
+#include <mutex>
 #include <cstdlib>
 #include <omp.h>
 #include <cstring>
@@ -64,7 +65,7 @@ namespace ODIA
     MassModel massModel(const std::vector<std::pair<double, double>>& v, double k)
     {
       MassModel m;
-      if (v.empty()) { return m; }
+      if (v.size() < 50) { return m; }   // too few centroids to measure a width: accuracy 0 = not measured
       std::vector<double> x;
       x.reserve(v.size());
       for (const auto& [val, w] : v) { x.push_back(val); }
@@ -193,6 +194,7 @@ namespace ODIA
           best_score = score;
           out.accepted = true;
           out.anchor = {p, lib.library_rt[p], g.cycle_rt[c], static_cast<std::uint32_t>(c),
+                        static_cast<std::uint8_t>(std::min<std::size_t>(present.size(), 255)),
                         static_cast<float>(corr), static_cast<float>(cosine), 0.0f, false};
         }
       }
@@ -312,12 +314,37 @@ namespace ODIA
         ~TileBuffer() { if (p) { ::munmap(p, bytes); } }
       };
       std::vector<TileBuffer> buffers(static_cast<std::size_t>(threads));
-#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
-      for (std::ptrdiff_t k = 0; k < static_cast<std::ptrdiff_t>(W); ++k)
+      // Big windows are done in batches so a tile stays <= 256 MiB (members x fragments x cycles x 4 B).
+      struct Job { std::size_t window, begin, end; };
+      std::vector<Job> jobs;
+      const std::size_t max_rows = (std::size_t{256} << 20) / sizeof(float) / std::max<std::size_t>(C, 1);
+      for (std::size_t w : order)
       {
-        const std::size_t w = order[static_cast<std::size_t>(k)];
         const auto& members = by_window[w];
-        if (members.empty()) { continue; }
+        for (std::size_t b = 0; b < members.size();)
+        {
+          std::size_t e = b, rows = 0;
+          while (e < members.size())
+          {
+            const std::size_t F = std::min<std::size_t>(lib.fragmentsOf(panel[members[e]]), static_cast<std::size_t>(opt.top_fragments));
+            if (rows + F > max_rows && e > b) { break; }
+            rows += F;
+            ++e;
+          }
+          jobs.push_back({w, b, e});
+          b = e;
+        }
+      }
+      std::exception_ptr error;
+      std::mutex error_mtx;
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+      for (std::ptrdiff_t k = 0; k < static_cast<std::ptrdiff_t>(jobs.size()); ++k)
+      {
+        try
+        {
+        const Job& job = jobs[static_cast<std::size_t>(k)];
+        const std::size_t w = job.window;
+        const std::vector<std::size_t> members(by_window[w].begin() + job.begin, by_window[w].begin() + job.end);
         prof::Scope sc(c_win);
         const auto& lane = g.windows[w];
         struct Bound { MzFixed lo, hi; std::uint32_t row; };   // row = trace row in `tiles`
@@ -364,9 +391,20 @@ namespace ODIA
             for (std::size_t f = 0; f < Fs[m]; ++f) { sum[c] += tile[f * C + c]; }
           }
           PanelResult x = scoreTile(lib, g, opt, panel[members[m]], lane, Fs[m], bounds[m], tile, sum.data(), 0, C, crit, ms);
-          if (x.accepted) { found[w].emplace_back(members[m], std::move(x)); }
+          if (x.accepted)
+          {
+            std::lock_guard lock(error_mtx);
+            found[w].emplace_back(members[m], std::move(x));
+          }
+        }
+        }
+        catch (...)
+        {
+          std::lock_guard lock(error_mtx);
+          if (!error) { error = std::current_exception(); }
         }
       }
+      if (error) { std::rethrow_exception(error); }
       std::vector<std::pair<std::size_t, PanelResult>> flat;
       for (auto& v : found) { for (auto& x : v) { flat.push_back(std::move(x)); } }
       std::sort(flat.begin(), flat.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -434,6 +472,7 @@ namespace ODIA
         modes.emplace_back(pts[(lo + hi) / 2].first, y[best]);
       }
       std::vector<std::pair<double, double>> kept;
+      if (modes.empty()) { return kept; }
       for (const auto& [x, y] : pts)
       {
         // linear interpolation through the bin modes (constant beyond the ends)
@@ -519,14 +558,15 @@ namespace ODIA
     }
     std::vector<Anchor> a1;
     for (const auto& x : stage1) { a1.push_back(x.anchor); }
-    // Bins need a handful of anchors each; with few anchors (small panel or library) the mode filter is skipped.
+    // Bins need a handful of anchors each (fewer bins with few anchors).
     const int bins = std::max(1, std::min(opt.mode_bins, static_cast<int>(a1.size() / 10)));
     const auto kept = modeFilter(a1, bins, opt.mode_bandwidth_s, 4 * opt.mode_bandwidth_s);
-    const bool filter = kept.size() >= 20;
-    for (auto& a : a1)
+    if (kept.size() < 20)
     {
-      a.used = !filter || std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt));
+      throw std::runtime_error("calibration: only " + std::to_string(kept.size()) + " of " + std::to_string(a1.size()) +
+                               " stage-1 anchors agree on an RT curve; supply -rt_anchors instead");
     }
+    for (auto& a : a1) { a.used = std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt)); }
     double sigma1 = 0;
     RtMap map1 = robustFit(a1, opt, sigma1);
     res.stage1_used = static_cast<std::size_t>(std::count_if(a1.begin(), a1.end(), [](const Anchor& a) { return a.used; }));
@@ -540,7 +580,7 @@ namespace ODIA
     const auto errors = [&](const std::vector<PanelResult>& results, const std::vector<Anchor>& anchors,
                             std::vector<std::pair<double, double>>& ms2, std::vector<std::pair<double, double>>& ms1) {
       const auto strict_ok = [&](const Anchor& a) {
-        return a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
+        return a.fragments >= opt.strict_min_fragments && a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
       };
       std::size_t n_strict = 0;
       for (const auto& a : anchors) { n_strict += a.used && strict_ok(a); }
@@ -572,7 +612,9 @@ namespace ODIA
     {
       const MassSearch next{m2.offset, narrowed(m2, search.ms2_width), m1.offset, narrowed(m1, search.ms1_width)};
       if (round > 0 && std::fabs(next.ms2_width - search.ms2_width) < 0.25 * search.ms2_width
-          && std::fabs(next.ms1_width - search.ms1_width) < 0.25 * search.ms1_width) { break; }
+          && std::fabs(next.ms1_width - search.ms1_width) < 0.25 * search.ms1_width
+          && std::fabs(next.ms2_offset - search.ms2_offset) < 0.25 * search.ms2_width
+          && std::fabs(next.ms1_offset - search.ms1_offset) < 0.25 * search.ms1_width) { break; }
       search = next;
       ++res.search_rounds;
       stage2 = examinePanel(lib, grid, opt, panel, relaxed, search, &map1, res.stage2_window_s);

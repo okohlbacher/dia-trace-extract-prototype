@@ -122,7 +122,7 @@ namespace ODIA
       {
         const auto acc = attribute(tag, "accession");
         if (acc == "MS:1000511") { double v = 0; if (!toDouble(attribute(tag, "value"), v)) { return false; } out.ms_level = static_cast<int>(v); have_level = true; }
-        else if (acc == "MS:1000016")
+        else if (acc == "MS:1000016" && !have_time)
         {
           if (!toDouble(attribute(tag, "value"), out.rt)) { return false; }
           const auto unit = attribute(tag, "unitAccession");
@@ -130,10 +130,10 @@ namespace ODIA
           else if (unit != "UO:0000010") { return false; }   // unknown or missing unit: let OpenMS decide
           have_time = true;
         }
-        else if (acc == "MS:1000827") { if (!toDouble(attribute(tag, "value"), out.target)) { return false; } have_target = true; }
+        else if (acc == "MS:1000827" && !have_target) { if (!toDouble(attribute(tag, "value"), out.target)) { return false; } have_target = true; }
         else if (acc == "MS:1000828") { if (!toDouble(attribute(tag, "value"), lower_off)) { return false; } }
         else if (acc == "MS:1000829") { if (!toDouble(attribute(tag, "value"), upper_off)) { return false; } }
-        else if (acc == "MS:1000744") { if (!toDouble(attribute(tag, "value"), selected)) { return false; } have_selected = true; }
+        else if (acc == "MS:1000744" && !have_selected) { if (!toDouble(attribute(tag, "value"), selected)) { return false; } have_selected = true; }
         else if (in_array)
         {
           if (acc == "MS:1000514") { current.kind = 1; }
@@ -196,7 +196,8 @@ namespace ODIA
                             std::vector<unsigned char>& scratch, std::vector<unsigned char>& scratch2)
   {
     was_unsorted = false;
-    if (n == 0) { return true; }
+    if (n == 0) { return arrays.binary[0].empty() && arrays.binary[1].empty(); }   // declared empty but carrying data: not ours
+    if (n > (std::size_t{1} << 28)) { return false; }                                 // absurd declared length
     for (int k = 0; k < 2; ++k)
     {
       if (!base64(arrays.binary[k], scratch)) { return false; }

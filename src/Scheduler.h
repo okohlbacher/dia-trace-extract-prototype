@@ -108,6 +108,12 @@ namespace ODIA
     SchedulerOptions opt_;
     SchedulerStats stats_;
 
+    // recycling pools (own mutex: deleters may run while the scheduler lock is held). Declared before the
+    // queues that hold Parts and Items, so they still exist when those are destroyed on an error exit.
+    std::mutex recycle_mtx_;
+    std::vector<std::unique_ptr<Part>> free_parts_;
+    std::vector<std::unique_ptr<TraceBlock>> free_blocks_;
+
     std::mutex mtx_;
     std::condition_variable cv_, cv_mon_;
     std::map<std::size_t, std::shared_ptr<Part>> loaded_;
@@ -124,9 +130,5 @@ namespace ODIA
     std::exception_ptr error_;
     std::vector<std::size_t> sinks_scratch_;
 
-    // recycling pools (own mutex: deleters may run while the scheduler lock is held)
-    std::mutex recycle_mtx_;
-    std::vector<std::unique_ptr<Part>> free_parts_;
-    std::vector<std::unique_ptr<TraceBlock>> free_blocks_;
   };
 }
