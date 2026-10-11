@@ -310,6 +310,7 @@ protected:
       copt.lowess_span = getDoubleOption_("calibration:lowess_span");
       copt.threads = threads;
       cal = ODIA::calibrate(*cal_lib, grid, copt);
+      releaseFreedMemory();   // the per-window calibration tiles (up to ~0.5 GiB) go back before extraction
       OPENMS_LOG_INFO << "Calibration: stage 1 " << cal->stage1_anchors << " anchors (" << cal->stage1_used
                       << " used), stage 2 window +-" << cal->stage2_window_s << " s; "
                       << cal->anchors.size() << " anchors from a panel of " << cal->panel << ", "

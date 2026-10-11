@@ -2,8 +2,15 @@
 #include "Calibration.h"
 
 #include "Pipeline.h"
+#include "Profile.h"
 
 #include <algorithm>
+#include <omp.h>
+#include <cstring>
+#include <new>
+#include <memory>
+#include <functional>
+#include <sys/mman.h>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -124,43 +131,29 @@ namespace ODIA
       double min_correlation, min_cosine;
     };
 
-    /// Look for a co-eluting apex of panel precursor p within global cycles [c_lo, c_hi).
-    PanelResult examine(const Library& lib, const RunGrid& g, const CalibrationOptions& opt, std::uint32_t p,
-                        std::size_t c_lo, std::size_t c_hi, const Criteria& crit)
+    /// Fragment m/z bounds of panel precursor p (the wide search window).
+    std::vector<std::pair<MzFixed, MzFixed>> fragmentBounds(const Library& lib, const CalibrationOptions& opt, std::uint32_t p,
+                                                            std::size_t F)
     {
-      PanelResult out;
-      const std::size_t w = nearestWindow(g, lib.precursor_mz[p]);
-      if (w == g.windows.size()) { return out; }
-      const auto& lane = g.windows[w];
-      const std::size_t C = g.cycles();
-      const std::uint32_t f0 = lib.fragment_begin[p];
-      const std::size_t F = std::min<std::size_t>(lib.fragmentsOf(p), static_cast<std::size_t>(opt.top_fragments));
-      if (F < static_cast<std::size_t>(crit.min_fragments) || c_hi <= c_lo) { return out; }
-
-      // Whole-run traces of the top fragments (max centroid within the wide window).
-      std::vector<float> tile(F * C, 0.0f);
       std::vector<std::pair<MzFixed, MzFixed>> bounds(F);
+      const std::uint32_t f0 = lib.fragment_begin[p];
       for (std::size_t f = 0; f < F; ++f)
       {
         const double t = lib.fragment_mz[f0 + f], tol = t * opt.search_ppm * 1e-6;
         bounds[f] = {toFixed(t - tol), toFixed(t + tol)};
       }
-      std::vector<float> sum(C, 0.0f);
-      // Gather the range plus the co-elution margin so windows at its edges are complete.
-      const std::size_t g_lo = c_lo > static_cast<std::size_t>(opt.half_window_cycles) ? c_lo - opt.half_window_cycles : 0;
-      const std::size_t g_hi = std::min(C, c_hi + opt.half_window_cycles);
-      for (std::size_t c = g_lo; c < g_hi; ++c)
-      {
-        const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
-        if (a == b) { continue; }
-        for (std::size_t f = 0; f < F; ++f)
-        {
-          const float v = maxPeak(lane.peaks, a, b, bounds[f].first, bounds[f].second).first;
-          tile[f * C + c] = v;
-          sum[c] += v;
-        }
-      }
+      return bounds;
+    }
 
+    /// Score the candidate apexes of panel precursor p from its fragment traces `tile` (F x C, row-major) and their
+    /// per-cycle sum (summed in fragment order); apex mass errors and the MS1 error of an accepted anchor.
+    PanelResult scoreTile(const Library& lib, const RunGrid& g, const CalibrationOptions& opt, std::uint32_t p,
+                          const WindowLane& lane, std::size_t F, const std::vector<std::pair<MzFixed, MzFixed>>& bounds,
+                          const float* tile, const float* sum, std::size_t c_lo, std::size_t c_hi, const Criteria& crit)
+    {
+      PanelResult out;
+      const std::size_t C = g.cycles();
+      const std::uint32_t f0 = lib.fragment_begin[p];
       // Candidate apexes: the largest local maxima of the summed trace, at least 2 windows apart.
       const int hw = opt.half_window_cycles;
       std::vector<std::size_t> maxima;
@@ -248,16 +241,160 @@ namespace ODIA
       }
       return out;
     }
+
+    /// Look for a co-eluting apex of panel precursor p within global cycles [c_lo, c_hi).
+    PanelResult examine(const Library& lib, const RunGrid& g, const CalibrationOptions& opt, std::uint32_t p,
+                        std::size_t c_lo, std::size_t c_hi, const Criteria& crit)
+    {
+      PanelResult out;
+      const std::size_t w = nearestWindow(g, lib.precursor_mz[p]);
+      if (w == g.windows.size()) { return out; }
+      const auto& lane = g.windows[w];
+      const std::size_t C = g.cycles();
+      const std::size_t F = std::min<std::size_t>(lib.fragmentsOf(p), static_cast<std::size_t>(opt.top_fragments));
+      if (F < static_cast<std::size_t>(crit.min_fragments) || c_hi <= c_lo) { return out; }
+
+      // Whole-run traces of the top fragments (max centroid within the wide window).
+      std::vector<float> tile(F * C, 0.0f);
+      const auto bounds = fragmentBounds(lib, opt, p, F);
+      std::vector<float> sum(C, 0.0f);
+      // Gather the range plus the co-elution margin so windows at its edges are complete.
+      const std::size_t g_lo = c_lo > static_cast<std::size_t>(opt.half_window_cycles) ? c_lo - opt.half_window_cycles : 0;
+      const std::size_t g_hi = std::min(C, c_hi + opt.half_window_cycles);
+      for (std::size_t c = g_lo; c < g_hi; ++c)
+      {
+        const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
+        if (a == b) { continue; }
+        for (std::size_t f = 0; f < F; ++f)
+        {
+          const float v = maxPeak(lane.peaks, a, b, bounds[f].first, bounds[f].second).first;
+          tile[f * C + c] = v;
+          sum[c] += v;
+        }
+      }
+
+      return scoreTile(lib, g, opt, p, lane, F, bounds, tile.data(), sum.data(), c_lo, c_hi, crit);
+    }
   }
 
   namespace
   {
+    /// Stage 1 (whole run): one task per isolation window. The fragment bounds of all panel precursors in the window
+    /// are sorted by lower edge, so in every spectrum one forward pointer serves all of them (a merge join instead of a
+    /// binary search per fragment and spectrum). Same traces as examine() (same maximum, same tie rule, sums in
+    /// fragment order), hence the same anchors; results in panel order.
+    std::vector<PanelResult> examineWholeRun(const Library& lib, const RunGrid& g, const CalibrationOptions& opt,
+                                             const std::vector<std::uint32_t>& panel, const Criteria& crit)
+    {
+      static prof::Counter& c_win = prof::counter("calib.stage1_window");
+      const std::size_t C = g.cycles(), W = g.windows.size();
+      std::vector<std::vector<std::size_t>> by_window(W);   // panel positions per window
+      for (std::size_t i = 0; i < panel.size(); ++i)
+      {
+        const std::size_t w = nearestWindow(g, lib.precursor_mz[panel[i]]);
+        const std::size_t F = std::min<std::size_t>(lib.fragmentsOf(panel[i]), static_cast<std::size_t>(opt.top_fragments));
+        if (w < W && F >= static_cast<std::size_t>(crit.min_fragments) && C > 0) { by_window[w].push_back(i); }
+      }
+      // Largest windows first (load balance); results are put back into panel order below.
+      std::vector<std::size_t> order(W);
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return by_window[a].size() > by_window[b].size(); });
+      std::vector<std::vector<std::pair<std::size_t, PanelResult>>> found(W);
+      const int threads = std::max(1, std::min(opt.threads, 32));   // a moderate pool: per-window work is memory-bound
+      // One reusable trace buffer per thread, mapped directly rather than malloc'd: freeing a multi-MB malloc'd block
+      // raises glibc's dynamic mmap threshold, after which the extraction's large buffers stay in the arenas (+0.5 GiB
+      // peak RSS measured); a fresh mapping per window instead pays ~4.7 GB of zero-page faults. Unmapped on return.
+      struct TileBuffer
+      {
+        void* p = nullptr;
+        std::size_t bytes = 0;
+        float* get(std::size_t n)
+        {
+          const std::size_t need = std::max<std::size_t>(n, 1) * sizeof(float);
+          if (need > bytes)
+          {
+            if (p) { ::munmap(p, bytes); }
+            bytes = std::max(need, 2 * bytes);
+            p = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (p == MAP_FAILED) { p = nullptr; bytes = 0; throw std::bad_alloc(); }
+          }
+          std::memset(p, 0, n * sizeof(float));
+          return static_cast<float*>(p);
+        }
+        ~TileBuffer() { if (p) { ::munmap(p, bytes); } }
+      };
+      std::vector<TileBuffer> buffers(static_cast<std::size_t>(threads));
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+      for (std::ptrdiff_t k = 0; k < static_cast<std::ptrdiff_t>(W); ++k)
+      {
+        const std::size_t w = order[static_cast<std::size_t>(k)];
+        const auto& members = by_window[w];
+        if (members.empty()) { continue; }
+        prof::Scope sc(c_win);
+        const auto& lane = g.windows[w];
+        struct Bound { MzFixed lo, hi; std::uint32_t row; };   // row = trace row in `tiles`
+        std::vector<Bound> bs;
+        std::vector<std::size_t> first_row(members.size() + 1, 0), Fs(members.size());
+        std::vector<std::vector<std::pair<MzFixed, MzFixed>>> bounds(members.size());
+        for (std::size_t m = 0; m < members.size(); ++m)
+        {
+          const std::uint32_t p = panel[members[m]];
+          Fs[m] = std::min<std::size_t>(lib.fragmentsOf(p), static_cast<std::size_t>(opt.top_fragments));
+          bounds[m] = fragmentBounds(lib, opt, p, Fs[m]);
+          first_row[m + 1] = first_row[m] + Fs[m];
+          for (std::size_t f = 0; f < Fs[m]; ++f)
+          {
+            bs.push_back({bounds[m][f].first, bounds[m][f].second, static_cast<std::uint32_t>(first_row[m] + f)});
+          }
+        }
+        std::sort(bs.begin(), bs.end(), [](const Bound& a, const Bound& b) { return a.lo < b.lo || (a.lo == b.lo && a.row < b.row); });
+        float* tiles = buffers[static_cast<std::size_t>(omp_get_thread_num())].get(first_row.back() * C);
+        const MzFixed* mz = lane.peaks.mz;
+        const float* in = lane.peaks.intensity;
+        for (std::size_t c = 0; c < C; ++c)
+        {
+          const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
+          if (a == b) { continue; }
+          std::size_t i = a;
+          for (const Bound& bd : bs)
+          {
+            while (i < b && mz[i] < bd.lo) { ++i; }   // = lower_bound(lo): lo is non-decreasing over bs
+            if (i == b) { break; }                     // all later bounds start at or above the last peak
+            float best = 0.0f;
+            for (std::size_t j = i; j < b && mz[j] <= bd.hi; ++j) { if (in[j] > best) { best = in[j]; } }
+            tiles[bd.row * C + c] = best;
+          }
+        }
+        std::vector<float> sum(C);
+        for (std::size_t m = 0; m < members.size(); ++m)
+        {
+          const float* tile = tiles + first_row[m] * C;
+          std::fill(sum.begin(), sum.end(), 0.0f);
+          for (std::size_t c = 0; c < C; ++c)
+          {
+            if (lane.peaks.cellBegin(c) == lane.peaks.cellEnd(c)) { continue; }
+            for (std::size_t f = 0; f < Fs[m]; ++f) { sum[c] += tile[f * C + c]; }
+          }
+          PanelResult x = scoreTile(lib, g, opt, panel[members[m]], lane, Fs[m], bounds[m], tile, sum.data(), 0, C, crit);
+          if (x.accepted) { found[w].emplace_back(members[m], std::move(x)); }
+        }
+      }
+      std::vector<std::pair<std::size_t, PanelResult>> flat;
+      for (auto& v : found) { for (auto& x : v) { flat.push_back(std::move(x)); } }
+      std::sort(flat.begin(), flat.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+      std::vector<PanelResult> all;
+      all.reserve(flat.size());
+      for (auto& x : flat) { all.push_back(std::move(x.second)); }
+      return all;
+    }
+
     /// Examine the panel in parallel; results are returned in panel order (deterministic).
     std::vector<PanelResult> examinePanel(const Library& lib, const RunGrid& g, const CalibrationOptions& opt,
                                           const std::vector<std::uint32_t>& panel, const Criteria& crit,
                                           const RtMap* prior, double window_s)
     {
       std::vector<PanelResult> all;
+      if (!prior) { return examineWholeRun(lib, g, opt, panel, crit); }
       constexpr std::size_t chunk = 256;
       const std::size_t units = (panel.size() + chunk - 1) / chunk;
       orderedParallel(

@@ -12,9 +12,12 @@
   time and the library-load memory peak (~4.3 GiB transient).
 
 ## Open
+- Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).
-- Run the entrapment library through the benchmark.
 - 50K shared library (Justin).
-- Per-peptide RT refinement (self-calibration is at the ceiling of predicted RTs: ~91% within ±60 s).
 - Optional compact-v2 library layout (uint32 m/z, uint16 intensity; docs/03).
 - Share results with the group.
+
+## Dropped
+- Per-peptide RT refinement: to be handled by library refinement (DIALibGen), not in the extractor.
+- DIA-NN exact-parity mode.
