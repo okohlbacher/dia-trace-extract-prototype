@@ -1,4 +1,4 @@
-# ODIA-V3 trace extraction: dossier (2026-10-10)
+# ODIA-V3 trace extraction: dossier (2026-10-11)
 
 **Goal.** Fast, memory-efficient extraction of DIA fragment and precursor traces (XICs) from a *predicted, recalibrated*
 library, exported as Parquet/TSV for comparison with DIA-NN and OpenSWATH. Scoring, FDR and PyProphet are out of scope.
@@ -163,6 +163,8 @@ scan-to-scan differences, so the earlier MS1 figures were somewhat flattering.
 | MS1-vs-fragment co-elution, run 01 / 02 | **0.886 / 0.889** | 0.880 / 0.895 | 0.826 / 0.802 | 0.840 / — |
 
 - Ours A now matches or beats DIA-NN on every shape metric.
+- Re-run on 2026-10-11 with the current binary (6 library × run combinations, `results/refined/summary_cbad9dd.md`):
+  every agreement figure above is reproduced exactly, since the trace output is byte-identical across all optimisations.
 - On run 02 the ±6 ppm MS2 window beats DIA-NN's ±8.3 ppm.
 
 ### 3.2 The remaining MS2 differences to DIA-NN, explained
@@ -194,83 +196,70 @@ Details are in [analysis/ms2_tail.md](analysis/ms2_tail.md); example traces in `
 
 ## 4. Performance
 
-Full tuned libraries, run 01, 64 threads, all precursors, top 6 fragments; old binary (whole library in memory) → current
-streaming binary:
+**Current binary** (6d26c49), run 01, 64 threads, full tuned libraries (all precursors, top 6 fragments), mzML on local
+`/scratch`, 2 runs each:
 
-| library | wall time | peak RSS | page faults |
+| library | total | calibration | extraction | peak RSS | traces |
+|---|---|---|---|---|---|
+| human, 3.49 M precursors | 5.9 s (8.5 s with the library cold on Ceph) | 0.5 s | 3.2 s | 3.8 GiB | 31.3 M |
+| entrapment, 7.0 M precursors | 8.6–9.0 s | 0.5 s | 5.7–6.0 s | 4.7 GiB | 63.0 M |
+
+**How we got here** (entrapment, full library, 64 threads):
+
+| step | total | peak RSS | what changed |
 |---|---|---|---|
-| human, 3.49 M precursors, 31.3 M traces | 15.3 → 13.3 s | 4.90 → 3.59 GiB | 4.07 → 2.42 M |
-| entrapment, 7.0 M precursors, 63.0 M traces | 25.7 → 21.0 s | 6.68 → 4.49 GiB | 6.41 → 2.68 M |
+| whole library in memory | 25.7 s | 6.7 GiB | baseline |
+| streamed library, central scheduler, buffer pools | 21.0 s | 4.5 GiB | library never resident; trace and Arrow buffers recycled |
+| merge join, bucket index, 32 output parts (e47b2e8) | 14.4–15.2 s | 4.7 GiB | one walk per spectrum; writer no longer the cap |
+| global peak pool (5b99dda) | 11.9–12.0 s | 4.4 GiB | parsers decode straight into one mmap'd pool; ingest 3.4 → 0.3 s |
+| Arrow pool per-thread cache, reserved builders, panel during ingest, parallel close (cbad9dd) | 10.1–10.4 s | 4.65 GiB | extraction CPU −20%; final drain 1.1 → 0.2 s |
+| calibration stage 1 as a per-window merge join (6d26c49) | 8.6–9.0 s | 4.7 GiB | calibration 1.8 → 0.5 s, identical anchors |
 
-What the current binary does:
+Every step was checked for byte-identical output (trace hash). Details: `docs/06-parallel-efficiency.md`,
+`docs/07-contention-diagnosis.md`.
+
+How the extraction works:
+- **Run grid.** All peaks of the run in one memory-mapped pool (m/z as uint32 at 1e-5 Th, intensity float32), indexed by
+  window and cycle; MS1 on its own scan axis.
 - **Library.** Streamed in parts; it is never resident as a whole.
-- **Trace buffers.** A pre-faulted pool of recycled 256 KiB blocks, freed as soon as each unit is encoded.
-- **Arrow and Parquet buffers.** A recycling allocator in size classes, which removed about 4 GiB of glibc arena retention.
-- **Scheduling.** One worker pool with four task classes (read, extract, encode, write), rebalanced at every task by pipeline
-  pressure. Typical split on the 7 M library: about 0.9 workers reading, 25 extracting, 7 encoding and 7.5 writing (writing is
-  capped at 8 output files).
+- **Scheduling.** One worker pool with four task classes (read, extract, encode, write), rebalanced at every task by
+  pipeline pressure; in-order issue and an ordered commit.
+- **Merge join.** A unit's precursors (one isolation window, sorted by RT) form a sliding range per spectrum; each spectrum's
+  centroids are walked once against the sorted fragment windows. A bucket index (~64 `uint16` per spectrum) skips m/z gaps.
+- **Output.** 32 Parquet parts written by their own tasks; buffers recycled per thread.
 - **Determinism.** Output is byte-identical for 1 and 64 threads.
 
-**Merge join, bucket index, 32 output parts** (current, full tuned libraries, run 01, 64 threads, all precursors and top 6
-fragments, MS1 on its scan axis; previous binary bbad38c → current):
-
-| library | extraction | total | CPU | peak RSS |
-|---|---|---|---|---|
-| human, 3.49 M precursors | 8.1 → 3.6 s | 15.1 → 10.3 s | 414 → 303 s | 3.81 → 3.82 GiB |
-| entrapment, 7.0 M precursors | 15.7 → 6.8 s | 22.6 → 14.4 s | 727 → 512 s | 4.67 → 4.70 GiB |
-
-How the extraction step works now:
-- **Merge join.** A unit's precursors (one isolation window, sorted by RT) have rising spectrum ranges, so the precursors active
-  in a spectrum form a sliding range. A sorted list of their fragment windows is kept up to date as precursors enter and leave
-  the range, and each spectrum's centroids are walked once against it.
-- **Bucket index.** About 64 `uint16` entries per spectrum, roughly 4% of the peak data, let the walk jump over m/z gaps.
-- **Result.** Identical traces; extraction CPU down 27–41%.
-- **What limited wall time.** Not the m/z search but the 8 serially written Parquet parts.
-  - 32 parts (the new default) remove that cap.
-  - Row groups shrink with the part count, so the writers' buffered rows stay constant (about 1 M) and memory does not grow.
-
-MS1 on its scan axis triples the MS1 points: 4.6 G against 3.1 G MS2 points; the output is 2.6 GB for the full 7 M library.
-
-**Runtime vs threads** (run 01, shared tuned library of 82,333 precursors with all fragments, one run per point, nearly idle
-node; `scripts/bench_threads.sh`, `results/threads/`):
+**Runtime vs threads** (run 01, shared tuned library of 82,333 precursors with all fragments, one run per point;
+`scripts/bench_threads.sh`, `results/threads_6d26c49/`; ours re-measured with 6d26c49, DIA-NN and OpenSWATH from
+`results/threads/`, unchanged binaries):
 
 ![Thread scaling](figures/thread_scaling.png)
 
 | threads | ours A | ours B | DIA-NN 1.7.12³ | OpenSwathWorkflow⁴ |
 |---|---|---|---|---|
-| 4 | 22.9 s / 2.1 GiB | 13.9 s / 2.1 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 12.7 s | 7.7 s | 59 s | 189 s |
-| 16 | 7.4 s | 5.1 s | 34 s | 183 s |
-| 32 | 5.9 s | 4.9 s | 26 s | 183 s |
-| 64 | 6.1 s / 2.9 GiB | 4.6 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 4 | 5.5 s / 2.4 GiB | 3.8 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 3.4 s | 2.4 s | 59 s | 189 s |
+| 16 | 2.3 s | 1.7 s | 34 s | 183 s |
+| 32 | 1.8 s | 1.4 s | 26 s | 183 s |
+| 64 | 1.8 s / 2.7 GiB | 1.4 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
 ³ DIA-NN can export traces only while it searches, so its time includes the search. ⁴ OpenSWATH's time includes its scoring.
+Ours A is now the recommended rule (MS2 ±6 ppm, MS1 measured); before it used DIA-NN's tolerances (22.9 s at 4 threads,
+6.1 s at 64, on the older binary).
 
-- **Ours A vs ours B.** Ours A pays for its self-calibration of the mass offsets (panel and calibration).
-- **Fast mzML ingest** (commit bbad38c, measured after this benchmark). Spectra are parsed straight from the file bytes, and the
-  vendor userParams are skipped. Output is byte-identical to the OpenMS parser.
-
-  | ingest, run 01 | before | after |
-  |---|---|---|
-  | CPU time | 79 s | 17 s |
-  | wall time | 3.9 s | 3.3 s |
-  | page faults | 1.55 M | 0.85 M |
-  | peak memory | 2.93 GiB | 2.40 GiB |
-- **Speed.** Ours is 4–5× faster than DIA-NN at every thread count, and 30–40× faster than OpenSWATH at 16+ threads.
-- **Where ours stops scaling.** Beyond 16–32 threads, ingesting the 5.8 GB mzML dominates our runtime; mzPeak input should help
-  there.
+- **Speed.** Ours A is 14–21× faster than DIA-NN and 40–100× faster than OpenSWATH at every thread count.
+- **Ours A vs ours B.** A pays 0.4–1.7 s for its self-calibration (panel load and calibration).
+- **Scaling.** Ours flattens beyond 32 threads at this size (1.8 s, of which ingest 0.3 s, panel and calibration ~1 s);
+  on the full 7 M library extraction still scales to 64 threads.
 - **OpenSWATH stops scaling at 8 threads,** while its memory grows to 14 GiB.
+- **mzPeak input** goes through the OpenMS mzPeak reader (only); its serial `transform()` takes ~8 s for run 01, against
+  0.3 s for our mzML path. Requests to the reader agent: `docs/08-mzpeak-reader-handoff-2.md`.
 
 ## 5. Open items
 
-- **Done (bbad38c):**
-  - recommended rule adopted;
-  - MS2 offset bias fixed;
-  - MS1 on its own scan axis;
-  - fast mzML ingest;
-  - the MS2 tail explained;
-  - Parquet footer metadata (`odia.*`) now actually written.
-- **Optional:** a DIA-NN exact-parity mode that reads DIA-NN's quadratic m/z correction from its `--verbose 3` log, emulated in
-  float32.
-- **mzPeak input:** waiting on the converter (vendor-centroided MS1) and on a parallel reader (handoffs `04`, `05`).
-- **Ingest beyond 32 threads** is now limited by reading the file (3.3 s wall, 17 s CPU).
+- **mzPeak:** waiting on the OpenMS mzPeak reader (0.17.2 support, empty spectra, a partitioned parallel API; handoffs `04`,
+  `08`) and on vendor-centroided MS1 from the converter (handoff `05`).
+- **DIALibGen PR #4:** after the merge, regenerate the libraries and re-measure library loading.
+- **50K shared library (Justin).**
+- **Lower priority:** scheduling beyond 64 threads; a compact-v2 library layout.
+- **Dropped:** per-peptide RT refinement (to be handled by library refinement in DIALibGen); a DIA-NN exact-parity mode.
