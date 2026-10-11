@@ -153,3 +153,21 @@ spectrum straight into the pool. On the fork-written point-layout file the inges
 to other threads was measured (8.3–9.2 s) and dropped. Output identical (6c405adf555fb43f). Further gains
 need the partitioned, thread-safe read API requested in docs/04 (R2). Two reader issues remain: files from
 mzpeak-convert 0.17.2 still read 0 spectra, and the 23 empty MS2 spectra are dropped (292,860 vs 292,883).
+
+## Follow-up: pool front end, builder reserve, panel overlap, parallel close (2026-10-11)
+
+1. Arrow pool: per-thread free-list cache (2 MiB, `ODIA_POOL_THREAD_CACHE_MB`) and statistics batched per thread
+   (folded every ~1 MiB), no shared atomics or locks on the hot path.
+2. Encoder: all Arrow builders reserved from the block up front (rows, string and blob bytes).
+3. Calibration panel loaded on its own thread from the start, concurrent with ingest.
+4. Parquet shards closed in parallel (final drain 1.11 s → 0.14–0.19 s).
+
+| 64 threads, run 01, tuned full library, 3 interleaved repeats | 5b99dda | items 1–4 |
+|---|---|---|
+| total wall | 12.48–12.68 s | 10.10–10.37 s |
+| extraction | 7.12–7.37 s, 410–428 s CPU | 5.89–6.04 s, 335–344 s CPU |
+| peak RSS | 4.65–4.69 GB | 4.99–5.00 GB |
+
+Items 1+2 alone: extraction 7.12–7.28 → 5.77–5.96 s. Thread cache sweep (1 run each): 0 MiB 6.09 s / 4.91 GB,
+2 MiB 5.95 s / 5.00 GB, 8 MiB 5.90 s / 5.35 GB. Output hash identical in all runs (4e709db2d3eede3e). The panel
+(1.1 s) is now only partly hidden: ingest is 0.3 s, so calibration waits ~0.8–0.9 s for it. Calibration itself is 1.9 s.

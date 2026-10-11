@@ -23,6 +23,7 @@
 #include <malloc.h>
 #include <unistd.h>
 #include <vector>
+#include <future>
 #include <optional>
 #include <omp.h>
 #include <fstream>
@@ -250,8 +251,37 @@ protected:
                     << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem() << std::endl;
     if (library.rows() == 0) { OPENMS_LOG_ERROR << "Library is empty." << std::endl; return INPUT_FILE_EMPTY; }
 
-    // --- run grid
+    // --- calibration panel (needs only the library), loaded on its own thread while the run is ingested
+    const std::string mode = getStringOption_("rt_mode");
+    const bool mass_auto = getStringOption_("mass_calibration") == "auto";
     const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : std::min(threads, 32);
+    struct Panel { ODIA::Library lib; std::size_t keep_every = 1; ODIA::StageTime time; };
+    std::future<Panel> panel_future;
+    if (mode == "auto" || mass_auto)
+    {
+      // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
+      // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
+      // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
+      const auto panel_size = static_cast<std::uint64_t>(std::max(1, getIntOption_("calibration:panel")));
+      const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
+      const int panel_threads = std::max(4, threads - ingest_threads);
+      panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads] {
+        const ODIA::StageTime t0 = ODIA::stageClock();
+        omp_set_num_threads(panel_threads);
+        Panel p;
+        ODIA::LibraryLoadOptions popt;
+        popt.top_fragments = 6;
+        popt.targets_only = true;
+        popt.threads = panel_threads;
+        popt.keep_every = keep_every;
+        ODIA::LibraryReader(lib_file, popt).readAll(p.lib, panel_threads);   // streamed: never the whole library
+        p.keep_every = keep_every;
+        p.time = ODIA::stageClock() - t0;
+        return p;
+      });
+    }
+
+    // --- run grid
     ODIA::RunGrid grid = ODIA::RunGrid::load(in, ingest_threads);
     omp_set_num_threads(threads);
     releaseFreedMemory();
@@ -262,25 +292,15 @@ protected:
                     << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << mem() << std::endl;
 
     // --- calibration (from the run itself) and RT map
-    const std::string mode = getStringOption_("rt_mode");
-    const bool mass_auto = getStringOption_("mass_calibration") == "auto";
     std::optional<ODIA::CalibrationResult> cal;
-    if (mode == "auto" || mass_auto)
+    if (panel_future.valid())
     {
-      // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
-      // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
-      // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
-      const ODIA::StageTime t_panel0 = ODIA::stageClock();
-      ODIA::Library panel_lib;
-      ODIA::LibraryLoadOptions popt;
-      popt.top_fragments = 6;
-      popt.targets_only = true;
-      popt.threads = threads;
-      const auto panel_size = static_cast<std::uint64_t>(std::max(1, getIntOption_("calibration:panel")));
-      popt.keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, library.rows() / (2 * panel_size)));
-      ODIA::LibraryReader(lib_file, popt).readAll(panel_lib, threads);   // streamed: never the whole library
-      OPENMS_LOG_INFO << "Calibration panel library: every " << popt.keep_every << ". row, " << panel_lib.size()
-                      << " targets; " << fmt(ODIA::stageClock() - t_panel0) << mem() << std::endl;
+      const ODIA::StageTime t_wait0 = ODIA::stageClock();
+      Panel panel = panel_future.get();
+      ODIA::Library& panel_lib = panel.lib;
+      OPENMS_LOG_INFO << "Calibration panel library: every " << panel.keep_every << ". row, " << panel_lib.size()
+                      << " targets; " << fmt(panel.time) << " (concurrent with ingest; waited "
+                      << ODIA::stageClock().wall - t_wait0.wall << " s)" << mem() << std::endl;
       const ODIA::Library* cal_lib = &panel_lib;
       ODIA::CalibrationOptions copt;
       copt.panel = static_cast<std::size_t>(getIntOption_("calibration:panel"));

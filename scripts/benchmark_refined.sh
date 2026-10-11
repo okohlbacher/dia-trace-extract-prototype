@@ -7,7 +7,7 @@
 #      DIA-NN 1.7.12 (round 2, --xic), DIATraceExtractor (-rt_mode minutes), OpenSwathWorkflow (RT in s, no iRT)
 #   4. compare_traces.py: extractor A (recommended rule) and P (DIA-NN parity) vs DIA-NN and OpenSWATH; B (OpenSWATH rules)
 #      vs OpenSWATH; DIA-NN vs OpenSWATH
-# Usage: [LIB=predicted.parquet] [RECAL=refine|tuned] [DIALIBGEN=path] benchmark_refined.sh 01|02|03 [threads]
+# Usage: [X=extractor] [MZML_DIR=dir] [LIB=predicted.parquet] [RECAL=refine|tuned] [DIALIBGEN=path] benchmark_refined.sh 01|02|03 [threads]
 #   LIB defaults to the human 0.11.0 library; outputs are keyed by the library name.
 #   RECAL=refine (default): LIB is a raw prediction; step 2 writes DIA-NN's observed RT (DIALibGen refine).
 #   RECAL=tuned: LIB is already recalibrated (DIALibGen -mode tune, RT in run minutes); step 2 only keeps
@@ -16,7 +16,7 @@
 set -euo pipefail
 RUN=$1; THREADS=${2:-64}
 P=/ceph/ibmi/abi/oliver/Claude/ODIA-V3
-MZML=$P/benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_$RUN.mzML
+MZML=${MZML_DIR:-$P/benchmark-data/DIA-astral-entrapment/mzML}/LFQ_Astral_DIA_15min_50ng_Human_$RUN.mzML
 PRED=${LIB:-$P/library/human_UP000005640_astral_nce25.parquet}
 NAME=$(basename $PRED .parquet)
 PRED_DIANN=$P/library/diann17/$NAME.tsv   # UniprotID + ProteinName columns (DIA-NN protein groups)
@@ -25,7 +25,7 @@ if [ $RECAL = tuned ]; then PRED_RT_SCALE=1; REF=$P/library/refined/${NAME}_ids_
 else PRED_RT_SCALE=100; REF=$P/library/refined/${NAME}_shared_run$RUN.parquet; fi
 DLG=${DIALIBGEN:-$P/tools/DIALibGen/build/DIALibGen}
 PY=$P/tools/pyenv/bin/python
-X=$P/build/DIATraceExtractor
+X=${X:-$P/build/DIATraceExtractor}
 B=$P/OpenMS/OpenMS-build/bin
 DIANN=$P/tools/DiaNN-1.7.12/diann-1.7.12-xicfix
 D1=$P/results/diann17/$NAME/run$RUN    # round 1 (predicted library)

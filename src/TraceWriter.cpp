@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <chrono>
+#include <exception>
+#include <thread>
 #include <cmath>
 #include <stdexcept>
 
@@ -234,6 +236,35 @@ namespace ODIA
     std::vector<std::uint8_t> qbuf;
     std::vector<float> rtbuf;
     const double decades = cfg_.log8_decades;
+    if (pq)
+    {
+      // Size every builder once from the block (upper bounds: skipped empty traces only leave slack), so
+      // appends never reallocate: no grow-copy-free cycles through the pool, no fresh pages mid-encode.
+      std::int64_t rows = 0, pts = 0, id_bytes = 0, seq_bytes = 0;
+      for (const auto& r : block.records)
+      {
+        const std::int64_t n = static_cast<std::int64_t>(r.fragments) + r.isotopes;
+        rows += n;
+        pts += static_cast<std::int64_t>(r.fragments) * r.cycles + static_cast<std::int64_t>(r.isotopes) * r.ms1_count;
+        id_bytes += n * static_cast<std::int64_t>(lib.precursor_id[r.precursor].size());
+        seq_bytes += n * static_cast<std::int64_t>(lib.modified_sequence[r.precursor].size());
+      }
+      for (arrow::ArrayBuilder* b : std::initializer_list<arrow::ArrayBuilder*>{&run, &id, &seq, &ann, &ftype, &charge, &decoy, &level,
+                                                                               &ford, &fz, &floss, &pmz, &tmz, &window, &iso, &libint,
+                                                                               &rtc, &scale, &cycle_begin})
+      {
+        check(b->Reserve(rows));
+      }
+      check(run.ReserveData(rows * static_cast<std::int64_t>(cfg_.run_name.size())));
+      check(id.ReserveData(id_bytes));
+      check(seq.ReserveData(seq_bytes));
+      check(ann.ReserveData(rows * 8));
+      check(ftype.ReserveData(rows));
+      if (cfg_.log8) { check(inten_q.Reserve(rows)); check(inten_q.ReserveData(pts)); }
+      else { check(inten_f.Reserve(rows)); check(inten_f.ReserveData(pts * static_cast<std::int64_t>(sizeof(float)))); }
+      if (cfg_.expand_rt) { check(rtl.Reserve(rows)); check(rtl.ReserveData(pts * static_cast<std::int64_t>(sizeof(float)))); }
+    }
+
     char num[64];
 
     for (const auto& r : block.records)
@@ -373,11 +404,23 @@ namespace ODIA
   {
     if (closed_) { return; }
     closed_ = true;
-    for (auto& sh : shards_)
+    // Each shard flushes its last buffered row group and footer: independent, so in parallel.
+    std::vector<std::exception_ptr> errors(shards_.size());
+    std::vector<std::thread> closers;
+    closers.reserve(shards_.size());
+    for (std::size_t i = 0; i < shards_.size(); ++i)
     {
-      check(sh->writer->Close());
-      check(sh->out->Close());
+      closers.emplace_back([this, i, &errors] {
+        try
+        {
+          check(shards_[i]->writer->Close());
+          check(shards_[i]->out->Close());
+        }
+        catch (...) { errors[i] = std::current_exception(); }
+      });
     }
+    for (auto& t : closers) { t.join(); }
+    for (auto& e : errors) { if (e) { std::rethrow_exception(e); } }
     if (tsv_) { std::fclose(tsv_); tsv_ = nullptr; }
   }
 }

@@ -17,7 +17,10 @@ namespace ODIA
   /// 25% slack); a freed buffer goes on its class's LIFO free list and is handed out again (warm in
   /// cache and already faulted in). Growing a buffer within its class keeps it in place. Smaller
   /// buffers use aligned malloc. Up to `cache_bytes` of free buffers are kept; beyond that they are
-  /// unmapped. Used for every Arrow/Parquet allocation of the extraction (library decoding, trace
+  /// unmapped. Each thread first recycles through its own small cache (up to 2 MiB, ODIA_POOL_THREAD_CACHE_MB; 8 blocks per class,
+  /// blocks up to 1 MiB) without locks or shared atomics; statistics are batched per thread and folded
+  /// into the shared counters every ~1 MiB of net change, so the reported peak is exact to about
+  /// threads x 1 MiB. Used for every Arrow/Parquet allocation of the extraction (library decoding, trace
   /// encoding, Parquet writing): without it, glibc kept ~4 GiB of freed Arrow memory across the
   /// workers' arenas (5.5 GiB arena, 1.4 GiB in use, full 7 M-precursor run).
   class RecyclingPool : public arrow::MemoryPool
@@ -50,6 +53,10 @@ namespace ODIA
     uint8_t* takeLarge_(int c);
     void putLarge_(uint8_t* p, int c);
     void account_(int64_t delta);
+    struct Local;
+    Local* local_();
+    void flush_(Local& l);
+    friend struct Local;
 
     struct FreeList
     {
