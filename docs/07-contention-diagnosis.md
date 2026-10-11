@@ -131,3 +131,25 @@ python3 scripts/analyze_contention2.py results/contention2 results/contention2/a
 - `ODIA_PROFILE_TIMELINE=file`: a 100 ms timeline.
 - `ODIA_ALLOW_PTRACE=1`: lets gdb stack samples attach.
 - `ODIA_POOL_NO_ACCOUNT=1`: the H2 test.
+
+## Follow-up: global peak pool (2026-10-11)
+
+Parsers decode peaks straight into one `PeakPool` (mmap reservation; `claim(n)` is one atomic add); the
+lanes keep only begin/count per cell. Removes the per-spectrum vectors and the router copy.
+
+| 64 threads, run 01, tuned full library (3 interleaved repeats, unprofiled) | before (e47b2e8) | pool |
+|---|---|---|
+| total wall | 14.8–15.4 s | 11.9–12.0 s |
+| ingest (run grid) | 3.2–3.6 s | 0.27–0.33 s |
+| extraction | 6.86–7.37 s | 6.56–6.75 s |
+| peak RSS | 4.95 GB | 4.69 GB |
+
+Output byte-identical (hash f0ba8de676ec580c; ID library incl. TSV also identical). NUMA placement unchanged
+(≈ 3:1 node 0 : node 1 in both builds, `numastat -p`).
+
+**mzPeak path** (vendored OpenMS `MzPeakFile`, the only mzPeak reader used): the consumer now writes each
+spectrum straight into the pool. On the fork-written point-layout file the ingest is 8.0–8.3 s
+(was 8.2–8.3 s); our callback is 1.3 s of it, the reader's serial `transform()` the rest. Moving conversion
+to other threads was measured (8.3–9.2 s) and dropped. Output identical (6c405adf555fb43f). Further gains
+need the partitioned, thread-safe read API requested in docs/04 (R2). Two reader issues remain: files from
+mzpeak-convert 0.17.2 still read 0 spectra, and the 23 empty MS2 spectra are dropped (292,860 vs 292,883).

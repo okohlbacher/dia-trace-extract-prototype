@@ -80,15 +80,17 @@ namespace ODIA
     };
   }
 
-  bool parseSpectrumFast(std::string_view xml, GridSpectrum& out, std::vector<unsigned char>& scratch,
-                         std::vector<unsigned char>& scratch2)
+  bool parseSpectrumHeader(std::string_view xml, GridSpectrum& out, SpectrumArrays& arrays_out)
   {
+    arrays_out = SpectrumArrays{};
     out.ms_level = 0;
     out.rt = 0;
     out.target = out.lower = out.upper = 0;
     out.was_unsorted = false;
     out.mz.clear();
     out.intensity.clear();
+    out.n = 0;
+    out.in_pool = false;
 
     // <spectrum ... defaultArrayLength="n">
     const std::size_t head_end = xml.find('>');
@@ -177,17 +179,30 @@ namespace ODIA
       if (!have_target && have_selected) { out.target = selected; have_target = true; }
       if (have_target) { out.lower = out.target - lower_off; out.upper = out.target + upper_off; }
     }
+    out.n = static_cast<std::uint32_t>(n);
     if (n == 0) { return true; }
     if (n_arrays != 2 || arrays[0].kind == arrays[1].kind) { return false; }
-
-    out.mz.resize(n);
-    out.intensity.resize(n);
-    for (const Array& a : arrays)
+    for (int i = 0; i < 2; ++i)
     {
-      if (!base64(a.binary, scratch)) { return false; }
-      const std::size_t width = a.bits / 8, need = n * width;
+      arrays_out.binary[i] = arrays[i].binary;
+      arrays_out.kind[i] = arrays[i].kind;
+      arrays_out.bits[i] = arrays[i].bits;
+      arrays_out.zlib[i] = arrays[i].zlib;
+    }
+    return true;
+  }
+
+  bool decodeSpectrumArrays(const SpectrumArrays& arrays, std::size_t n, MzFixed* mz, float* intensity, bool& was_unsorted,
+                            std::vector<unsigned char>& scratch, std::vector<unsigned char>& scratch2)
+  {
+    was_unsorted = false;
+    if (n == 0) { return true; }
+    for (int k = 0; k < 2; ++k)
+    {
+      if (!base64(arrays.binary[k], scratch)) { return false; }
+      const std::size_t width = static_cast<std::size_t>(arrays.bits[k]) / 8, need = n * width;
       const unsigned char* bytes = scratch.data();
-      if (a.zlib)
+      if (arrays.zlib[k])
       {
         scratch2.resize(need);
         uLongf len = static_cast<uLongf>(need);
@@ -201,23 +216,33 @@ namespace ODIA
         double v;
         if (width == 8) { std::memcpy(&v, bytes + 8 * i, 8); }
         else { float f; std::memcpy(&f, bytes + 4 * i, 4); v = f; }
-        if (a.kind == 1) { out.mz[i] = toFixed(v); }
-        else { out.intensity[i] = static_cast<float>(v); }
+        if (arrays.kind[k] == 1) { mz[i] = toFixed(v); }
+        else { intensity[i] = static_cast<float>(v); }
       }
     }
-    // Ascending m/z (as OpenMS's sortByPosition would make it).
-    if (!std::is_sorted(out.mz.begin(), out.mz.end()))
+    // Ascending m/z (as OpenMS's sortByPosition would make it), in place.
+    if (!std::is_sorted(mz, mz + n))
     {
       std::vector<std::size_t> o(n);
       std::iota(o.begin(), o.end(), 0);
-      std::stable_sort(o.begin(), o.end(), [&](std::size_t a, std::size_t b) { return out.mz[a] < out.mz[b]; });
+      std::stable_sort(o.begin(), o.end(), [&](std::size_t a, std::size_t b) { return mz[a] < mz[b]; });
       std::vector<MzFixed> m(n);
       std::vector<float> in(n);
-      for (std::size_t i = 0; i < n; ++i) { m[i] = out.mz[o[i]]; in[i] = out.intensity[o[i]]; }
-      out.mz.swap(m);
-      out.intensity.swap(in);
-      out.was_unsorted = true;
+      for (std::size_t i = 0; i < n; ++i) { m[i] = mz[o[i]]; in[i] = intensity[o[i]]; }
+      std::copy(m.begin(), m.end(), mz);
+      std::copy(in.begin(), in.end(), intensity);
+      was_unsorted = true;
     }
     return true;
+  }
+
+  bool parseSpectrumFast(std::string_view xml, GridSpectrum& out, std::vector<unsigned char>& scratch,
+                         std::vector<unsigned char>& scratch2)
+  {
+    SpectrumArrays arrays;
+    if (!parseSpectrumHeader(xml, out, arrays)) { return false; }
+    out.mz.resize(out.n);
+    out.intensity.resize(out.n);
+    return decodeSpectrumArrays(arrays, out.n, out.mz.data(), out.intensity.data(), out.was_unsorted, scratch, scratch2);
   }
 }

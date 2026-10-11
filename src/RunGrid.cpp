@@ -12,6 +12,7 @@
 #include "mzpeak/MzPeakFile.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <string_view>
 #include <functional>
 #include <fstream>
@@ -28,6 +29,7 @@
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <thread>
 
@@ -80,6 +82,7 @@ namespace ODIA
         d.upper = p.getMZ() + p.getIsolationWindowUpperOffset();
       }
       if (!s.isSorted()) { s.sortByPosition(); d.was_unsorted = true; }
+      d.n = static_cast<std::uint32_t>(s.size());
       d.mz.resize(s.size());
       d.intensity.resize(s.size());
       for (std::size_t i = 0; i < s.size(); ++i)
@@ -88,13 +91,6 @@ namespace ODIA
         d.intensity[i] = s[i].getIntensity();
       }
       return d;
-    }
-
-    void append(PeakArena& a, const Decoded& d)
-    {
-      a.mz.insert(a.mz.end(), d.mz.begin(), d.mz.end());
-      a.intensity.insert(a.intensity.end(), d.intensity.begin(), d.intensity.end());
-      a.offset.push_back(a.mz.size());
     }
 
     /// Routes decoded spectra onto the grid. Single owner: runs on one thread.
@@ -107,18 +103,27 @@ namespace ODIA
       {
         ++g_.stats.spectra;
         if (d.was_unsorted) { ++g_.stats.unsorted_spectra; }
+        if (!d.in_pool && d.n > 0 && (d.ms_level == 1 || d.ms_level == 2))
+        {
+          // Parsers without a pool path (OpenMS fallback, .raw): copy the peaks into the pool here.
+          d.pool_begin = g_.pool->claim(d.n);
+          std::copy(d.mz.begin(), d.mz.end(), g_.pool->mz() + d.pool_begin);
+          std::copy(d.intensity.begin(), d.intensity.end(), g_.pool->intensity() + d.pool_begin);
+          std::vector<MzFixed>().swap(d.mz);
+          std::vector<float>().swap(d.intensity);
+        }
         if (d.ms_level == 1)
         {
           ++g_.stats.ms1_spectra;
-          g_.stats.ms1_peaks += d.mz.size();
-          append(g_.ms1.peaks, d);
+          g_.stats.ms1_peaks += d.n;
+          g_.ms1.peaks.push(d.n ? d.pool_begin : 0, d.n);
           g_.ms1.rt.push_back(d.rt);
           g_.ms1.spectrum.push_back(d.index);
           return;
         }
         if (d.ms_level != 2) { ++g_.stats.other_spectra; return; }
         ++g_.stats.ms2_spectra;
-        g_.stats.ms2_peaks += d.mz.size();
+        g_.stats.ms2_peaks += d.n;
 
         const std::size_t w = windowId_(d);
         if (w < seen_.size() && seen_[w])
@@ -130,7 +135,7 @@ namespace ODIA
         seen_[w] = true;
         cycle_rt_sum_ += d.rt;
         ++cycle_n_;
-        pending_.push_back({w, d.index, d.rt, std::move(d.mz), std::move(d.intensity)});
+        pending_.push_back({w, d.index, d.rt, d.n ? d.pool_begin : 0, d.n});
       }
 
       void finish()
@@ -157,8 +162,8 @@ namespace ODIA
         std::size_t window;
         std::uint32_t index;
         double rt;
-        std::vector<MzFixed> mz;
-        std::vector<float> intensity;
+        std::uint64_t begin;   // the spectrum's peaks in the pool
+        std::uint32_t n;
       };
 
       std::size_t windowId_(const Decoded& d)
@@ -183,7 +188,7 @@ namespace ODIA
       {
         while (lane.acquired_rt.size() < cycles)
         {
-          lane.peaks.offset.push_back(lane.peaks.mz.size());
+          lane.peaks.push(0, 0);
           lane.acquired_rt.push_back(std::numeric_limits<double>::quiet_NaN());
           lane.spectrum.push_back(std::numeric_limits<std::uint32_t>::max());
           ++g_.stats.missing_cells;
@@ -205,9 +210,7 @@ namespace ODIA
             ++g_.stats.duplicate_cells;
             continue;
           }
-          lane.peaks.mz.insert(lane.peaks.mz.end(), p.mz.begin(), p.mz.end());
-          lane.peaks.intensity.insert(lane.peaks.intensity.end(), p.intensity.begin(), p.intensity.end());
-          lane.peaks.offset.push_back(lane.peaks.mz.size());
+          lane.peaks.push(p.begin, p.n);   // the peaks stay where the parser wrote them
           lane.acquired_rt.push_back(p.rt);
           lane.spectrum.push_back(p.index);
         }
@@ -237,7 +240,7 @@ namespace ODIA
     /// Returns false (caller falls back to the streaming parser) for compressed files, unexpected
     /// layout (a comment/DOCTYPE inside the run, not exactly one spectrum list, a count attribute that
     /// does not match the spectra found, very few spectra) or a chunk that fails to parse.
-    bool loadChunked(const std::string& filename, int threads, const std::function<void(Decoded&&)>& route)
+    bool loadChunked(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)
     {
       using Size = std::size_t;
       std::ifstream in(filename, std::ios::binary);
@@ -386,14 +389,33 @@ namespace ODIA
           prof::Scope sc_parse(c_parse);
           if (fast)
           {
+            // 1. headers: metadata and peak counts of the chunk's spectra; 2. one pool range for the chunk;
+            // 3. decode every spectrum straight into its slot (written once, by this thread).
             std::vector<Decoded> out(first[c + 1] - first[c]);
+            thread_local std::vector<SpectrumArrays> arrays;
+            arrays.assign(out.size(), SpectrumArrays{});
             bool ok_fast = true;
+            std::uint64_t total = 0;
             for (Size k = first[c]; k < first[c + 1] && ok_fast; ++k)
             {
               const Size b = starts[k] - from, e = (k + 1 < first[c + 1] ? starts[k + 1] : to) - from;
               Decoded& d = out[k - first[c]];
               d.index = static_cast<std::uint32_t>(k);
-              ok_fast = parseSpectrumFast(std::string_view(raw).substr(b, e - b), d, s1, s2);
+              ok_fast = parseSpectrumHeader(std::string_view(raw).substr(b, e - b), d, arrays[k - first[c]]);
+              total += d.n;
+            }
+            if (ok_fast)
+            {
+              std::uint64_t at = pool.claim(total);
+              for (std::size_t i = 0; i < out.size() && ok_fast; ++i)
+              {
+                Decoded& d = out[i];
+                d.pool_begin = at;
+                d.in_pool = true;
+                ok_fast = decodeSpectrumArrays(arrays[i], d.n, pool.mz() + at, pool.intensity() + at, d.was_unsorted, s1, s2);
+                at += d.n;
+              }
+              // (on failure the claimed range stays unused and the chunk takes the OpenMS path below)
             }
             if (ok_fast) { fast_chunks.fetch_add(1, std::memory_order_relaxed); return out; }
           }
@@ -427,25 +449,61 @@ namespace ODIA
     }
   }
 
+  PeakPool::PeakPool(std::uint64_t capacity_peaks) : cap_(std::max<std::uint64_t>(capacity_peaks, 1))
+  {
+    // Virtual reservations only: pages are backed when first written (by the thread that decodes into them).
+    const int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+    void* m = ::mmap(nullptr, cap_ * sizeof(MzFixed), PROT_READ | PROT_WRITE, flags, -1, 0);
+    void* i = ::mmap(nullptr, cap_ * sizeof(float), PROT_READ | PROT_WRITE, flags, -1, 0);
+    if (m == MAP_FAILED || i == MAP_FAILED)
+    {
+      if (m != MAP_FAILED) { ::munmap(m, cap_ * sizeof(MzFixed)); }
+      if (i != MAP_FAILED) { ::munmap(i, cap_ * sizeof(float)); }
+      throw std::runtime_error("cannot reserve the peak pool (" + std::to_string(cap_) + " peaks)");
+    }
+    mz_ = static_cast<MzFixed*>(m);
+    in_ = static_cast<float*>(i);
+  }
+
+  PeakPool::~PeakPool()
+  {
+    if (mz_) { ::munmap(mz_, cap_ * sizeof(MzFixed)); }
+    if (in_) { ::munmap(in_, cap_ * sizeof(float)); }
+  }
+
+  std::uint64_t PeakPool::claim(std::uint64_t n)
+  {
+    const std::uint64_t at = used_.fetch_add(n, std::memory_order_relaxed);
+    if (at + n > cap_)
+    {
+      throw std::runtime_error("peak pool exhausted (" + std::to_string(cap_) + " peaks reserved); input denser than estimated");
+    }
+    return at;
+  }
+
   void PeakArena::buildIndex(std::uint32_t target_buckets)
   {
     buckets = 0;
     bucket_start.clear();
-    if (mz.empty() || target_buckets == 0) { return; }
+    if (target_buckets == 0 || cells() == 0 || mz == nullptr) { return; }
+    MzFixed lo = std::numeric_limits<MzFixed>::max(), hi = 0;
     for (std::size_t c = 0; c < cells(); ++c)
     {
-      if (offset[c + 1] - offset[c] >= 65535) { bucket_start.shrink_to_fit(); return; }
+      if (count[c] >= 65535) { return; }
+      if (count[c] == 0) { continue; }
+      lo = std::min(lo, mz[cellBegin(c)]);
+      hi = std::max(hi, mz[cellEnd(c) - 1]);
     }
-    const auto [lo_it, hi_it] = std::minmax_element(mz.begin(), mz.end());
-    bucket_base = *lo_it;
-    const std::uint64_t range = static_cast<std::uint64_t>(*hi_it) - bucket_base + 1;
+    if (hi < lo) { return; }
+    bucket_base = lo;
+    const std::uint64_t range = static_cast<std::uint64_t>(hi) - bucket_base + 1;
     bucket_shift = 0;
     while ((range >> bucket_shift) > target_buckets) { ++bucket_shift; }
     buckets = static_cast<std::uint32_t>(((range - 1) >> bucket_shift) + 1);
     bucket_start.assign(cells() * buckets, 0);
     for (std::size_t c = 0; c < cells(); ++c)
     {
-      const std::size_t a = offset[c], b = offset[c + 1];
+      const std::size_t a = cellBegin(c), b = cellEnd(c);
       std::uint16_t* row = bucket_start.data() + c * buckets;
       std::size_t i = a;
       for (std::uint32_t k = 0; k < buckets; ++k)
@@ -460,9 +518,9 @@ namespace ODIA
   std::size_t RunGrid::bytes() const
   {
     auto arena = [](const PeakArena& a) {
-      return a.offset.capacity() * 8 + a.mz.capacity() * 4 + a.intensity.capacity() * 4 + a.bucket_start.capacity() * 2;
+      return a.begin.capacity() * 8 + a.count.capacity() * 4 + a.bucket_start.capacity() * 2;
     };
-    std::size_t b = arena(ms1.peaks) + ms1.rt.capacity() * 8 + ms1.spectrum.capacity() * 4 + cycle_rt.capacity() * 8;
+    std::size_t b = (pool ? pool->size() * (sizeof(MzFixed) + sizeof(float)) : 0) + arena(ms1.peaks) + ms1.rt.capacity() * 8 + ms1.spectrum.capacity() * 4 + cycle_rt.capacity() * 8;
     for (const auto& w : windows) { b += arena(w.peaks) + w.acquired_rt.capacity() * 8 + w.spectrum.capacity() * 4; }
     return b;
   }
@@ -481,6 +539,15 @@ namespace ODIA
   {
     const StageTime t0 = stageClock();
     RunGrid g;
+    {
+      // Peak pool reservation (virtual): generous for the input; untouched pages cost nothing. An mzML peak
+      // takes >= ~8 base64 characters (uncompressed or zlib), so file bytes / 2 leaves ample headroom.
+      std::error_code ec;
+      const std::uint64_t bytes = std::filesystem::file_size(filename, ec);
+      const std::uint64_t est = ec ? (std::uint64_t(1) << 32) : bytes;
+      g.pool = std::make_unique<PeakPool>(std::max<std::uint64_t>(est / 2, std::uint64_t(1) << 26)
+                                          * (hasExtension(filename, ".mzml") ? 1 : 4));
+    }
     Router router(g);
 
     if (isRaw(filename))
@@ -494,16 +561,43 @@ namespace ODIA
     }
     else if (hasExtension(filename, ".mzpeak"))
     {
-      // mzPeak through the vendored OpenMS MzPeakFile reader, streamed spectrum by spectrum.
+      // mzPeak through the vendored OpenMS MzPeakFile reader (the only mzPeak reader we use), streamed spectrum
+      // by spectrum. Each spectrum goes straight into the pool (no intermediate vectors) and is routed as it
+      // arrives. The reader's transform() is serial and dominates (~85% of ingest); handing spectra to other
+      // threads for conversion was measured and gained nothing, so this stays on the reader's thread.
+      static prof::Counter& c_cb = prof::counter("ingest.mzpeak_callback");
       OpenMS::MzPeakFile file;
       OpenMS::MSDataTransformingConsumer consumer;
       std::uint32_t index = 0;
       std::uint64_t n_level[3] = {0, 0, 0}, n_peaks[3] = {0, 0, 0}, n_prec = 0, n_profile[3] = {0, 0, 0};
+      PeakPool& pool = *g.pool;
       consumer.setSpectraProcessingFunc([&](OpenMS::MSSpectrum& s) {
+        prof::Scope sc(c_cb);
         const int l = std::min<int>(2, static_cast<int>(s.getMSLevel()));
         ++n_level[l]; n_peaks[l] += s.size(); n_prec += !s.getPrecursors().empty();
         n_profile[l] += s.getType(false) == OpenMS::MSSpectrum::SpectrumType::PROFILE;
-        router.route(decode(s, index++));
+        Decoded d;
+        d.index = index++;
+        d.rt = s.getRT();
+        d.ms_level = static_cast<int>(s.getMSLevel());
+        if (d.ms_level >= 2 && !s.getPrecursors().empty())
+        {
+          const auto& p = s.getPrecursors()[0];
+          d.target = p.getMZ();
+          d.lower = p.getMZ() - p.getIsolationWindowLowerOffset();
+          d.upper = p.getMZ() + p.getIsolationWindowUpperOffset();
+        }
+        if (!s.isSorted()) { s.sortByPosition(); d.was_unsorted = true; }
+        d.n = static_cast<std::uint32_t>(s.size());
+        if (d.n > 0 && (d.ms_level == 1 || d.ms_level == 2))
+        {
+          d.in_pool = true;
+          d.pool_begin = pool.claim(d.n);
+          MzFixed* mz = pool.mz() + d.pool_begin;
+          float* in = pool.intensity() + d.pool_begin;
+          for (std::size_t i = 0; i < s.size(); ++i) { mz[i] = toFixed(s[i].getMZ()); in[i] = s[i].getIntensity(); }
+        }
+        router.route(std::move(d));
       });
       file.transform(filename, &consumer, true, true);
       if (std::getenv("ODIA_PROFILE"))
@@ -514,7 +608,7 @@ namespace ODIA
                      (unsigned long long)n_peaks[2], (unsigned long long)n_prec, (unsigned long long)n_level[0]);
       }
     }
-    else if (decode_threads > 1 && loadChunked(filename, decode_threads, [&](Decoded&& d) { router.route(std::move(d)); }))
+    else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, [&](Decoded&& d) { router.route(std::move(d)); }))
     {
       // parsed in parallel chunks (see loadChunked)
     }
@@ -591,13 +685,10 @@ namespace ODIA
       router.finish();
     }
 
-    for (auto& w : g.windows)
-    {
-      w.peaks.mz.shrink_to_fit();
-      w.peaks.intensity.shrink_to_fit();
-    }
-    g.ms1.peaks.mz.shrink_to_fit();
-    g.ms1.peaks.intensity.shrink_to_fit();
+    // Every lane reads the pool.
+    for (auto& w : g.windows) { w.peaks.mz = g.pool->mz(); w.peaks.intensity = g.pool->intensity(); }
+    g.ms1.peaks.mz = g.pool->mz();
+    g.ms1.peaks.intensity = g.pool->intensity();
     if (g.windows.empty()) { throw std::runtime_error("no MS2 isolation windows in " + filename); }
     // m/z bucket index per lane (the extraction's merge join jumps over m/z gaps with it).
     prof::Scope sc_index(prof::counter("ingest.5_bucket_index(wall)"));

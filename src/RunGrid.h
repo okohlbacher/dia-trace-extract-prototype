@@ -1,7 +1,9 @@
 // ODIA-V3 trace extractor -- compact grid representation of a DIA run on ONE global RT axis.
 #pragma once
 
+#include <atomic>
 #include <cmath>
+#include <memory>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -15,14 +17,45 @@ namespace ODIA
   inline MzFixed toFixed(double mz) { return static_cast<MzFixed>(std::lround(mz * MZ_FIXED_SCALE)); }
   inline double fromFixed(MzFixed m) { return static_cast<double>(m) / MZ_FIXED_SCALE; }
 
-  /// Peaks of many spectra in one arena (CSR): cell i owns [offset[i], offset[i+1]), m/z ascending.
-  /// 8 bytes per peak.
+  /// All peaks of a run in one pool: m/z and intensity arrays reserved once as virtual memory (MAP_NORESERVE;
+  /// physical pages appear on first write). Parsers claim contiguous ranges concurrently (one atomic add) and
+  /// decode straight into them, so the peaks are written once, by the thread that decodes them (no per-spectrum
+  /// buffers, no copy into the lanes, no reallocation; NUMA first touch spreads the pages over the workers).
+  class PeakPool
+  {
+  public:
+    explicit PeakPool(std::uint64_t capacity_peaks);
+    ~PeakPool();
+    PeakPool(const PeakPool&) = delete;
+    PeakPool& operator=(const PeakPool&) = delete;
+
+    /// First index of `n` consecutive peaks (thread-safe); throws when the reservation is exhausted.
+    std::uint64_t claim(std::uint64_t n);
+    MzFixed* mz() const { return mz_; }
+    float* intensity() const { return in_; }
+    std::uint64_t size() const { return used_.load(); }
+    std::uint64_t capacity() const { return cap_; }
+
+  private:
+    std::uint64_t cap_ = 0;
+    MzFixed* mz_ = nullptr;
+    float* in_ = nullptr;
+    std::atomic<std::uint64_t> used_{0};
+  };
+
+  /// The cells of one lane (a window's cycles, or the MS1 scans): cell i holds the peaks
+  /// [begin[i], begin[i] + count[i]) of the run's PeakPool, m/z ascending. Cells are contiguous runs in the pool
+  /// but need not be adjacent to each other.
   struct PeakArena
   {
-    std::vector<std::uint64_t> offset{0};
-    std::vector<MzFixed> mz;
-    std::vector<float> intensity;
-    std::size_t cells() const { return offset.size() - 1; }
+    std::vector<std::uint64_t> begin;
+    std::vector<std::uint32_t> count;
+    const MzFixed* mz = nullptr;          ///< the pool's arrays (set when the grid is complete)
+    const float* intensity = nullptr;
+    std::size_t cells() const { return begin.size(); }
+    std::size_t cellBegin(std::size_t c) const { return begin[c]; }
+    std::size_t cellEnd(std::size_t c) const { return begin[c] + count[c]; }
+    void push(std::uint64_t b, std::uint32_t n) { begin.push_back(b); count.push_back(n); }
 
     /// m/z bucket index (buildIndex, after ingest): the arena's m/z range is cut into `buckets` buckets of
     /// 2^bucket_shift fixed-point units from bucket_base; bucket_start[cell * buckets + k] = position (relative
@@ -35,10 +68,10 @@ namespace ODIA
     /// A peak position in `cell` at or before the first peak >= lo (the cell start without an index).
     std::size_t seek(std::size_t cell, MzFixed lo) const
     {
-      const std::size_t a = offset[cell];
+      const std::size_t a = cellBegin(cell);
       if (buckets == 0 || lo <= bucket_base) { return a; }
       const std::size_t k = (lo - bucket_base) >> bucket_shift;
-      return k >= buckets ? offset[cell + 1] : a + bucket_start[cell * buckets + k];
+      return k >= buckets ? cellEnd(cell) : a + bucket_start[cell * buckets + k];
     }
   };
 
@@ -91,6 +124,7 @@ namespace ODIA
     /// thread; the parse itself is serial, and more decode threads only spin.
     static RunGrid load(const std::string& filename, int decode_threads = 1);
 
+    std::unique_ptr<PeakPool> pool;      ///< every peak of the run (lanes and MS1 reference it)
     std::vector<double> cycle_rt;        ///< the global RT axis (seconds)
     std::vector<WindowLane> windows;     ///< sorted by isolation target
     Ms1Lane ms1;

@@ -19,7 +19,7 @@ namespace ODIA
     /// Most intense centroid within [lo, hi] of cell [a, b): (intensity, m/z), or (0, 0).
     std::pair<float, MzFixed> maxPeak(const PeakArena& p, std::size_t a, std::size_t b, MzFixed lo, MzFixed hi)
     {
-      const MzFixed* mz = p.mz.data();
+      const MzFixed* mz = p.mz;
       auto i = static_cast<std::size_t>(std::lower_bound(mz + a, mz + b, lo) - mz);
       std::pair<float, MzFixed> best{0.0f, 0};
       for (; i < b && mz[i] <= hi; ++i)
@@ -151,7 +151,7 @@ namespace ODIA
       const std::size_t g_hi = std::min(C, c_hi + opt.half_window_cycles);
       for (std::size_t c = g_lo; c < g_hi; ++c)
       {
-        const std::size_t a = lane.peaks.offset[c], b = lane.peaks.offset[c + 1];
+        const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
         if (a == b) { continue; }
         for (std::size_t f = 0; f < F; ++f)
         {
@@ -221,7 +221,7 @@ namespace ODIA
       // least 10% of the anchor's strongest apex signal (a weak "fragment" is often a random centroid inside the
       // wide search window, which would inflate the residual quantiles behind the measured accuracy).
       const std::size_t c = out.anchor.apex_cycle;
-      const std::size_t a = lane.peaks.offset[c], b = lane.peaks.offset[c + 1];
+      const std::size_t a = lane.peaks.cellBegin(c), b = lane.peaks.cellEnd(c);
       std::vector<std::pair<float, MzFixed>> apex(F);
       float strongest = 0;
       for (std::size_t f = 0; f < F; ++f)
@@ -243,7 +243,7 @@ namespace ODIA
         auto j = static_cast<std::size_t>(std::lower_bound(ms1.rt.begin(), ms1.rt.end(), out.anchor.run_rt) - ms1.rt.begin());
         if (j == ms1.rt.size() || (j > 0 && out.anchor.run_rt - ms1.rt[j - 1] < ms1.rt[j] - out.anchor.run_rt)) { --j; }
         const double t = lib.precursor_mz[p], tol = t * opt.search_ppm * 1e-6;
-        const auto [v, m] = maxPeak(ms1.peaks, ms1.peaks.offset[j], ms1.peaks.offset[j + 1], toFixed(t - tol), toFixed(t + tol));
+        const auto [v, m] = maxPeak(ms1.peaks, ms1.peaks.cellBegin(j), ms1.peaks.cellEnd(j), toFixed(t - tol), toFixed(t + tol));
         if (v > 0) { out.ms1_ppm = {(fromFixed(m) - t) / t * 1e6, v}; }
       }
       return out;

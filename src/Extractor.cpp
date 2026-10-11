@@ -156,8 +156,8 @@ namespace ODIA
                        const std::vector<Span>& spans, std::size_t c0, std::size_t c1,
                        std::vector<Target>& act, std::vector<Target>& tmp)
     {
-      const MzFixed* mz = P.mz.data();
-      const float* in = P.intensity.data();
+      const MzFixed* mz = P.mz;
+      const float* in = P.intensity;
       const auto by_lo = [](const Target& a, const Target& b) {
         return a.lo != b.lo ? a.lo < b.lo : (a.rec != b.rec ? a.rec < b.rec : a.row < b.row);
       };
@@ -186,7 +186,7 @@ namespace ODIA
           act.erase(std::remove_if(act.begin(), act.end(), [&](const Target& t) { return spans[t.rec].end <= c; }), act.end());
         }
         if (act.empty()) { continue; }
-        const std::size_t a = P.offset[c], b = P.offset[c + 1];
+        const std::size_t a = P.cellBegin(c), b = P.cellEnd(c);
         if (a == b) { continue; }
         std::size_t p = a;
         for (const Target& t : act)
@@ -313,11 +313,11 @@ namespace ODIA
           ms1_at.assign(J * n_iso, 0.0f);
           for (std::size_t j = j0; j <= j1; ++j)
           {
-            const std::size_t a = ms1.peaks.offset[j], b = ms1.peaks.offset[j + 1];
+            const std::size_t a = ms1.peaks.cellBegin(j), b = ms1.peaks.cellEnd(j);
             std::size_t pos = a;
             for (int i = 0; i < n_iso; ++i)
             {
-              ms1_at[(j - j0) * n_iso + i] = aggregate_(ms1.peaks.mz.data(), ms1.peaks.intensity.data(), a, b,
+              ms1_at[(j - j0) * n_iso + i] = aggregate_(ms1.peaks.mz, ms1.peaks.intensity, a, b,
                                                         iso[i].lo, iso[i].hi, pos);
             }
             out.lookups += n_iso;
