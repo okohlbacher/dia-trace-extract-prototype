@@ -45,7 +45,7 @@ namespace ODIA
       /// Parquet part files (unit u goes to part u % shards). 1 = a single file at `parquet`; > 1 =
       /// `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not derived from the
       /// thread count, so the output does not depend on -threads.
-      int shards = 8;
+      int shards = 32;
       std::vector<std::pair<std::string, std::string>> metadata;  ///< written into the Parquet footer
     };
 

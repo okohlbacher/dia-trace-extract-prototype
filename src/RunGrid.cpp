@@ -418,10 +418,40 @@ namespace ODIA
     }
   }
 
+  void PeakArena::buildIndex(std::uint32_t target_buckets)
+  {
+    buckets = 0;
+    bucket_start.clear();
+    if (mz.empty() || target_buckets == 0) { return; }
+    for (std::size_t c = 0; c < cells(); ++c)
+    {
+      if (offset[c + 1] - offset[c] >= 65535) { bucket_start.shrink_to_fit(); return; }
+    }
+    const auto [lo_it, hi_it] = std::minmax_element(mz.begin(), mz.end());
+    bucket_base = *lo_it;
+    const std::uint64_t range = static_cast<std::uint64_t>(*hi_it) - bucket_base + 1;
+    bucket_shift = 0;
+    while ((range >> bucket_shift) > target_buckets) { ++bucket_shift; }
+    buckets = static_cast<std::uint32_t>(((range - 1) >> bucket_shift) + 1);
+    bucket_start.assign(cells() * buckets, 0);
+    for (std::size_t c = 0; c < cells(); ++c)
+    {
+      const std::size_t a = offset[c], b = offset[c + 1];
+      std::uint16_t* row = bucket_start.data() + c * buckets;
+      std::size_t i = a;
+      for (std::uint32_t k = 0; k < buckets; ++k)
+      {
+        // first peak whose bucket >= k (peaks are sorted by m/z)
+        while (i < b && ((mz[i] - bucket_base) >> bucket_shift) < k) { ++i; }
+        row[k] = static_cast<std::uint16_t>(i - a);
+      }
+    }
+  }
+
   std::size_t RunGrid::bytes() const
   {
     auto arena = [](const PeakArena& a) {
-      return a.offset.capacity() * 8 + a.mz.capacity() * 4 + a.intensity.capacity() * 4;
+      return a.offset.capacity() * 8 + a.mz.capacity() * 4 + a.intensity.capacity() * 4 + a.bucket_start.capacity() * 2;
     };
     std::size_t b = arena(ms1.peaks) + ms1.rt.capacity() * 8 + ms1.spectrum.capacity() * 4 + cycle_rt.capacity() * 8;
     for (const auto& w : windows) { b += arena(w.peaks) + w.acquired_rt.capacity() * 8 + w.spectrum.capacity() * 4; }
@@ -557,6 +587,12 @@ namespace ODIA
     g.ms1.peaks.mz.shrink_to_fit();
     g.ms1.peaks.intensity.shrink_to_fit();
     if (g.windows.empty()) { throw std::runtime_error("no MS2 isolation windows in " + filename); }
+    // m/z bucket index per lane (the extraction's merge join jumps over m/z gaps with it).
+#pragma omp parallel for schedule(dynamic, 1) num_threads(std::max(1, decode_threads))
+    for (std::ptrdiff_t w = -1; w < static_cast<std::ptrdiff_t>(g.windows.size()); ++w)
+    {
+      (w < 0 ? g.ms1.peaks : g.windows[static_cast<std::size_t>(w)].peaks).buildIndex();
+    }
     g.stats.ingest = stageClock() - t0;
     return g;
   }

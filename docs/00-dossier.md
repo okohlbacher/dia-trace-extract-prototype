@@ -211,6 +211,26 @@ What the current binary does:
   capped at 8 output files).
 - **Determinism.** Output is byte-identical for 1 and 64 threads.
 
+**Merge join, bucket index, 32 output parts** (current, full tuned libraries, run 01, 64 threads, all precursors and top 6
+fragments, MS1 on its scan axis; previous binary bbad38c → current):
+
+| library | extraction | total | CPU | peak RSS |
+|---|---|---|---|---|
+| human, 3.49 M precursors | 8.1 → 3.6 s | 15.1 → 10.3 s | 414 → 303 s | 3.81 → 3.82 GiB |
+| entrapment, 7.0 M precursors | 15.7 → 6.8 s | 22.6 → 14.4 s | 727 → 512 s | 4.67 → 4.70 GiB |
+
+How the extraction step works now:
+- **Merge join.** A unit's precursors (one isolation window, sorted by RT) have rising spectrum ranges, so the precursors active
+  in a spectrum form a sliding range. A sorted list of their fragment windows is kept up to date as precursors enter and leave
+  the range, and each spectrum's centroids are walked once against it.
+- **Bucket index.** About 64 `uint16` entries per spectrum, roughly 4% of the peak data, let the walk jump over m/z gaps.
+- **Result.** Identical traces; extraction CPU down 27–41%.
+- **What limited wall time.** Not the m/z search but the 8 serially written Parquet parts.
+  - 32 parts (the new default) remove that cap.
+  - Row groups shrink with the part count, so the writers' buffered rows stay constant (about 1 M) and memory does not grow.
+
+MS1 on its scan axis triples the MS1 points: 4.6 G against 3.1 G MS2 points; the output is 2.6 GB for the full 7 M library.
+
 **Runtime vs threads** (run 01, shared tuned library of 82,333 precursors with all fragments, one run per point, nearly idle
 node; `scripts/bench_threads.sh`, `results/threads/`):
 

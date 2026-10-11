@@ -186,8 +186,10 @@ protected:
                        "streaming parser; 0 = min(-threads, 32): the parse is memory-bandwidth bound, measured flat beyond "
                        "~32 threads while CPU time keeps growing).", false, true);
     setMinInt_("ingest_threads", 0);
-    registerIntOption_("out_shards", "<n>", 8, "Parquet part files written concurrently; > 1 makes -out a directory of "
-                       "part-NNN.parquet files (read as one table by pyarrow/DuckDB). Fixed default: the output does "
+    registerIntOption_("out_shards", "<n>", 32, "Parquet part files written concurrently; > 1 makes -out a directory of "
+                       "part-NNN.parquet files (read as one table by pyarrow/DuckDB). Each part is written serially, so the "
+                       "part count caps write parallelism (8 parts capped a 7 M-precursor run at ~16 s; 32: ~7 s); row groups "
+                       "shrink with the count, keeping the writers' buffered rows constant. Fixed default: the output does "
                        "not depend on -threads.", false, true);
     setMinInt_("out_shards", 1);
     registerIntOption_("unit_precursors", "<n>", 256, "Precursors per parallel work unit.", false, true);

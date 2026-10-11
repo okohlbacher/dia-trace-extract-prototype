@@ -138,7 +138,10 @@ namespace ODIA
       for (const auto& path : paths)
       {
         auto sh = std::make_unique<Shard>();
-        sh->writer = openWriter(path, *schema_, cfg_.rows_per_group, sh->out);
+        // Rows buffered per part until its row group is flushed: a fixed total over all parts (more parts =
+        // smaller row groups), so the writer's memory does not grow with the part count.
+        const std::int64_t rows = std::max<std::int64_t>(16384, cfg_.rows_per_group * 8 / static_cast<std::int64_t>(paths.size()));
+        sh->writer = openWriter(path, *schema_, rows, sh->out);
         shards_.push_back(std::move(sh));
       }
     }

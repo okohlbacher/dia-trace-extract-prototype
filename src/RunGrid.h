@@ -23,6 +23,23 @@ namespace ODIA
     std::vector<MzFixed> mz;
     std::vector<float> intensity;
     std::size_t cells() const { return offset.size() - 1; }
+
+    /// m/z bucket index (buildIndex, after ingest): the arena's m/z range is cut into `buckets` buckets of
+    /// 2^bucket_shift fixed-point units from bucket_base; bucket_start[cell * buckets + k] = position (relative
+    /// to the cell start) of the cell's first peak in bucket k or above. uint16 per entry (~64 per cell:
+    /// ~4% of the peak data); no index (buckets = 0) if a cell holds 65,535 peaks or more.
+    std::vector<std::uint16_t> bucket_start;
+    MzFixed bucket_base = 0;
+    std::uint32_t bucket_shift = 0, buckets = 0;
+    void buildIndex(std::uint32_t target_buckets = 64);
+    /// A peak position in `cell` at or before the first peak >= lo (the cell start without an index).
+    std::size_t seek(std::size_t cell, MzFixed lo) const
+    {
+      const std::size_t a = offset[cell];
+      if (buckets == 0 || lo <= bucket_base) { return a; }
+      const std::size_t k = (lo - bucket_base) >> bucket_shift;
+      return k >= buckets ? offset[cell + 1] : a + bucket_start[cell * buckets + k];
+    }
   };
 
   /// One DIA isolation window: its cell for global cycle c is cell c of `peaks`

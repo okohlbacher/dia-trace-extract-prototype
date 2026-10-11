@@ -61,10 +61,14 @@ namespace ODIA
       if (best < 0) { ++plan.without_window; continue; }
       assignments.push_back({p, static_cast<std::uint32_t>(best), rt});
     }
-    // Deterministic order: window, then library index. Units never straddle a window, so a unit
-    // touches exactly one lane of the grid (cache locality, one owner).
+    // Deterministic order: window, then RT, then library index. Units never straddle a window (a unit touches
+    // one lane of the grid) and hold RT-sorted precursors: their cell ranges then rise monotonically, so the
+    // precursors active in a spectrum are a sliding, contiguous range (the merge join in extract() keeps only
+    // their targets).
     std::stable_sort(assignments.begin(), assignments.end(), [](const Assignment& a, const Assignment& b) {
-      return a.window != b.window ? a.window < b.window : a.precursor < b.precursor;
+      if (a.window != b.window) { return a.window < b.window; }
+      if (a.rt_center != b.rt_center) { return a.rt_center < b.rt_center; }
+      return a.precursor < b.precursor;
     });
     const std::size_t step = std::max<std::size_t>(1, opt_.unit_precursors);
     for (std::size_t b = 0; b < assignments.size();)
@@ -122,22 +126,114 @@ namespace ODIA
     return {grid_.lowerCycle(rt_center - opt_.rt_half_window), grid_.upperCycle(rt_center + opt_.rt_half_window)};
   }
 
+  namespace
+  {
+    /// A target m/z window of one trace of a unit (fragment or MS1 isotope), for the merge join.
+    struct Target
+    {
+      MzFixed lo, hi;
+      std::uint32_t rec, row;
+    };
+    /// Where a record's traces live on the join's axis: cells [begin, end), values at
+    /// base + row * stride + (cell - begin).
+    struct Span
+    {
+      std::uint32_t begin = 0, end = 0;
+      float* base = nullptr;
+      std::uint32_t stride = 0;
+    };
+
+    /// Merge join of a unit's targets with the cells [c0, c1) of one peak arena.
+    ///
+    /// `targets` are grouped by record (record r owns [seg[r], seg[r+1]), sorted by lo within the group);
+    /// records are in RT order, so their spans [begin, end) rise monotonically and the records active in a cell
+    /// form a sliding range. `act` holds the active targets sorted by lo: a record's targets are merged in when
+    /// its span opens and dropped when it closes. Each cell's peaks are then walked once, forward, together
+    /// with the active targets; the bucket index jumps over m/z gaps. Same result as a lower_bound per target
+    /// and cell (first peak >= lo, then every peak <= hi aggregated by max or sum).
+    template <bool Sum>
+    std::uint64_t join(const PeakArena& P, const std::vector<Target>& targets, const std::vector<std::uint32_t>& seg,
+                       const std::vector<Span>& spans, std::size_t c0, std::size_t c1,
+                       std::vector<Target>& act, std::vector<Target>& tmp)
+    {
+      const MzFixed* mz = P.mz.data();
+      const float* in = P.intensity.data();
+      const auto by_lo = [](const Target& a, const Target& b) {
+        return a.lo != b.lo ? a.lo < b.lo : (a.rec != b.rec ? a.rec < b.rec : a.row < b.row);
+      };
+      const std::size_t n_rec = spans.size();
+      std::size_t r_in = 0, r_out = 0;
+      std::uint64_t visited = 0;
+      act.clear();
+      for (std::size_t c = c0; c < c1; ++c)
+      {
+        // records whose span opens at or before c
+        while (r_in < n_rec && spans[r_in].begin <= c)
+        {
+          if (spans[r_in].end > c && seg[r_in + 1] > seg[r_in])
+          {
+            tmp.resize(act.size() + (seg[r_in + 1] - seg[r_in]));
+            std::merge(act.begin(), act.end(), targets.begin() + seg[r_in], targets.begin() + seg[r_in + 1], tmp.begin(), by_lo);
+            act.swap(tmp);
+          }
+          ++r_in;
+        }
+        // records whose span has closed
+        bool closed = false;
+        while (r_out < r_in && spans[r_out].end <= c) { ++r_out; closed = true; }
+        if (closed)
+        {
+          act.erase(std::remove_if(act.begin(), act.end(), [&](const Target& t) { return spans[t.rec].end <= c; }), act.end());
+        }
+        if (act.empty()) { continue; }
+        const std::size_t a = P.offset[c], b = P.offset[c + 1];
+        if (a == b) { continue; }
+        std::size_t p = a;
+        for (const Target& t : act)
+        {
+          ++visited;
+          if (p < b && mz[p] < t.lo)
+          {
+            const std::size_t q = P.seek(c, t.lo);
+            if (q > p) { p = q; }
+            while (p < b && mz[p] < t.lo) { ++p; }
+          }
+          float v = 0.0f;
+          for (std::size_t i = p; i < b && mz[i] <= t.hi; ++i)
+          {
+            if constexpr (Sum) { v += in[i]; } else { v = std::max(v, in[i]); }
+          }
+          const Span& sp = spans[t.rec];
+          sp.base[static_cast<std::size_t>(t.row) * sp.stride + (c - sp.begin)] = v;
+        }
+      }
+      return visited;
+    }
+  }
+
   void Extractor::extract(const Library& lib, const Plan& plan, std::size_t unit, TraceBlock& out) const
   {
     const Unit& u = plan.units[unit];
     out.unit = unit;
     out.records.clear();
     out.lookups = 0;
-    std::uint64_t& lookups = out.lookups;
     const double ms2_scale = 1.0 + opt_.ms2_ppm_offset * 1e-6;
     const double ms1_scale = 1.0 + opt_.ms1_ppm_offset * 1e-6;
     const int n_iso = opt_.extract_ms1 ? opt_.ms1_isotopes + 1 : 0;
     const auto& ms1 = grid_.ms1;
+    const auto& lane = grid_.windows[plan.assignments[u.begin].window];
 
-    thread_local std::vector<std::pair<Bounds, std::uint32_t>> frag;   // (bounds, row) sorted by m/z
+    // Reused per worker: targets and spans of the unit (a few 10 kB), MS1 interpolation scratch.
+    thread_local std::vector<Target> t2, t1, act, tmp;
+    thread_local std::vector<std::uint32_t> g2, g1;   // per record: first target (grouped by record)
+    thread_local std::vector<Span> s2, s1;
     thread_local std::vector<Bounds> iso;
-    thread_local std::vector<float> ms1_at;                            // [ms1 spectrum][isotope]
+    thread_local std::vector<float> ms1_at;   // [ms1 spectrum][isotope], interpolated mode
+    t2.clear(); t1.clear(); s2.clear(); s1.clear(); g2.clear(); g1.clear();
+    std::size_t c_min = std::numeric_limits<std::size_t>::max(), c_max = 0;
+    std::size_t m_min = std::numeric_limits<std::size_t>::max(), m_max = 0;
 
+    // 1. Records, their value slots and the targets of the unit.
     for (std::size_t k = u.begin; k < u.end; ++k)
     {
       const Assignment& as = plan.assignments[k];
@@ -151,6 +247,11 @@ namespace ODIA
       r.cycles = static_cast<std::uint32_t>(hi > lo ? hi - lo : 0);
       r.fragments = static_cast<std::uint16_t>(lib.fragmentsOf(p));
       r.isotopes = static_cast<std::uint8_t>(n_iso);
+      const auto rec = static_cast<std::uint32_t>(out.records.size());
+      s2.push_back({});
+      s1.push_back({});
+      g2.push_back(static_cast<std::uint32_t>(t2.size()));
+      g1.push_back(static_cast<std::uint32_t>(t1.size()));
       if (r.cycles == 0)
       {
         out.records.push_back(r); // RT window outside the acquisition: an empty record keeps accounting exact
@@ -163,90 +264,95 @@ namespace ODIA
       const std::size_t M = r.ms1_count;
       float* v = r.values = out.arena.alloc(r.fragments * T + r.isotopes * M);
 
-      // --- MS2: one tile, F x T, gathered cell by cell from this window's lane.
-      frag.clear();
+      s2[rec] = {static_cast<std::uint32_t>(lo), static_cast<std::uint32_t>(hi), v, static_cast<std::uint32_t>(T)};
+      c_min = std::min(c_min, lo); c_max = std::max(c_max, hi);
       for (std::uint32_t f = lib.fragment_begin[p], row = 0; f < lib.fragment_begin[p + 1]; ++f, ++row)
       {
-        frag.push_back({bounds(lib.fragment_mz[f] * ms2_scale, opt_.ms2_ppm), row});
+        const Bounds bd = bounds(lib.fragment_mz[f] * ms2_scale, opt_.ms2_ppm);
+        t2.push_back({bd.lo, bd.hi, rec, row});
       }
-      std::sort(frag.begin(), frag.end(), [](const auto& a, const auto& b) { return a.first.lo < b.first.lo; });
-      const auto& lane = grid_.windows[as.window];
-      const MzFixed* mz = lane.peaks.mz.data();
-      const float* in = lane.peaks.intensity.data();
-      for (std::size_t c = lo; c < hi; ++c)
-      {
-        const std::size_t a = lane.peaks.offset[c], b = lane.peaks.offset[c + 1];
-        if (a == b) { continue; }
-        std::size_t pos = a;
-        for (const auto& [bd, row] : frag) { v[row * T + (c - lo)] = aggregate_(mz, in, a, b, bd.lo, bd.hi, pos); }
-        lookups += frag.size();
-      }
+      std::sort(t2.begin() + g2.back(), t2.end(), [](const Target& x, const Target& y) {
+        return x.lo != y.lo ? x.lo < y.lo : x.row < y.row;
+      });
 
-      // --- MS1 isotopes. Scan axis: the raw value at every MS1 scan in the window. Otherwise: the MS1 scans
-      // bracketing the cycle range, interpolated linearly onto the global axis (MS1 is not acquired once per
-      // cycle).
-      float* v1 = v + static_cast<std::size_t>(r.fragments) * T;
-      if (n_iso > 0 && !ms1.rt.empty() && M > 0 && opt_.ms1_scan_axis)
+      if (n_iso > 0 && !ms1.rt.empty())
       {
         const double z = opt_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib.charge[p]);
-        iso.clear();
-        for (int i = 0; i < n_iso; ++i)
+        float* v1 = v + static_cast<std::size_t>(r.fragments) * T;
+        if (opt_.ms1_scan_axis)
         {
-          iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
-        }
-        for (std::size_t j = m0; j < m1; ++j)
-        {
-          const std::size_t a = ms1.peaks.offset[j], b = ms1.peaks.offset[j + 1];
-          std::size_t pos = a;
-          for (int i = 0; i < n_iso; ++i)
+          if (M > 0)
           {
-            v1[i * M + (j - m0)] = aggregate_(ms1.peaks.mz.data(), ms1.peaks.intensity.data(), a, b, iso[i].lo, iso[i].hi, pos);
+            s1[rec] = {static_cast<std::uint32_t>(m0), static_cast<std::uint32_t>(m1), v1, static_cast<std::uint32_t>(M)};
+            m_min = std::min(m_min, m0); m_max = std::max(m_max, m1);
+            for (int i = 0; i < n_iso; ++i)
+            {
+              const Bounds bd = bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm);
+              t1.push_back({bd.lo, bd.hi, rec, static_cast<std::uint32_t>(i)});
+            }
+            std::sort(t1.begin() + g1.back(), t1.end(), [](const Target& x, const Target& y) {
+              return x.lo != y.lo ? x.lo < y.lo : x.row < y.row;
+            });
           }
-          lookups += n_iso;
         }
-      }
-      else if (n_iso > 0 && !ms1.rt.empty())
-      {
-        const double t0 = grid_.cycle_rt[lo], t1 = grid_.cycle_rt[hi - 1];
-        auto j0 = static_cast<std::size_t>(std::upper_bound(ms1.rt.begin(), ms1.rt.end(), t0) - ms1.rt.begin());
-        j0 = j0 > 0 ? j0 - 1 : 0;
-        auto j1 = static_cast<std::size_t>(std::lower_bound(ms1.rt.begin(), ms1.rt.end(), t1) - ms1.rt.begin());
-        j1 = std::min(j1, ms1.rt.size() - 1);
-        const double z = opt_.isotope_unit_spacing ? 1.0 : std::max<int>(1, lib.charge[p]);
-        iso.clear();
-        for (int i = 0; i < n_iso; ++i)
+        else
         {
-          iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
-        }
-        const std::size_t J = j1 - j0 + 1;
-        ms1_at.assign(J * n_iso, 0.0f);
-        for (std::size_t j = j0; j <= j1; ++j)
-        {
-          const std::size_t a = ms1.peaks.offset[j], b = ms1.peaks.offset[j + 1];
-          std::size_t pos = a;
+          // Interpolated mode: the MS1 scans bracketing the cycle range, linearly interpolated onto the
+          // global axis (MS1 is not acquired once per cycle).
+          const double t0 = grid_.cycle_rt[lo], t1v = grid_.cycle_rt[hi - 1];
+          auto j0 = static_cast<std::size_t>(std::upper_bound(ms1.rt.begin(), ms1.rt.end(), t0) - ms1.rt.begin());
+          j0 = j0 > 0 ? j0 - 1 : 0;
+          auto j1 = static_cast<std::size_t>(std::lower_bound(ms1.rt.begin(), ms1.rt.end(), t1v) - ms1.rt.begin());
+          j1 = std::min(j1, ms1.rt.size() - 1);
+          iso.clear();
           for (int i = 0; i < n_iso; ++i)
           {
-            ms1_at[(j - j0) * n_iso + i] = aggregate_(ms1.peaks.mz.data(), ms1.peaks.intensity.data(), a, b,
-                                                      iso[i].lo, iso[i].hi, pos);
+            iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
           }
-          lookups += n_iso;
-        }
-        std::size_t j = j0;
-        for (std::size_t c = lo; c < hi; ++c)
-        {
-          const double t = grid_.cycle_rt[c];
-          while (j + 1 <= j1 && ms1.rt[j + 1] <= t) { ++j; }
-          const std::size_t ja = j, jb = std::min(j + 1, j1);
-          double w = 0.0;
-          if (jb != ja && ms1.rt[jb] > ms1.rt[ja]) { w = std::clamp((t - ms1.rt[ja]) / (ms1.rt[jb] - ms1.rt[ja]), 0.0, 1.0); }
-          for (int i = 0; i < n_iso; ++i)
+          const std::size_t J = j1 - j0 + 1;
+          ms1_at.assign(J * n_iso, 0.0f);
+          for (std::size_t j = j0; j <= j1; ++j)
           {
-            const float ya = ms1_at[(ja - j0) * n_iso + i], yb = ms1_at[(jb - j0) * n_iso + i];
-            v1[i * M + (c - lo)] = static_cast<float>(ya + w * (yb - ya));
+            const std::size_t a = ms1.peaks.offset[j], b = ms1.peaks.offset[j + 1];
+            std::size_t pos = a;
+            for (int i = 0; i < n_iso; ++i)
+            {
+              ms1_at[(j - j0) * n_iso + i] = aggregate_(ms1.peaks.mz.data(), ms1.peaks.intensity.data(), a, b,
+                                                        iso[i].lo, iso[i].hi, pos);
+            }
+            out.lookups += n_iso;
+          }
+          std::size_t j = j0;
+          for (std::size_t c = lo; c < hi; ++c)
+          {
+            const double t = grid_.cycle_rt[c];
+            while (j + 1 <= j1 && ms1.rt[j + 1] <= t) { ++j; }
+            const std::size_t ja = j, jb = std::min(j + 1, j1);
+            double w = 0.0;
+            if (jb != ja && ms1.rt[jb] > ms1.rt[ja]) { w = std::clamp((t - ms1.rt[ja]) / (ms1.rt[jb] - ms1.rt[ja]), 0.0, 1.0); }
+            for (int i = 0; i < n_iso; ++i)
+            {
+              const float ya = ms1_at[(ja - j0) * n_iso + i], yb = ms1_at[(jb - j0) * n_iso + i];
+              v1[i * M + (c - lo)] = static_cast<float>(ya + w * (yb - ya));
+            }
           }
         }
       }
       out.records.push_back(r);
+    }
+
+    // 2. Merge joins: MS2 over this window's cells, MS1 over its scans.
+    g2.push_back(static_cast<std::uint32_t>(t2.size()));
+    g1.push_back(static_cast<std::uint32_t>(t1.size()));
+    if (!t2.empty())
+    {
+      out.lookups += opt_.aggregate_sum ? join<true>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp)
+                                        : join<false>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp);
+    }
+    if (!t1.empty())
+    {
+      out.lookups += opt_.aggregate_sum ? join<true>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp)
+                                        : join<false>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp);
     }
   }
 
