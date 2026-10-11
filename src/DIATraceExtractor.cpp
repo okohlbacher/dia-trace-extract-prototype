@@ -28,6 +28,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 
 using namespace OpenMS;
@@ -476,6 +477,9 @@ protected:
 
 int main(int argc, const char** argv)
 {
+  // ODIA_ALLOW_PTRACE=1: let a debugger or stack sampler that is not our parent attach (Yama ptrace_scope 1),
+  // for profiling (gdb stack samples); off by default.
+  if (std::getenv("ODIA_ALLOW_PTRACE") != nullptr) { ::prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0); }
   // Idle OpenMP threads should sleep, not spin (spinning burned ~70% extra CPU while workers waited on
   // I/O). libgomp reads OMP_WAIT_POLICY only when it is loaded, so set it and re-execute once; an
   // explicit user setting is respected.

@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- recycled trace buffers.
 #include "BufferPool.h"
+#include "Profile.h"
 
 #include <algorithm>
 #include <cstring>
@@ -45,7 +46,9 @@ namespace ODIA
   bool BufferPool::tryAcquire(std::size_t n, std::vector<float*>& out)
   {
     if (n == 0) { return true; }
-    std::lock_guard lock(mtx_);
+    static prof::Counter& lc = prof::counter("lock.trace_pool_acquire");
+    prof::timedLock(mtx_, lc);
+    std::lock_guard lock(mtx_, std::adopt_lock);
     if (free_.size() < n) { return false; }
     out.insert(out.end(), free_.end() - static_cast<std::ptrdiff_t>(n), free_.end());
     free_.resize(free_.size() - n);
@@ -57,7 +60,9 @@ namespace ODIA
   void BufferPool::release(std::vector<float*>& blocks)
   {
     if (blocks.empty()) { return; }
-    std::lock_guard lock(mtx_);
+    static prof::Counter& lc = prof::counter("lock.trace_pool_release");
+    prof::timedLock(mtx_, lc);
+    std::lock_guard lock(mtx_, std::adopt_lock);
     // Reverse order: the block used first is handed out first next time.
     free_.insert(free_.end(), blocks.rbegin(), blocks.rend());
     in_use_ -= blocks.size();

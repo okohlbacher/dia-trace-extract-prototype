@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <ctime>
+#include <cstring>
+#include <dirent.h>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -42,7 +44,7 @@ namespace ODIA
         if (tl)
         {
           std::fprintf(tl, "t\tread\textract\tencode\twrite\tidle\toutstanding\tunissued\tloaded_parts\tunwritten\t"
-                           "encode_queue\tpool_free\tcommit_part\tprocess_cpu\n");
+                           "encode_queue\tpool_free\tcommit_part\tprocess_cpu\trunning_threads\tmhz_mean\tmhz_min\n");
         }
         const auto cpu_now = [] {
           timespec ts{};
@@ -59,9 +61,46 @@ namespace ODIA
           const double t = std::chrono::duration<double>(clk::now() - t0).count(), cpu = cpu_now();
           if (tl)
           {
-            std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\n", t, active_[0], active_[1],
+            // Our threads that are running (state R) and the current frequency of the cores they run on.
+            int running = 0;
+            double mhz_sum = 0, mhz_min = 1e12;
+            int mhz_n = 0;
+            if (DIR* d = ::opendir("/proc/self/task"))
+            {
+              while (dirent* e = ::readdir(d))
+              {
+                if (e->d_name[0] == '.') { continue; }
+                char path[320];
+                std::snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+                std::FILE* f = std::fopen(path, "r");
+                if (!f) { continue; }
+                char buf[1024];
+                const std::size_t len = std::fread(buf, 1, sizeof buf - 1, f);
+                std::fclose(f);
+                buf[len] = 0;
+                const char* q = std::strrchr(buf, ')');
+                if (!q || q[2] != 'R') { continue; }
+                ++running;
+                // field 39 (processor): count fields after ')'
+                int field = 2;
+                const char* r = q + 2;
+                while (*r && field < 39) { if (*r == ' ') { ++field; } ++r; }
+                const int cpu_id = std::atoi(r);
+                char fp[96];
+                std::snprintf(fp, sizeof fp, "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu_id);
+                if (std::FILE* ff = std::fopen(fp, "r"))
+                {
+                  long khz = 0;
+                  if (std::fscanf(ff, "%ld", &khz) == 1) { mhz_sum += khz / 1000.0; mhz_min = std::min(mhz_min, khz / 1000.0); ++mhz_n; }
+                  std::fclose(ff);
+                }
+              }
+              ::closedir(d);
+            }
+            std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\t%d\t%.0f\t%.0f\n", t, active_[0], active_[1],
                          active_[2], active_[3], waiting_, outstanding_, unissued_, loaded_.size(), unwritten_,
-                         encode_queue_.size(), pool_.available(), commit_part_, (cpu - cpu_last) / std::max(1e-9, t - t_last));
+                         encode_queue_.size(), pool_.available(), commit_part_, (cpu - cpu_last) / std::max(1e-9, t - t_last),
+                         running, mhz_n ? mhz_sum / mhz_n : 0.0, mhz_n ? mhz_min : 0.0);
           }
           cpu_last = cpu; t_last = t;
           if (tl && ++ticks % 5 != 0) { continue; }
@@ -221,6 +260,8 @@ namespace ODIA
     lock.unlock();
     try
     {
+      static prof::TaskStats& ts = prof::taskStats("write");
+      prof::TaskProbe probe(ts);
       writer_.append(best, item->encoded);
     }
     catch (...)
@@ -250,6 +291,8 @@ namespace ODIA
     lock.unlock();
     try
     {
+      static prof::TaskStats& ts = prof::taskStats("encode");
+      prof::TaskProbe probe(ts);
       item->encoded = writer_.encode(*item->block, item->part->lib);
       // Encoded: discard the traces now (blocks back to the pool) and release the library part.
       recycle_(std::move(item->block));
@@ -286,6 +329,8 @@ namespace ODIA
       std::shared_ptr<Part> part;
       try
       {
+        static prof::TaskStats& ts = prof::taskStats("read+plan");
+        prof::TaskProbe probe(ts);
         part = newPart_();
         part->seq = reader_.read(src, part->lib);
         part->plan = extractor_.plan(part->lib);
@@ -341,6 +386,8 @@ namespace ODIA
       std::unique_ptr<TraceBlock> block;
       try
       {
+        static prof::TaskStats& ts = prof::taskStats("extract");
+        prof::TaskProbe probe(ts);
         block = newBlock_();
         block->arena.reset(&pool_, std::move(blocks));
         extractor_.extract(keep->lib, keep->plan, unit, *block);

@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- recycling memory pool for Arrow / Parquet buffers.
 #include "ArrowPool.h"
+#include "Profile.h"
 
 #include <algorithm>
 #include <bit>
@@ -35,8 +36,19 @@ namespace ODIA
     return (std::size_t{1} << k) + sub * (std::size_t{1} << k) / 4;
   }
 
+  namespace
+  {
+    // ODIA_POOL_NO_ACCOUNT=1 (diagnosis only): skip the shared byte/peak/total/count atomics, to measure their cost.
+    bool noAccount()
+    {
+      static const bool off = std::getenv("ODIA_POOL_NO_ACCOUNT") != nullptr;
+      return off;
+    }
+  }
+
   void RecyclingPool::account_(int64_t delta)
   {
+    if (noAccount()) { return; }
     const int64_t now = allocated_.fetch_add(delta) + delta;
     int64_t peak = peak_.load();
     while (now > peak && !peak_.compare_exchange_weak(peak, now)) {}
@@ -46,7 +58,9 @@ namespace ODIA
   {
     {
       auto& f = free_[static_cast<std::size_t>(c)];
-      std::lock_guard lock(f.mtx);
+      static prof::Counter& lc = prof::counter("lock.arrow_pool_take");
+      prof::timedLock(f.mtx, lc);
+      std::lock_guard lock(f.mtx, std::adopt_lock);
       if (!f.blocks.empty())
       {
         uint8_t* p = f.blocks.back();
@@ -69,7 +83,9 @@ namespace ODIA
     if (cached_.load() + n <= cache_cap_)
     {
       auto& f = free_[static_cast<std::size_t>(c)];
-      std::lock_guard lock(f.mtx);
+      static prof::Counter& lc = prof::counter("lock.arrow_pool_put");
+      prof::timedLock(f.mtx, lc);
+      std::lock_guard lock(f.mtx, std::adopt_lock);
       f.blocks.push_back(p);
       cached_ += n;
       return;
@@ -95,8 +111,7 @@ namespace ODIA
     }
     if (*out == nullptr) { return arrow::Status::OutOfMemory("malloc of size ", size, " failed"); }
     account_(size);
-    total_ += size;
-    ++count_;
+    if (!noAccount()) { total_ += size; ++count_; }
     return arrow::Status::OK();
   }
 
@@ -109,7 +124,7 @@ namespace ODIA
     if (old_large && new_large && classOf(o) == classOf(n))
     {
       account_(new_size - old_size);   // same block: grows or shrinks in place
-      if (new_size > old_size) { total_ += new_size - old_size; }
+      if (new_size > old_size && !noAccount()) { total_ += new_size - old_size; }
       return arrow::Status::OK();
     }
     uint8_t* fresh = nullptr;
