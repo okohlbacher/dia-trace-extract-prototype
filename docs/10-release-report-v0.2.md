@@ -91,43 +91,56 @@ DIA-NN (3.5% of traces with r < 0.9 on run 01) is entirely its float32 quadratic
 
 ## 4. Which rules are right? (re-extraction from the raw centroids, 3,000 IDs)
 
-| | MS2 | MS1 |
-|---|---|---|
-| DIA-NN | 99.5% capture, 2.9% interference | export at the **uncorrected** m/z: 92% capture, 5% interference |
-| ours (V0.1 rule) | 99.5% capture, 2.9% interference | narrow corrected window: **98% capture, 1.1% interference** |
-| OpenSWATH | 97.3% capture (no mass correction) | wide window: 100% capture, 22% interference |
+**How this was assessed.** There is no ground truth for a trace, so the rules were judged on the centroids
+themselves. For a random sample of 3,000 DIA-NN-identified precursors of run 01, every centroid within ±25 ppm of
+each fragment and MS1 isotope target was recorded at every point of the trace (`scripts/quality_reextract.py`,
+reading the mzML directly). A mass-error model was fitted to the apex centroids of the top-6 fragments of the
+confident IDs: a mean μ(m/z, intensity), quadratic in m/z with an upward drift for strong centroids, and a width
+σ(intensity) = √(0.83² + 70²/I) ppm, i.e. 2.4 ppm at 10³ and 0.86 ppm at 10⁵. A centroid is counted as true
+signal when it lies within 3σ(I) of μ. Each engine's rule (window centre, width, max or sum) is then applied to
+the recorded centroids; **capture** is the share of the true signal in the peak region (apex ±4 cycles) that the
+rule returns, **interference** the share of what it returns that is not true signal (an upper bound, since the
+tails of the error distribution hold real signal too). Shape metrics (fragment co-elution, library cosine at the
+apex, dropouts) are computed on the same re-extracted traces. The rule emulation was validated first: for every
+engine it reproduces the engine's own exported traces with a median r of 1.0 (`scripts/quality_sample.py`,
+`results/analysis/quality/`; details in `analysis/trace_quality.md`).
 
-Shape metrics on the actual exports agree (run 01 / 02): fragment co-elution ours 0.541 / 0.560, DIA-NN 0.540 /
-0.554, OpenSWATH 0.484 / 0.555; MS1-to-fragment co-elution ours 0.886 / 0.889, DIA-NN 0.880 / 0.895, OpenSWATH
-0.826 / 0.802. OpenSWATH additionally places isotope k at m/z + k·1.00336 without dividing by the charge, so its
-M+1 and M+2 traces of charge ≥ 2 precursors are a different ion.
+**MS2** (run 01; DIA-NN's accuracy ±5.9 ppm; ours A at the V0.2 defaults: 9σ = ±7.9 ppm around the measured
+offset with its m/z term):
+
+| rule | capture | interference | co-elution | cosine at apex | dropouts |
+|---|---|---|---|---|---|
+| ours A (V0.2 defaults, max, ±7.9 ppm) | **99.9%** | 4.7% | 0.521 | 0.920 | 14.8% |
+| DIA-NN (quadratic centre, max, ±5.9 ppm) | 99.5% | 2.8% | 0.522 | 0.919 | 14.9% |
+| ours B = OpenSWATH (no correction, sum, ±5.9 ppm) | 97.3% | 3.1% | 0.467 | 0.903 | 16.9% |
+
+Ours A and DIA-NN give the same trace shapes; A's wider window trades 1.9 points of interference for the last
+0.4% of signal (at ±5.9 ppm around our offset it is 99.6% / 2.9%, indistinguishable from DIA-NN). B's loss is its
+centre: with no correction, the ±5.9 ppm window ends only 2.6 ppm beyond the true −3.2 ppm offset. Max versus sum
+is irrelevant on Astral MS2: at most 4 × 10⁻⁵ of the points hold two centroids in one window.
+
+**MS1, M+0** (peak region apex ±6 MS1 scans; the truth model here is 3σ(I) around the MS1 median, σ 0.85 ppm):
+
+| rule | capture | interference |
+|---|---|---|
+| ours A (V0.2 defaults: measured offset with m/z term, max, 4σ = ±1.43 ppm) | 92.6% | **0.0%** |
+| ours A at DIA-NN's width (measured offset, ±2.13 ppm) | **98.0%** | 0.9% |
+| DIA-NN export (uncorrected m/z, max, ±2.13 ppm) | 91.6% | 5.4% |
+| ours B = OpenSWATH (no correction, sum, ±5.9 ppm) | 100% | 22% |
+
+The corrected centre is what matters: at DIA-NN's own width it captures 98% at 0.9% interference where DIA-NN's
+uncorrected export captures 92% at 5.4%; the wide OpenSWATH window admits a quarter of its peak intensity as
+interference. The 4σ default is on the narrow side by this truth model: the width measured on the anchors
+(0.36 ppm) comes from strong apex centroids, while weak MS1 centroids scatter more (§5 of `EXTRACTION.md`, the
+intensity dependence), so ±1.43 ppm leaves 7% of the modelled true signal outside. MS1-to-fragment co-elution on
+the exports nevertheless ranks ours A (0.886) above DIA-NN (0.880) and OpenSWATH (0.826). A 5–6σ MS1 default is
+the candidate change this points at; it is left for the next release with the tolerance work. OpenSWATH
+additionally places isotope k at m/z + k·1.00336 without dividing by the charge, so its M+1 and M+2 traces of
+charge ≥ 2 precursors are a different ion.
 
 ![Engine shapes](figures/quality_engine_shapes_run01.png)
 
-## 5. The structure of the mass errors, and the mass model
-
-![Mass error structure](figures/doc/mass_error_structure.png)
-
-Apex errors of the calibration anchors against library m/z, RT and intensity (core within ±4σ of the offset):
-
-| | global offset | σ (MAD) | σ after an m/z + RT model | what the data show |
-|---|---|---|---|---|
-| Astral MS2 | −3.12 ppm | 0.98 | 0.94 | centred after the offset; trends < 0.5 ppm |
-| Astral MS1 | +1.35 ppm | 0.39 | 0.32 | mild m/z curvature |
-| timsTOF MS2 | −4.60 ppm | 2.62 | 2.55 | small RT drift (−1.2 ppm over the run) |
-| timsTOF MS1 | −3.41 ppm | 2.87 | 2.02 | **linear in m/z: +15 ppm per 1000 Th** |
-
-- Both instruments have a systematic shift of 1–5 ppm; the offset is essential and the tool measures it.
-- After the offset the residuals are centred (mean = median, no skew). An m/z-dependent term matters only for
-  timsTOF MS1, where a line narrows σ by 29%. The mass model is therefore offset + slope × (m/z − reference),
-  kept only when the shift over the central 90% of the m/z range exceeds half the width and three standard
-  errors (`calibration:mass_model linear`, the default). On Astral it changes nothing measurable (agreement
-  with DIA-NN: MS2 87.3%, MS1 72.3% vs 72.1% with the constant model on the shared run-01 library).
-- The dominant remaining structure is **intensity**: weak centroids sit low, strong ones high (Astral MS2 −0.4 →
-  +0.7 ppm, timsTOF MS2 −2.2 → +1.6 ppm from the weakest to the strongest decile). It cannot be corrected before
-  extraction, and it is the reason the width measured on strong anchors understates what weak fragments need.
-
-## 6. Trace quality as a function of the tolerance (both instruments)
+## 5. Trace quality as a function of the tolerance (both instruments)
 
 ![Tolerance screen](figures/tolerance_screen.png)
 
@@ -152,11 +165,26 @@ metadata (MS2 9σ Orbitrap/Astral, 4σ timsTOF and other TOF, 6σ with a warning
 options (`-mz_sigma_ms2`, `-mz_sigma_ms1`; `-mz_tol*` for fixed ppm). A measured criterion needs a population
 containing absent peptides, i.e. peptide decoys from the library generator (backlog).
 
-## 7. A second instrument: timsTOF SCP diaPASEF
+## 6. A second instrument: timsTOF SCP diaPASEF
 
-Runs A01 and B01 go through the mzPeak reader (frames split per isolation window, TIMS scans collapsed within
-15 ppm) and through DIA-NN 1.7.12 via our mzML export. Calibration finds 775 anchors (25 ng sample), MS2 width
-2.6–2.7 ppm, MS1 2.2 ppm with the m/z model.
+Runs A01 and B01 go through the mzPeak reader and through DIA-NN 1.7.12 via our mzML export. Calibration finds
+775 anchors (25 ng sample), MS2 width 2.6–2.7 ppm, MS1 2.2 ppm with the m/z-dependent offset that this
+instrument's MS1 needs (+15 ppm per 1000 Th; `EXTRACTION.md`).
+
+**How the ion-mobility dimension is handled.** A diaPASEF MS2 frame is one spectrum that covers several isolation
+windows, each active over its own 1/K0 band, and holds the centroids of every TIMS scan, so one ion appears once
+per scan it spans. The reader uses the mobility in two steps and then integrates it out: (1) each centroid is
+assigned to the isolation window whose mobility band contains it (the bands come from the frame's precursor
+descriptions; with the `precursor_index` quirk of the converter the ions are matched to windows by m/z), which
+restores the window selectivity that a flat read of the frame would lose; (2) within a window the scans are
+collapsed: centroids within 15 ppm of each other are summed and placed at their intensity-weighted m/z. The grid
+then holds one ordinary spectrum per window and cycle, and the extraction is the same as on the Orbitrap. MS1
+frames are collapsed over the whole mobility range in the same way. The library's predicted CCS/1/K0 column is
+not used: no mobility filter is applied to a precursor's trace, so the trace integrates every mobility at which
+its fragments appear inside the window's band. The same frames, collapsed the same way, are what the mzML export
+hands to DIA-NN, so the comparison below is between extraction rules, not between mobility treatments. Mobility
+as an extraction axis (filtering a precursor's fragments to its predicted 1/K0, or returning mobility-resolved
+traces) is the obvious next step for this instrument class and is not part of V0.2.
 
 | ours vs DIA-NN (its IDs) | MS2 median r | MS2 r > 0.9 | MS1 r > 0.9 |
 |---|---|---|---|
@@ -172,7 +200,7 @@ MS2 accuracy raises the agreement to 79% (widening to ±20 ppm drops it to 43%):
 the uncorrected m/z with its MS2 accuracy, the rule already found on Astral (§4), where the 1.3 ppm MS1 offset
 hides it; here the offset is 3.4 ppm plus the m/z slope. Our MS1 traces are the mass-corrected ones.
 
-## 8. Performance
+## 7. Performance
 
 Machine: 2 × AMD EPYC 9654 (56 cores per socket online, SMT), shared node; inputs on local `/scratch`; one run per
 point unless stated; peak RSS from `/usr/bin/time`.
@@ -216,13 +244,13 @@ was accepted only with a byte-identical trace hash. The library-load transient (
 joined copy coexisting) and the mzPeak reader's serialised decode (scales to 10–14 cores) are the known remaining
 costs.
 
-## 9. Reproduction
+## 8. Reproduction
 
 - Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/compare_traces.py` (pairwise metrics),
-  `scripts/tolerance_screen.py` and `plot_tolerance_screen.py` (§6), `scripts/plot_thread_scaling.py` (§8),
+  `scripts/tolerance_screen.py` and `plot_tolerance_screen.py` (§5), `scripts/plot_thread_scaling.py` (§7),
   `scripts/doc_figures.py` (§2 figures). Mass-error dumps: `ODIA_DUMP_MASS_ERRORS=file`.
 - Inputs: Appendix B; libraries in `library/` (DIALibGen 0.11.1, `library/generate.sh`, `library/hye_timstof.log`).
 - Tests: `ctest` in the build directory (7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare).
@@ -337,7 +365,7 @@ $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Hum
      -ms1_isotopes 2 -Calibration:auto_irt:enabled false -threads 64
 ```
 
-**Astral, runtime vs threads (§8; `ODIA_ONLY=1 REF=results/threads scripts/bench_threads.sh results/threads_cb466f0 4 8 16 32 64`,
+**Astral, runtime vs threads (§7; `ODIA_ONLY=1 REF=results/threads scripts/bench_threads.sh results/threads_cb466f0 4 8 16 32 64`,
 binary cb466f0).** `$t` = 4, 8, 16, 32, 64; DIA-NN and OpenSWATH as above with `--threads $t` / `-threads $t`
 (`results/threads/`, unchanged binaries).
 
@@ -349,14 +377,14 @@ $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobenc
 $X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation sum -ms1_isotope_spacing unit -threads $t -out $S/out/t$t/odiaB.parquet
 ```
 
-**Astral, full libraries (§8; `results/full_cb466f0/`, binary cb466f0, top 6 fragments, 2 runs each).**
+**Astral, full libraries (§7; `results/full_cb466f0/`, binary cb466f0, top 6 fragments, 2 runs each).**
 
 ```bash
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/human_UP000005640_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_human.parquet
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_entrap.parquet
 ```
 
-**Astral, mass-error structure and the linear-vs-constant check (§5; binary 4e89acc and its parent).**
+**Astral, mass-error structure and the linear-vs-constant check (`EXTRACTION.md`, mass model; binary 4e89acc and its parent).**
 
 ```bash
 ODIA_DUMP_MASS_ERRORS=astral01.tsv $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 48 -out ...
@@ -364,7 +392,7 @@ $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/refined/pro
 $X ... -calibration:mass_model constant -out astral01_const.parquet
 ```
 
-**Tolerance screen (§6; `scripts/tolerance_screen.py`, binary 4934ea5).** The script runs the extractor once per k
+**Tolerance screen (§5; `scripts/tolerance_screen.py`, binary 4934ea5).** The script runs the extractor once per k
 with `-mz_tol k*sigma_ms2 -mz_tol_ms1 k*sigma_ms1 -top_fragments 0 -ids ...` and scores the traces.
 
 ```bash
@@ -376,7 +404,7 @@ tools/pyenv/bin/python scripts/tolerance_screen.py --run $S/input/diapasef/A01.m
 tools/pyenv/bin/python scripts/plot_tolerance_screen.py docs/figures/tolerance_screen "Astral run 01=results/tolscreen/astral_run01.tsv:6.4" "timsTOF A01=results/tolscreen/timstof_A01.tsv:4.4"
 ```
 
-**timsTOF diaPASEF (§7; `results/diapasef/`).** `.d` to mzPeak with mzpeak-convert 0.18.0; the mzML for DIA-NN is
+**timsTOF diaPASEF (§6; `results/diapasef/`).** `.d` to mzPeak with mzpeak-convert 0.18.0; the mzML for DIA-NN is
 this tool's export of the loaded grid; `B01` identical with the B-condition files.
 
 ```bash
