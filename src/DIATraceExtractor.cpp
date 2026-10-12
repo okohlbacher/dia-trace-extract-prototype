@@ -13,6 +13,7 @@
 #include "TraceWriter.h"
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/FORMAT/DATAACCESS/MSDataWritingConsumer.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 
 #include <atomic>
@@ -111,6 +112,57 @@ namespace
   }
 }
 
+/// The run grid as mzML: every MS1 scan and every window cell in acquisition-time order, centroided, each MS2
+/// spectrum carrying its window's isolation target and offsets.
+void writeRunAsMzML(const ODIA::RunGrid& grid, const std::string& source, const std::string& filename)
+{
+  struct Item { double rt; std::int32_t lane; std::size_t cell; };
+  std::vector<Item> items;
+  for (std::size_t j = 0; j < grid.ms1.rt.size(); ++j) { items.push_back({grid.ms1.rt[j], -1, j}); }
+  for (std::size_t w = 0; w < grid.windows.size(); ++w)
+  {
+    const auto& lane = grid.windows[w];
+    for (std::size_t c = 0; c < lane.acquired_rt.size(); ++c)
+    {
+      if (lane.acquired_rt[c] == lane.acquired_rt[c] && lane.peaks.cellEnd(c) > lane.peaks.cellBegin(c)) { items.push_back({lane.acquired_rt[c], static_cast<std::int32_t>(w), c}); }
+    }
+  }
+  std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.rt < b.rt; });
+  OpenMS::PlainMSDataWritingConsumer consumer(filename);
+  consumer.getOptions().setCompression(true);
+  consumer.setExpectedSize(items.size(), 0);
+  OpenMS::ExperimentalSettings settings;
+  OpenMS::SourceFile sf;
+  sf.setNameOfFile(std::filesystem::path(source).filename().string());
+  sf.setPathToFile(std::filesystem::path(source).parent_path().string());
+  settings.getSourceFiles().push_back(sf);
+  consumer.setExperimentalSettings(settings);
+  std::size_t scan = 1;
+  for (const Item& it : items)
+  {
+    const ODIA::PeakArena& arena = it.lane < 0 ? grid.ms1.peaks : grid.windows[static_cast<std::size_t>(it.lane)].peaks;
+    OpenMS::MSSpectrum s;
+    s.setRT(it.rt);
+    s.setMSLevel(it.lane < 0 ? 1 : 2);
+    s.setType(OpenMS::MSSpectrum::SpectrumType::CENTROID);
+    s.setNativeID("scan=" + std::to_string(scan++));
+    if (it.lane >= 0)
+    {
+      const auto& lane = grid.windows[static_cast<std::size_t>(it.lane)];
+      OpenMS::Precursor p;
+      p.setMZ(lane.target);
+      p.setIsolationWindowLowerOffset(lane.target - lane.lower);
+      p.setIsolationWindowUpperOffset(lane.upper - lane.target);
+      s.getPrecursors().push_back(p);
+    }
+    const std::size_t a = arena.cellBegin(it.cell), b = arena.cellEnd(it.cell);
+    s.reserve(b - a);
+    for (std::size_t i = a; i < b; ++i) { s.emplace_back(ODIA::fromFixed(arena.mz[i]), arena.intensity[i]); }
+    consumer.consumeSpectrum(s);
+  }
+  OPENMS_LOG_INFO << "mzML: " << items.size() << " spectra (" << grid.ms1.rt.size() << " MS1, " << grid.windows.size() << " windows) -> " << filename << std::endl;
+}
+
 class TOPPDIATraceExtractor : public TOPPBase
 {
 public:
@@ -128,7 +180,7 @@ protected:
     // content, takes the mzPeak ZIP container for a single-file .zip and fails; -in is checked below.
     registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.");
     registerInputFile_("lib", "<file>", "",
-                       "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.");
+                       "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML (not needed with -out_mzml alone).", false);
     registerOutputFile_("out", "<file>", "", "Traces (Parquet, one row per trace on the global cycle axis).", false);
     registerOutputFile_("out_axes", "<file>", "", "Axes (Parquet): global cycle axis, exact acquisition times, "
                         "MS1 scan times. Default with -out: <out stem>.axes.parquet.", false);
@@ -164,6 +216,9 @@ protected:
                           "from the run (calibration anchors) and apply them instead of -mz_offset*.", false);
     setValidStrings_("mass_calibration", {"off", "auto"});
     registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV; usable as -rt_anchors).", false);
+    registerOutputFile_("out_mzml", "<file>", "", "Write the loaded run as a centroided mzML with one spectrum per isolation window "
+                        "(diaPASEF frames split by mobility and collapsed across scans), e.g. for engines that read no mzPeak/.d.", false);
+    setValidFormats_("out_mzml", {"mzML"});
     registerIntOption_("calibration:panel", "<n>", 0, "Precursors sampled for calibration (stratified over library RT; "
                        "never restricted by -ids); 0 = calibration:panel_fraction of the eligible precursors.", false, true);
     registerDoubleOption_("calibration:panel_fraction", "<f>", 0.05, "Share of the eligible precursors in the panel.", false, true);
@@ -288,10 +343,26 @@ protected:
     }
     const std::string out = getStringOption_("out"), out_tsv = getStringOption_("out_tsv");
     std::string out_axes = getStringOption_("out_axes");
-    if (out.empty() && out_tsv.empty())
+    const std::string out_mzml = getStringOption_("out_mzml");
+    if (out.empty() && out_tsv.empty() && out_mzml.empty())
     {
-      OPENMS_LOG_ERROR << "Nothing to do: give -out and/or -out_tsv." << std::endl;
+      OPENMS_LOG_ERROR << "Nothing to do: give -out, -out_tsv and/or -out_mzml." << std::endl;
       return ILLEGAL_PARAMETERS;
+    }
+    if (lib_file.empty() && (out_mzml.empty() || !out.empty() || !out_tsv.empty()))
+    {
+      OPENMS_LOG_ERROR << "-lib is required for an extraction (only -out_mzml works without a library)." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    if (lib_file.empty())
+    {
+      // export only: no library, no calibration
+      const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : std::min(std::max(1, getIntOption_("threads")), 32);
+      ODIA::RunGrid grid = ODIA::RunGrid::load(in, ingest_threads);
+      OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, " << grid.stats.ms1_spectra << " MS1 / "
+                      << grid.stats.ms2_spectra << " MS2 spectra, " << grid.stats.ms1_peaks + grid.stats.ms2_peaks << " peaks; " << fmt(grid.stats.ingest) << mem() << std::endl;
+      writeRunAsMzML(grid, in, out_mzml);
+      return EXECUTION_OK;
     }
     if (out_axes.empty() && !out.empty())
     {
@@ -356,6 +427,12 @@ protected:
                     << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra, "
                     << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
                     << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << mem() << std::endl;
+
+    if (!out_mzml.empty())
+    {
+      writeRunAsMzML(grid, in, out_mzml);
+      if (out.empty() && out_tsv.empty()) { return EXECUTION_OK; }
+    }
 
     // --- calibration (from the run itself) and RT map
     std::optional<ODIA::CalibrationResult> cal;

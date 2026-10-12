@@ -381,28 +381,52 @@ namespace ODIA
       std::atomic<std::size_t> next{0};
       std::exception_ptr error;
       std::mutex error_mtx;
+      // A TIMS frame holds every mobility scan's centroids: the same ion appears once per scan it spans. Frames of a
+      // diaPASEF file are collapsed to one centroid per ion (members within `collapse_ppm` summed, m/z the
+      // intensity-weighted mean) -- the frame's 1-D spectrum, ~10x fewer points.
+      const bool collapse = n_multi > 0;
+      constexpr double collapse_ppm = 15.0;   // per-scan centroids of one ion scatter 5-10 ppm on a 40k TOF; ions closer than this are unresolved anyway
       const auto store = [&](Decoded& d, const double* mz, const float* in, std::size_t count, std::vector<std::pair<MzFixed, float>>& sorted) {
         d.n = static_cast<std::uint32_t>(count);
         if (d.n == 0 || (d.ms_level != 1 && d.ms_level != 2)) { return; }
+        sorted.resize(d.n);
+        bool unsorted = false;
+        for (std::size_t j = 0; j < d.n; ++j)
+        {
+          sorted[j] = {toFixed(mz[j]), in[j]};
+          unsorted |= j > 0 && sorted[j].first < sorted[j - 1].first;
+        }
+        if (unsorted)
+        {
+          std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+          d.was_unsorted = true;
+        }
+        if (collapse)
+        {
+          std::size_t out = 0;
+          double wsum = 0, isum = 0;
+          for (std::size_t j = 0; j < d.n; ++j)
+          {
+            if (out > 0 && sorted[j].first - sorted[out - 1].first <= static_cast<MzFixed>(collapse_ppm * 1e-6 * sorted[j].first))
+            {
+              wsum += static_cast<double>(sorted[j].first) * sorted[j].second;
+              isum += sorted[j].second;
+              sorted[out - 1] = {static_cast<MzFixed>(std::llround(wsum / std::max(isum, 1e-30))), static_cast<float>(isum)};
+            }
+            else
+            {
+              wsum = static_cast<double>(sorted[j].first) * sorted[j].second;
+              isum = sorted[j].second;
+              sorted[out++] = sorted[j];
+            }
+          }
+          d.n = static_cast<std::uint32_t>(out);
+        }
         d.in_pool = true;
         d.pool_begin = pool.claim(d.n);
         MzFixed* pm = pool.mz() + d.pool_begin;
         float* pi = pool.intensity() + d.pool_begin;
-        bool unsorted = false;
-        for (std::size_t j = 0; j < d.n; ++j)
-        {
-          pm[j] = toFixed(mz[j]);
-          pi[j] = in[j];
-          unsorted |= j > 0 && pm[j] < pm[j - 1];
-        }
-        if (unsorted)
-        {
-          sorted.resize(d.n);
-          for (std::size_t j = 0; j < d.n; ++j) { sorted[j] = {pm[j], pi[j]}; }
-          std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-          for (std::size_t j = 0; j < d.n; ++j) { pm[j] = sorted[j].first; pi[j] = sorted[j].second; }
-          d.was_unsorted = true;
-        }
+        for (std::size_t j = 0; j < d.n; ++j) { pm[j] = sorted[j].first; pi[j] = sorted[j].second; }
       };
       std::vector<std::vector<Decoded>> extra(n);   // the sub-spectra of multi-window spectra
       std::vector<std::size_t> multi_idx;
