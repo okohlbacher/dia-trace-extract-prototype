@@ -118,9 +118,11 @@ its distance to the library m/z recorded in ppm, likewise the monoisotopic MS1 c
 From these apex errors (of the anchors that pass the strict criteria, including the fragment count, when there
 are at least 200 of them; at least 50 centroids are needed for a measurement):
 - the **offset** is the median (unweighted: strong centroids drift upward on this instrument, which biases a
-  weighted median);
-- the **width** is 1.4826 × the median absolute deviation, a measure that the random centroids of a few false
-  anchors do not move;
+  weighted median); when the errors depend on m/z, a line offset + slope × (m/z − reference) is fitted through
+  their core (`calibration:mass_model linear`, the default) and kept when the shift over the central 90% of the
+  m/z range exceeds half the width and three standard errors, otherwise the constant stays;
+- the **width** is 1.4826 × the median absolute deviation of the residuals about that model, a measure that the
+  random centroids of a few false anchors do not move;
 - the **tolerance** is a multiple of that width: `-mz_sigma_ms2` (default by instrument class from the run's metadata:
   Orbitrap/Astral 9, timsTOF 4, other TOF 4, unknown 6 with a warning) and `-mz_sigma_ms1` (default 4), never below
   0.1 ppm; `-mz_tol`/`-mz_tol_ms1` in ppm override them.
@@ -128,6 +130,13 @@ are at least 200 of them; at least 50 centroids are needed for a measurement):
 The mass search then narrows to ±3 × the tolerance around the offset (never wider than the first pass) and the
 anchors are searched again, so that the first wide pass does not bias the offset; the passes stop when the window
 and the offset change by less than a quarter of the window (at most `calibration:search_rounds`, 3).
+
+![Mass error structure](figures/doc/mass_error_structure.png)
+
+Both instruments need the offset (1–5 ppm); after it the errors are centred. An m/z-dependent term matters only
+for timsTOF MS1 (+15 ppm per 1000 Th; width 2.9 → 2.2 ppm); on Astral the trends are under 0.5 ppm and the line
+is kept or not without consequence. What remains is an intensity dependence (weak centroids low, strong ones
+high), which no m/z model can remove.
 
 The width is stable: 0.92–1.08 ppm at MS2 and 0.37–0.43 ppm at MS1 on the three Astral runs and both libraries
 (offsets −3.2 / −2.4 / −2.0 ppm at MS2, +1.3 / +1.2 / +1.4 at MS1 on runs 01 / 02 / 03), 2.6–2.7 and 3.2–3.4 ppm on
@@ -188,6 +197,7 @@ Four kinds of work, one pool of threads:
 | `-ms1_isotopes` | 2 | isotopes after the monoisotope (−1: no MS1) |
 | `-ms1_axis` | `scans` | MS1 at its own scans (`cycles`: interpolated onto the cycle axis) |
 | `-ids` | — | restrict the extraction to listed precursors (the calibration panel is not restricted) |
+| `-calibration:mass_model` | `linear` | m/z-dependent offset when the data support it (`constant`: median only) |
 | `-calibration:*` | see `--help` | panel share, search widths, anchor criteria, RT model, tolerance multiple |
 | `-threads`, `-out_shards` | 1, 32 | worker threads; Parquet parts |
 | `-out_calibration`, `-out_stats` | — | anchors as TSV (usable as `-rt_anchors`); run statistics as JSON |

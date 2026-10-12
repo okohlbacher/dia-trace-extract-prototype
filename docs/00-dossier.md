@@ -290,11 +290,19 @@ timsTOF library of the HYE FASTA (4.15 M precursors).
   Same grid, same windows: at the same tolerance the engines agree on diaPASEF as on Astral (91.2%). At the defaults
   our MS2 window (4σ) is a little narrower than DIA-NN's choice, which costs a few percent of agreement, by
   construction of the comparison; the trace-quality screen (§7) puts the optimum at 4–5σ on this instrument.
-- **MS1 on diaPASEF.** At DIA-NN's MS2 tolerance, our MS1 M+0 traces agree with DIA-NN's for 60% of precursors
-  (r > 0.9) whatever the MS1 window: 29% at ±4 ppm, 60% at ±7, 60% at ±11.8, 44% at ±20, 32% at ±30, with the
-  intensity ratio crossing 1 near ±10 ppm (our default on this run: ±13 ppm). The remaining disagreement is not the
-  window; it is open (DIA-NN's MS1 trace construction on an mzML without mobility, or the MS1 frames collapsed over
-  the whole mobility range).
+- **MS1 on diaPASEF, explained (2026-10-12).** At DIA-NN's MS2 tolerance, our MS1 M+0 traces agreed with
+  DIA-NN's for 60% of precursors (r > 0.9) whatever the MS1 window around our measured offset: 29% at ±4 ppm, 60%
+  at ±7, 60% at ±11.8, 44% at ±20, 32% at ±30. Where both engines have signal the values are identical; each has
+  zeros where the other has signal, so the two windows sit at different centres. Placing our MS1 window at the
+  **uncorrected** library m/z with DIA-NN's MS2 accuracy (±11.8 ppm) raises the agreement to **79%** (and widening
+  that to ±20 drops it to 43%): DIA-NN's XIC export takes the MS1 trace at the uncorrected m/z with its MS2
+  accuracy, the same export rule found on Astral (§3), where it hardly shows because the MS1 offset is 1.3 ppm
+  against 3.4 ppm here. The remaining 21% is DIA-NN's float32 quadratic window centre (§3.2). Our MS1 traces are
+  the mass-corrected ones; nothing to change on our side.
+- **MS1 mass errors on timsTOF depend on m/z** (+15 ppm per 1000 Th, docs/EXTRACTION.md): the linear mass model
+  (`calibration:mass_model linear`, now the default) narrows the MS1 width from 2.87 to 2.22 ppm (4σ window ±12.9
+  → ±8.9 ppm). MS2 on the same run shows no m/z dependence; Astral neither (trends < 0.5 ppm, agreement with
+  DIA-NN unchanged: MS2 87.3%, MS1 72.3% vs 72.1% with the constant model on the shared run-01 library).
 - **Cost.** 36–45 s per run at 32 threads (ingest 19–26 s on the per-spectrum mzPeak path, calibration 5 s,
   extraction 12–13 s), 17 GB peak RSS, 36.7 M traces.
 - **Not yet:** the mobility dimension beyond the window split; the all-ID tolerance trade-off on this data.

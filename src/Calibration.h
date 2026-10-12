@@ -34,6 +34,7 @@ namespace ODIA
     double coverage = 0.99;
     double coverage_factor = 1.3;     ///< flank and weak-fragment centroids err more than the apex centroids measured here
     double fallback_sigma = 6.0;
+    bool linear_mass_model = true;    ///< m/z-dependent correction (offset + slope x (mz - ref)) when the data support it
     double min_relative_intensity = 0.0; ///< apex centroids below this share of the anchor's strongest fragment are left out of the mass model
     int top_fragments = 6;            ///< fragments per panel precursor used for co-elution
     int half_window_cycles = 0;       ///< co-elution window around a candidate apex (+- cycles); 0 = twice the median
@@ -90,7 +91,9 @@ namespace ODIA
     double ms2_coverage_ppm = 0, ms1_coverage_ppm = 0;   ///< half width holding `coverage` of the true apex matches
     std::vector<std::pair<double, double>> coelution_by_sigma;   ///< (k, median fragment co-elution of the strict anchors at k sigma)
     std::size_t decoy_anchors = 0;                  ///< decoys above score_cut
-    double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;
+    double ms2_offset_ppm = 0, ms2_sigma_ppm = 0, ms1_offset_ppm = 0, ms1_sigma_ppm = 0;   ///< offset at mz_ref
+    /// m/z-dependent part of the correction: correction(mz) = offset + slope x (mz - mz_ref); slope 0 = constant.
+    double ms2_slope_ppm_per_th = 0, ms2_mz_ref = 0, ms1_slope_ppm_per_th = 0, ms1_mz_ref = 0;
     /// Extraction accuracy (half width around the offset) = accuracy_sigma x the robust width of the apex errors.
     double ms2_accuracy_ppm = 0, ms1_accuracy_ppm = 0;
     double ms2_search_ppm = 0, ms1_search_ppm = 0;            ///< half width of the final search pass

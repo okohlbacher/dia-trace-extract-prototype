@@ -15,8 +15,10 @@ namespace ODIA
   {
     double ms2_ppm = 10.0;            ///< fragment tolerance, +- ppm (half width)
     double ms1_ppm = 10.0;            ///< precursor/isotope tolerance, +- ppm (half width)
-    double ms2_ppm_offset = 0.0;      ///< mass correction: target * (1 + offset * 1e-6)
+    double ms2_ppm_offset = 0.0;      ///< mass correction: target * (1 + (offset + slope * (target - mz_ref)) * 1e-6)
     double ms1_ppm_offset = 0.0;
+    double ms2_ppm_slope = 0.0, ms2_mz_ref = 0.0;   ///< m/z-dependent part (ppm per Th); 0 = constant correction
+    double ms1_ppm_slope = 0.0, ms1_mz_ref = 0.0;
     double rt_half_window = 60.0;     ///< +- seconds around the mapped library RT; <= 0: whole run
     bool aggregate_sum = true;        ///< sum all centroids in tolerance (OpenSWATH) or take the max (DIA-NN)
     bool extract_ms1 = true;

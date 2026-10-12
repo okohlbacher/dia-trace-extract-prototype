@@ -38,6 +38,13 @@ using namespace OpenMS;
 
 namespace
 {
+  std::string slopeText(double slope, double ref)
+  {
+    if (slope == 0) { return ""; }
+    std::ostringstream o;
+    o << " " << (slope >= 0 ? "+" : "") << slope * 1000 << " ppm/kTh about " << ref << " Th";
+    return o.str();
+  }
   double peakRssGiB()
   {
     rusage u{};
@@ -246,6 +253,10 @@ protected:
                           "measured widths. curve: MS2 takes the multiple (of 2, 3, 4, 5, 6, 8) at which the calibration anchors' "
                           "all-fragment co-elution is highest (finds the Astral optimum, too wide on timsTOF).", false, true);
     setValidStrings_("calibration:accuracy_rule", {"fixed", "curve"});
+    registerStringOption_("calibration:mass_model", "<model>", "linear", "Mass correction from the anchors: constant (median apex "
+                          "error) or linear (offset + slope x m/z, kept when the shift over the m/z range is material; otherwise "
+                          "constant). The tolerance is the width of the residuals about the model.", false);
+    setValidStrings_("calibration:mass_model", {"constant", "linear"});
     registerDoubleOption_("calibration:coverage", "<f>", 0.99, "Share of the true apex matches inside the coverage half width.", false, true);
     registerDoubleOption_("calibration:coverage_factor", "<f>", 1.3, "Tolerance = this x the coverage half width (flank and weak-fragment "
                           "centroids err more than apex centroids).", false, true);
@@ -440,6 +451,7 @@ protected:
     OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, "
                     << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra, "
                     << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
+                    << (gs.overlapping_windows ? std::to_string(gs.overlapping_windows) + " overlapping window pairs, " : std::string()) << ""
                     << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << mem() << std::endl;
 
     if (!out_mzml.empty())
@@ -485,6 +497,7 @@ protected:
       copt.search_rounds = getIntOption_("calibration:search_rounds");
       copt.accuracy_sigma = getStringOption_("calibration:accuracy_rule") == "curve" ? 0.0 : sigma_ms2;
       copt.ms1_sigma = getDoubleOption_("mz_sigma_ms1");
+      copt.linear_mass_model = getStringOption_("calibration:mass_model") == "linear";
       copt.coverage = getDoubleOption_("calibration:coverage");
       copt.coverage_factor = getDoubleOption_("calibration:coverage_factor");
       copt.min_relative_intensity = getDoubleOption_("calibration:min_relative_intensity");
@@ -525,8 +538,8 @@ protected:
                       << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; peak FWHM " << cal->peak_fwhm_cycles << " cycles ("
                       << cal->peak_fwhm_s << " s), co-elution window +-" << cal->half_window_cycles << " cycles; score cut " << cal->score_cut
                       << " (" << cal->decoy_anchors << " decoys above it), strict cut " << cal->strict_score_cut << "; MS2 offset "
-                      << cal->ms2_offset_ppm << " ppm (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
-                      << cal->ms1_offset_ppm << " ppm (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
+                      << cal->ms2_offset_ppm << " ppm" << slopeText(cal->ms2_slope_ppm_per_th, cal->ms2_mz_ref) << " (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
+                      << cal->ms1_offset_ppm << " ppm" << slopeText(cal->ms1_slope_ppm_per_th, cal->ms1_mz_ref) << " (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
                       << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (coverage half widths " << cal->ms2_coverage_ppm << " / " << cal->ms1_coverage_ppm << " ppm; = " << cal->accuracy_sigma << " sigma; co-elution by k:"
                       << [&] { std::string t; for (const auto& [k, r] : cal->coelution_by_sigma) { t += " " + std::to_string(static_cast<int>(k)) + ":" + (r < 0 ? std::string("-") : std::to_string(r).substr(0, 5)); } return t; }()
                       << "; from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
@@ -563,6 +576,11 @@ protected:
     }
     eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
+    if (mass_auto && cal)
+    {
+      eopt.ms2_ppm_slope = cal->ms2_slope_ppm_per_th; eopt.ms2_mz_ref = cal->ms2_mz_ref;
+      eopt.ms1_ppm_slope = cal->ms1_slope_ppm_per_th; eopt.ms1_mz_ref = cal->ms1_mz_ref;
+    }
     eopt.rt_half_window = getDoubleOption_("rt_window");
     if (eopt.rt_half_window == 0.0)
     {
@@ -602,6 +620,8 @@ protected:
     wcfg.metadata = {{"input", in}, {"library", lib_file}, {"rt_map", rt_map.describe()},
                      {"mz_tol_ppm", std::to_string(eopt.ms2_ppm)}, {"mz_tol_ms1_ppm", std::to_string(eopt.ms1_ppm)},
                      {"mz_offset_ppm", std::to_string(eopt.ms2_ppm_offset)}, {"mz_offset_ms1_ppm", std::to_string(eopt.ms1_ppm_offset)},
+                     {"mz_offset_slope_ppm_per_th", std::to_string(eopt.ms2_ppm_slope)}, {"mz_offset_mz_ref", std::to_string(eopt.ms2_mz_ref)},
+                     {"mz_offset_ms1_slope_ppm_per_th", std::to_string(eopt.ms1_ppm_slope)}, {"mz_offset_ms1_mz_ref", std::to_string(eopt.ms1_mz_ref)},
                      {"aggregation", getStringOption_("aggregation")},
                      {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
                      {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};
@@ -683,6 +703,7 @@ protected:
          << "  \"ms2_spectra\": " << gs.ms2_spectra << ",\n"
          << "  \"peaks\": " << gs.ms1_peaks + gs.ms2_peaks << ",\n"
          << "  \"empty_cells\": " << gs.missing_cells << ",\n"
+         << "  \"overlapping_windows\": " << gs.overlapping_windows << ",\n"
          << "  \"grid_bytes\": " << grid.bytes() << ",\n"
          << "  \"assignments\": " << es.assignments << ",\n"
          << "  \"precursors_without_window\": " << es.without_window << ",\n"
@@ -699,6 +720,8 @@ protected:
          << "  \"total\": " << json(t_total) << ",\n"
          << "  \"ms2_offset_ppm\": " << eopt.ms2_ppm_offset << ",\n"
          << "  \"ms1_offset_ppm\": " << eopt.ms1_ppm_offset << ",\n"
+         << "  \"ms2_offset_slope_ppm_per_th\": " << eopt.ms2_ppm_slope << ", \"ms2_offset_mz_ref\": " << eopt.ms2_mz_ref << ",\n"
+         << "  \"ms1_offset_slope_ppm_per_th\": " << eopt.ms1_ppm_slope << ", \"ms1_offset_mz_ref\": " << eopt.ms1_mz_ref << ",\n"
          << "  \"mz_tol_ppm\": " << eopt.ms2_ppm << ",\n"
          << "  \"mz_tol_ms1_ppm\": " << eopt.ms1_ppm << ",\n";
       if (cal)

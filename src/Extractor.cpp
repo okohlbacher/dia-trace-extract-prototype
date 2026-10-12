@@ -218,8 +218,9 @@ namespace ODIA
     out.unit = unit;
     out.records.clear();
     out.lookups = 0;
-    const double ms2_scale = 1.0 + opt_.ms2_ppm_offset * 1e-6;
-    const double ms1_scale = 1.0 + opt_.ms1_ppm_offset * 1e-6;
+    const auto corrected = [](double mz, double offset, double slope, double ref) { return mz * (1.0 + (offset + slope * (mz - ref)) * 1e-6); };
+    const auto ms2_corr = [&](double mz) { return corrected(mz, opt_.ms2_ppm_offset, opt_.ms2_ppm_slope, opt_.ms2_mz_ref); };
+    const auto ms1_corr = [&](double mz) { return corrected(mz, opt_.ms1_ppm_offset, opt_.ms1_ppm_slope, opt_.ms1_mz_ref); };
     const int n_iso = opt_.extract_ms1 ? opt_.ms1_isotopes + 1 : 0;
     const auto& ms1 = grid_.ms1;
     const auto& lane = grid_.windows[plan.assignments[u.begin].window];
@@ -270,7 +271,7 @@ namespace ODIA
       c_min = std::min(c_min, lo); c_max = std::max(c_max, hi);
       for (std::uint32_t f = lib.fragment_begin[p], row = 0; f < lib.fragment_begin[p + 1]; ++f, ++row)
       {
-        const Bounds bd = bounds(lib.fragment_mz[f] * ms2_scale, opt_.ms2_ppm);
+        const Bounds bd = bounds(ms2_corr(lib.fragment_mz[f]), opt_.ms2_ppm);
         t2.push_back({bd.lo, bd.hi, rec, row});
       }
       std::sort(t2.begin() + g2.back(), t2.end(), [](const Target& x, const Target& y) {
@@ -289,7 +290,7 @@ namespace ODIA
             m_min = std::min(m_min, m0); m_max = std::max(m_max, m1);
             for (int i = 0; i < n_iso; ++i)
             {
-              const Bounds bd = bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm);
+              const Bounds bd = bounds(ms1_corr(lib.precursor_mz[p] + i * C13_C12 / z), opt_.ms1_ppm);
               t1.push_back({bd.lo, bd.hi, rec, static_cast<std::uint32_t>(i)});
             }
             std::sort(t1.begin() + g1.back(), t1.end(), [](const Target& x, const Target& y) {
@@ -309,7 +310,7 @@ namespace ODIA
           iso.clear();
           for (int i = 0; i < n_iso; ++i)
           {
-            iso.push_back(bounds((lib.precursor_mz[p] + i * C13_C12 / z) * ms1_scale, opt_.ms1_ppm));
+            iso.push_back(bounds(ms1_corr(lib.precursor_mz[p] + i * C13_C12 / z), opt_.ms1_ppm));
           }
           const std::size_t J = j1 - j0 + 1;
           ms1_at.assign(J * n_iso, 0.0f);

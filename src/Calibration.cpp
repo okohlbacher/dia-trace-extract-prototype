@@ -5,6 +5,7 @@
 #include "Profile.h"
 
 #include <algorithm>
+#include <array>
 #include <mutex>
 #include <cstdlib>
 #include <omp.h>
@@ -57,20 +58,32 @@ namespace ODIA
     /// biased a weighted median). Offset = median; sigma = 1.4826 x the median absolute deviation (robust to the
     /// random centroids of false anchors); accuracy = `k` sigma. Both scale with the instrument's error width; the
     /// multiple k is the only fixed constant (6: see docs/analysis/trace_quality.md, 5 reproduces DIA-NN's rule).
+    /// One apex centroid's mass error: ppm against the library m/z, its intensity, the library m/z, the run RT (s)
+    /// and the isolation window (-1 = MS1).
+    struct MassErr
+    {
+      double ppm = 0, intensity = 0, mz = 0, rt = 0;
+      int window = -1;
+    };
+
     struct MassModel
     {
       double offset = 0, sigma = 0, accuracy = 0;
+      double slope = 0, mz_ref = 0;   ///< correction(mz) = offset + slope x (mz - mz_ref), ppm (slope 0 = constant)
       double coverage_width = 0;   ///< half width holding `coverage` of the true matches; 0 = not measurable
       std::size_t n = 0;
     };
     /// `centre`/`width`: the search window the errors were found in (the background is flat over its symmetric part).
-    MassModel massModel(const std::vector<std::pair<double, double>>& v, double k, double centre, double width, double coverage)
+    /// `linear`: fit an m/z-dependent correction (robust line through the core of the errors) and keep its slope
+    /// when it is material (shift over the central 90% of the m/z range > 0.5 sigma and > 3 standard errors);
+    /// sigma is then the width of the residuals about that line.
+    MassModel massModel(const std::vector<MassErr>& v, double k, double centre, double width, double coverage, bool linear)
     {
       MassModel m;
       if (v.size() < 50) { return m; }   // too few centroids to measure a width: accuracy 0 = not measured
       std::vector<double> x;
       x.reserve(v.size());
-      for (const auto& [val, w] : v) { x.push_back(val); }
+      for (const auto& e : v) { x.push_back(e.ppm); }
       std::sort(x.begin(), x.end());
       const auto q = [](const std::vector<double>& s, double f) { return s[static_cast<std::size_t>(f * (s.size() - 1) + 0.5)]; };
       m.offset = q(x, 0.5);
@@ -78,6 +91,46 @@ namespace ODIA
       for (auto& val : x) { val = std::fabs(val - m.offset); }
       std::sort(x.begin(), x.end());
       m.sigma = 1.4826 * q(x, 0.5);
+      if (linear && m.sigma > 0)
+      {
+        // Least squares on the core (|error - offset| < 4 sigma), re-centred on the median m/z, twice: the second pass
+        // uses residuals about the first line. The background centroids sit outside the core.
+        std::vector<double> mzs;
+        for (const auto& e : v) { mzs.push_back(e.mz); }
+        std::sort(mzs.begin(), mzs.end());
+        const double ref = q(mzs, 0.5), span = q(mzs, 0.95) - q(mzs, 0.05);
+        double a = m.offset, b = 0, sig = m.sigma, se = 0;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+          double sx = 0, sy = 0, sxx = 0, sxy = 0, n = 0;
+          for (const auto& e : v)
+          {
+            const double dx = e.mz - ref, r = e.ppm - (a + b * dx);
+            if (std::fabs(r) >= 4 * sig) { continue; }
+            sx += dx; sy += e.ppm; sxx += dx * dx; sxy += dx * e.ppm; n += 1;
+          }
+          const double det = n * sxx - sx * sx;
+          if (n < 50 || det <= 0) { b = 0; break; }
+          b = (n * sxy - sx * sy) / det; a = (sy - b * sx) / n;
+          std::vector<double> res;
+          double ss = 0;
+          for (const auto& e : v)
+          {
+            const double r = e.ppm - (a + b * (e.mz - ref));
+            if (std::fabs(r) < 4 * sig) { res.push_back(std::fabs(r)); ss += r * r; }
+          }
+          std::sort(res.begin(), res.end());
+          sig = std::max(1.4826 * q(res, 0.5), 1e-3);
+          se = std::sqrt(ss / std::max(1.0, n - 2) / (sxx - sx * sx / n));
+        }
+        if (b != 0 && std::fabs(b) * span > 0.5 * sig && std::fabs(b) > 3 * se)
+        {
+          m.offset = a; m.slope = b; m.mz_ref = ref; m.sigma = sig;
+          x.clear();
+          for (const auto& e : v) { x.push_back(std::fabs(e.ppm - (a + b * (e.mz - ref)))); }
+          std::sort(x.begin(), x.end());
+        }
+      }
       m.accuracy = std::max(k * m.sigma, 0.1);   // floor: the fixed-point m/z grid (1e-5 Th) resolves ~0.01 ppm at 1000 Th
       // Coverage: |error - offset| binned over the symmetric part of the window; the background per bin is the median
       // over the outer half; from the outside in, the first bin at which the matches beyond it, above background,
@@ -124,8 +177,8 @@ namespace ODIA
       std::vector<float> coelution;   ///< mean pairwise fragment correlation when extracted at k sigma, per k of kSigmaGrid
       std::vector<float> coelution_weak;   ///< the same over the weak library fragments only (< 30% of the strongest)
       float apex_sum = 0;             ///< summed fragment intensity at the apex
-      std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) of the fragments over the co-elution window
-      std::vector<std::pair<double, double>> ms1_ppm;  ///< (ppm, intensity) of M+0 at the MS1 scans of that window
+      std::vector<MassErr> ms2_ppm;   ///< apex mass errors of the fragments
+      std::vector<MassErr> ms1_ppm;   ///< apex mass error of M+0 at the MS1 scan nearest the apex
     };
 
     std::size_t nearestWindow(const RunGrid& g, double mz)
@@ -262,7 +315,7 @@ namespace ODIA
         const auto [v, m] = apex[f];
         if (v <= 0 || v < static_cast<float>(opt.min_relative_intensity) * strongest) { continue; }
         const double t = lib.fragment_mz[f0 + f];
-        out.ms2_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v});
+        out.ms2_ppm.push_back({(fromFixed(m) - t) / t * 1e6, static_cast<double>(v), t, g.cycle_rt[c], static_cast<int>(&lane - g.windows.data())});
       }
       // The fragment traces at k sigma around the offset, over the co-elution window: the k at which they co-elute best
       // is the tolerance multiple (calibrate()).
@@ -319,7 +372,7 @@ namespace ODIA
         if (j == ms1.rt.size() || (j > 0 && out.anchor.run_rt - ms1.rt[j - 1] < ms1.rt[j] - out.anchor.run_rt)) { --j; }
         const double t = lib.precursor_mz[p], tc = t * (1.0 + ms.ms1_offset * 1e-6), tol = tc * ms.ms1_width * 1e-6;
         const auto [v, m] = maxPeak(ms1.peaks, ms1.peaks.cellBegin(j), ms1.peaks.cellEnd(j), toFixed(tc - tol), toFixed(tc + tol));
-        if (v > 0) { out.ms1_ppm.push_back({(fromFixed(m) - t) / t * 1e6, v}); }
+        if (v > 0) { out.ms1_ppm.push_back({(fromFixed(m) - t) / t * 1e6, static_cast<double>(v), t, ms1.rt[j], -1}); }
       }
       return out;
     }
@@ -689,7 +742,7 @@ namespace ODIA
       return a.fragments >= opt.strict_min_fragments && a.correlation >= opt.strict_min_correlation && a.cosine >= opt.strict_min_cosine;
     };
     const auto errors = [&](const std::vector<PanelResult>& results, const std::vector<Anchor>& anchors,
-                            std::vector<std::pair<double, double>>& ms2, std::vector<std::pair<double, double>>& ms1) {
+                            std::vector<MassErr>& ms2, std::vector<MassErr>& ms1) {
       std::size_t n_strict = 0;
       for (const auto& a : anchors) { n_strict += a.used && strict_ok(a); }
       const bool strict_only = n_strict >= 200;
@@ -706,10 +759,10 @@ namespace ODIA
     const auto narrowed = [&](const MassModel& m, double previous_width) {
       return m.n > 0 ? std::min(opt.search_ppm, opt.search_narrow_factor * m.accuracy) : previous_width;
     };
-    std::vector<std::pair<double, double>> ms2_ppm, ms1_ppm;
+    std::vector<MassErr> ms2_ppm, ms1_ppm;
     errors(stage1, a1, ms2_ppm, ms1_ppm);
-    MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage);
-    MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage);
+    MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage, opt.linear_mass_model);
+    MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage, opt.linear_mass_model);
 
     // Stage 2: around the stage-1 curve, relaxed criteria, the mass search narrowed around the stage-1 offsets;
     // repeated while the measured window still changes (at most search_rounds passes). Final fit and offsets.
@@ -769,16 +822,16 @@ namespace ODIA
       double sigma2 = 0;
       res.rt_map = robustFit(res.anchors, opt, sigma2);
       errors(stage2, res.anchors, ms2_ppm, ms1_ppm);
-      m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage);
-      m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage);
+      m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage, opt.linear_mass_model);
+      m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage, opt.linear_mass_model);
     }
     if (const char* dump = std::getenv("ODIA_DUMP_MASS_ERRORS"))
     {
-      // Diagnostic: the apex mass errors behind the mass model (ppm, intensity), one line per centroid.
+      // Diagnostic: the apex mass errors behind the mass model, one line per centroid.
       std::ofstream o(dump);
-      o << "level\tppm\tintensity\n";
-      for (const auto& [e, w] : ms2_ppm) { o << "2\t" << e << '\t' << w << '\n'; }
-      for (const auto& [e, w] : ms1_ppm) { o << "1\t" << e << '\t' << w << '\n'; }
+      o << "level\tppm\tintensity\tmz\trt\twindow\n";
+      for (const auto& e : ms2_ppm) { o << "2\t" << e.ppm << '\t' << e.intensity << '\t' << e.mz << '\t' << e.rt << '\t' << e.window << '\n'; }
+      for (const auto& e : ms1_ppm) { o << "1\t" << e.ppm << '\t' << e.intensity << '\t' << e.mz << '\t' << e.rt << '\t' << e.window << '\n'; }
     }
     if (std::getenv("ODIA_PROFILE"))
     {
@@ -853,6 +906,7 @@ namespace ODIA
       for (const auto& [k, v] : res.coelution_by_sigma) { if (v > best + 1e-9) { best = v; k2 = k; } }
     }
     res.ms2_coverage_ppm = m2.coverage_width; res.ms1_coverage_ppm = m1.coverage_width;
+    res.ms2_slope_ppm_per_th = m2.slope; res.ms2_mz_ref = m2.mz_ref; res.ms1_slope_ppm_per_th = m1.slope; res.ms1_mz_ref = m1.mz_ref;
     res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = m2.n ? std::max(k2 * m2.sigma, 0.1) : 0.0;
     res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = m1.n ? std::max(opt.ms1_sigma * m1.sigma, 0.1) : 0.0;
     res.accuracy_sigma = k2;
