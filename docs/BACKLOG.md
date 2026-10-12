@@ -77,6 +77,7 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
+- Push the DIALibGen build fix (tools/DIALibGen, branch compact-parquet-plain-strings, 6f26790) and open its PR.
 - Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).
 - 50K shared library (Justin).

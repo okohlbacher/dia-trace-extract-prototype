@@ -1,4 +1,4 @@
-# ODIA-V3 trace extraction: dossier (2026-10-11, updated 2026-10-12)
+# ODIA-V3 trace extraction: dossier (2026-10-11, updated 2026-10-12; release report: 10-release-report-v0.2.md)
 
 **Goal.** Fast, memory-efficient extraction of DIA fragment and precursor traces (XICs) from a *predicted, recalibrated*
 library, exported as Parquet/TSV for comparison with DIA-NN and OpenSWATH. Scoring, FDR and PyProphet are out of scope.
@@ -196,13 +196,13 @@ Details are in [analysis/ms2_tail.md](analysis/ms2_tail.md); example traces in `
 
 ## 4. Performance
 
-**Current binary** (6d26c49), run 01, 64 threads, full tuned libraries (all precursors, top 6 fragments), mzML on local
-`/scratch`, 2 runs each:
+**Current binary** (cb466f0, V0.2), run 01, 64 threads, full tuned libraries (all precursors, top 6 fragments), mzML on
+local `/scratch`, 2 runs each, node load ~21 (`results/full_cb466f0/`):
 
 | library | total | calibration | extraction | peak RSS | traces |
 |---|---|---|---|---|---|
-| human, 3.49 M precursors | 5.9 s (8.5 s with the library cold on Ceph) | 0.5 s | 3.2 s | 3.8 GiB | 31.3 M |
-| entrapment, 7.0 M precursors | 8.6–9.0 s | 0.5 s | 5.7–6.0 s | 4.7 GiB | 63.0 M |
+| human, 3.49 M precursors | 5.8–6.1 s | 0.5 s | 3.3–3.4 s | 3.9 GiB | 31.3 M |
+| entrapment, 7.0 M precursors | 9.3 s (8.6–9.0 s with 6d26c49 on a quieter node) | 1.0 s | 6.1–6.2 s | 4.8 GiB | 63.0 M |
 
 **How we got here** (entrapment, full library, 64 threads):
 
@@ -230,26 +230,26 @@ How the extraction works:
 - **Determinism.** Output is byte-identical for 1 and 64 threads.
 
 **Runtime vs threads** (run 01, shared tuned library of 82,333 precursors with all fragments, one run per point;
-`scripts/bench_threads.sh`, `results/threads_6d26c49/`; ours re-measured with 6d26c49, DIA-NN and OpenSWATH from
-`results/threads/`, unchanged binaries):
+`scripts/bench_threads.sh`, `results/threads_cb466f0/`; ours re-measured with cb466f0 at the V0.2 defaults, DIA-NN and
+OpenSWATH from `results/threads/`, unchanged binaries; node load 13–16 from other users):
 
 ![Thread scaling](figures/thread_scaling.png)
 
 | threads | ours A | ours B | DIA-NN 1.7.12³ | OpenSwathWorkflow⁴ |
 |---|---|---|---|---|
-| 4 | 5.5 s / 2.4 GiB | 3.8 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 3.4 s | 2.4 s | 59 s | 189 s |
-| 16 | 2.3 s | 1.7 s | 34 s | 183 s |
-| 32 | 1.8 s | 1.4 s | 26 s | 183 s |
-| 64 | 1.8 s / 2.7 GiB | 1.4 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 4 | 4.4 s / 2.4 GiB | 4.4 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 2.6 s | 2.6 s | 59 s | 189 s |
+| 16 | 1.9 s | 1.9 s | 34 s | 183 s |
+| 32 | 1.6 s | 1.6 s | 26 s | 183 s |
+| 64 | 1.6 s / 2.7 GiB | 1.6 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
 ³ DIA-NN can export traces only while it searches, so its time includes the search. ⁴ OpenSWATH's time includes its scoring.
-Ours A is now the recommended rule (MS2 ±6 ppm, MS1 measured); before it used DIA-NN's tolerances (22.9 s at 4 threads,
-6.1 s at 64, on the older binary).
+Ours A runs at the V0.2 defaults (tolerances as instrument-class multiples of the measured widths, m/z-dependent
+offset when material); the first version of this series used DIA-NN's tolerances (22.9 s at 4 threads, 6.1 s at 64).
 
-- **Speed.** Ours A is 14–21× faster than DIA-NN and 40–100× faster than OpenSWATH at every thread count.
-- **Ours A vs ours B.** A pays 0.4–1.7 s for its self-calibration (panel load and calibration).
-- **Scaling.** Ours flattens beyond 32 threads at this size (1.8 s, of which ingest 0.3 s, panel and calibration ~1 s);
+- **Speed.** Ours A is 21–26× faster than DIA-NN and 52–114× faster than OpenSWATH at every thread count.
+- **Ours A vs ours B.** The self-calibration (panel load and calibration) now costs nothing measurable at this size.
+- **Scaling.** Ours flattens beyond 32 threads at this size (1.6 s, of which ingest 0.3 s, calibration ~0.5 s);
   on the full 7 M library extraction still scales to 64 threads.
 - **OpenSWATH stops scaling at 8 threads,** while its memory grows to 14 GiB.
 - **mzPeak input** goes through the mzpeak-openms library (submodule `external/mzpeak`, partitioned parallel read

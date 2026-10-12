@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 bench, out = sys.argv[1], sys.argv[2]
 TOOLS = [("diann/diann", "DIA-NN 1.7.12 (search + XIC export)", "#2a9fd6", "o"),
-         ("odiaA", "ours A (recommended rule)", "#023e8a", "s"),
+         ("odiaA", "ours A (V0.2 defaults)", "#023e8a", "s"),
          ("odiaB", "ours B (OpenSWATH rules)", "#9c4a00", "D"),
          ("osw", "OpenSwathWorkflow (extraction + scoring)", "#f4a261", "^")]
 

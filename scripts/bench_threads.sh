@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runtime vs threads for the four extractions on the same run and the same shared (tuned, ID-restricted)
 # library, with the benchmark's settings (scripts/benchmark_refined.sh, RECAL=tuned):
-#   DIA-NN 1.7.12 (search + --xic export: it cannot export traces without searching), ours A (recommended rule:
-#   MS2 +-6 ppm, MS1 tolerance measured),
+#   DIA-NN 1.7.12 (search + --xic export: it cannot export traces without searching), ours A (the defaults:
+#   tolerances as instrument-class multiples of the measured widths, m/z-dependent offset when material),
 #   ours B (OpenSWATH rules), OpenSwathWorkflow (extraction + its scoring; features discarded).
 # Each tool runs once per thread count, interleaved by thread count; /usr/bin/time -v logs per run.
 # ODIA_ONLY=1 REF=dir: run only ours; DIA-NN and OpenSWATH logs are linked from REF (an earlier OUT_DIR) per thread count.
@@ -31,8 +31,8 @@ mkdir -p $OUT
 for t in $THREADS; do
   W=$OUT/t$t; mkdir -p $W/diann; T=$SCRATCH/out/t$t; mkdir -p $T/diann/temp
   echo "== $t threads $(date -Is) load $(cut -d' ' -f1 /proc/loadavg)"
-  /usr/bin/time -v $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 0 \
-      -aggregation max -mass_calibration auto -threads $t -out $T/odiaA.parquet > $W/odiaA.log 2>&1
+  /usr/bin/time -v $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 \
+      -threads $t -out $T/odiaA.parquet > $W/odiaA.log 2>&1
   /usr/bin/time -v $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
       -aggregation sum -ms1_isotope_spacing unit -threads $t -out $T/odiaB.parquet > $W/odiaB.log 2>&1
   if [ "${ODIA_ONLY:-0}" = 1 ]; then
