@@ -276,17 +276,25 @@ timsTOF library of the HYE FASTA (4.15 M precursors).
 - **Trade-off on the anchors' traces** (±10 / 15 / 20 / 25 / 34 ppm, uncollapsed grid): co-elution 0.863 / 0.872 / 0.869 /
   0.869 / 0.860, dropouts 6.1 / 4.5 / 3.5 / 3.3 / 2.8%: a plateau from ±15 ppm, where the 6σ rule now lands.
 - **Reference engine.** DIA-NN 1.7.12 reads no `.d`, so the loaded grid is exported as a centroided mzML with one
-  spectrum per window (`-out_mzml`, 6.9 GB, 108,688 spectra). DIA-NN on it: 54,557 precursors at 1% FDR in 35 min
-  (16.9 GB), mass accuracy ±11.8 ppm, XICs via `--xic`. On its IDs (44,990 in our library, 641 k traces):
+  spectrum per window (`-out_mzml`, 6.9 GB, 108,688 spectra). DIA-NN on it: 54,557 / 55,665 precursors at 1% FDR
+  (runs A01 / B01) in 33–35 min (16.9 GB), mass accuracy ±11.8 / ±12.6 ppm, XICs via `--xic`. On its IDs (44,990 /
+  45,900 in our library, ~640 k traces each):
 
-  | ours vs DIA-NN, run A01 | MS2 median r | MS2 r > 0.9 | MS1 M+0 median r | MS1 r > 0.9 | log2 ratio MS2 / MS1 |
+  | ours vs DIA-NN | MS2 median r | MS2 r > 0.9 | MS1 M+0 median r | MS1 r > 0.9 | log2 ratio MS2 / MS1 |
   |---|---|---|---|---|---|
-  | measured tolerances (±16 / ±20 ppm) | 0.956 | 67% | 0.849 | 43% | +0.18 / +0.46 |
-  | at DIA-NN's ±11.8 ppm | **0.9993** | **91.7%** | 0.944 | 60% | 0.00 / +0.10 |
+  | A01, defaults (4σ: ±10.8 / ±12.9 ppm) | 0.992 | 86.0% | 0.953 | 63% | −0.05 / +0.15 |
+  | A01, at DIA-NN's ±11.8 ppm | **0.9993** | **91.7%** | 0.944 | 60% | 0.00 / +0.10 |
+  | B01, defaults (4σ: ±10.6 / ±12.3 ppm) | 0.974 | 76.0% | 0.963 | 67% | −0.12 / +0.11 |
+  | B01, at ±11.8 ppm (DIA-NN: ±12.6) | 0.996 | 89.4% | 0.960 | 66% | −0.03 / +0.09 |
 
-  Same grid, same windows: at the same tolerance the engines agree on diaPASEF as on Astral (91.2%). The gap at the
-  measured tolerances is the tolerance choice itself (our anchor trade-off puts the optimum at ±15–20 ppm, DIA-NN
-  picks ±11.8); a quality verdict between the two needs the all-ID shape analysis done for Astral.
+  Same grid, same windows: at the same tolerance the engines agree on diaPASEF as on Astral (91.2%). At the defaults
+  our MS2 window (4σ) is a little narrower than DIA-NN's choice, which costs a few percent of agreement, by
+  construction of the comparison; the trace-quality screen (§7) puts the optimum at 4–5σ on this instrument.
+- **MS1 on diaPASEF.** At DIA-NN's MS2 tolerance, our MS1 M+0 traces agree with DIA-NN's for 60% of precursors
+  (r > 0.9) whatever the MS1 window: 29% at ±4 ppm, 60% at ±7, 60% at ±11.8, 44% at ±20, 32% at ±30, with the
+  intensity ratio crossing 1 near ±10 ppm (our default on this run: ±13 ppm). The remaining disagreement is not the
+  window; it is open (DIA-NN's MS1 trace construction on an mzML without mobility, or the MS1 frames collapsed over
+  the whole mobility range).
 - **Cost.** 36–45 s per run at 32 threads (ingest 19–26 s on the per-spectrum mzPeak path, calibration 5 s,
   extraction 12–13 s), 17 GB peak RSS, 36.7 M traces.
 - **Not yet:** the mobility dimension beyond the window split; the all-ID tolerance trade-off on this data.
