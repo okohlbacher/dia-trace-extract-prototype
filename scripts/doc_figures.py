@@ -2,6 +2,7 @@
 """Figures for docs/EXTRACTION.md.
 
 usage: doc_figures.py MZML TRACES_DIR AXES_PARQUET ANCHORS_TSV PRECURSOR_ID OUT_DIR
+       doc_figures.py --overview OUT_DIR      (the overview figure only; needs no data)
 
   MZML          the run (indexed mzML; only the spectra around the example are read)
   TRACES_DIR    DIATraceExtractor output (Parquet directory) that contains PRECURSOR_ID
@@ -16,8 +17,6 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, Rectangle
 
-mzml, traces_dir, axes_file, anchors_file, pid, out = sys.argv[1:7]
-os.makedirs(out, exist_ok=True)
 INK, MUTED, ACCENT, ACCENT2, SOFT = "#1d2433", "#6b7280", "#1f6feb", "#d9480f", "#e8eef9"
 plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False, "axes.edgecolor": MUTED})
 
@@ -27,25 +26,44 @@ def box(ax, x, y, w, h, text, fc=SOFT, ec=ACCENT, fs=9, bold=False):
     ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fs, color=INK, weight="bold" if bold else None, wrap=True)
 
 
-def arrow(ax, x0, y0, x1, y1, color=MUTED):
-    ax.annotate("", xy=(x1, y1), xytext=(x0, y0), arrowprops=dict(arrowstyle="-|>", color=color, lw=1.3))
+def arrow(ax, x0, y0, x1, y1, color=MUTED, ls="-"):
+    ax.annotate("", xy=(x1, y1), xytext=(x0, y0), arrowprops=dict(arrowstyle="-|>", color=color, lw=1.3, ls=ls))
 
 
 # ---------------------------------------------------------------- 1. overview
-fig, ax = plt.subplots(figsize=(10, 3.0)); ax.set_xlim(0, 10); ax.set_ylim(0, 3); ax.axis("off")
-box(ax, 0.1, 1.85, 2.0, 0.8, "Spectral library\n(predicted, RT-tuned)")
-box(ax, 0.1, 0.35, 2.0, 0.8, "DIA run\n(centroided mzML)")
-box(ax, 2.8, 0.35, 2.0, 0.8, "Run grid\ncycles × isolation windows")
-box(ax, 2.8, 1.85, 2.0, 0.8, "Calibration\nfrom the run itself")
-box(ax, 5.5, 1.1, 2.2, 0.8, "Extraction\nfragment + MS1 isotope traces", fc="#dbe7ff", bold=True)
-box(ax, 8.3, 1.1, 1.6, 0.8, "Traces\n(Parquet)", fc="#f3f4f6", ec=MUTED)
-arrow(ax, 2.1, 0.75, 2.8, 0.75); arrow(ax, 2.1, 2.25, 2.8, 2.25); arrow(ax, 3.8, 1.15, 3.8, 1.85)
-arrow(ax, 4.8, 2.25, 5.5, 1.75); arrow(ax, 4.8, 0.75, 5.5, 1.25); arrow(ax, 7.7, 1.5, 8.3, 1.5)
-ax.text(5.15, 2.45, "RT map, mass offsets,\nmeasured tolerances", fontsize=7.5, color=MUTED, ha="center")
-ax.annotate("", xy=(5.5, 1.5), xytext=(2.1, 2.05), arrowprops=dict(arrowstyle="-|>", color=MUTED, lw=1.0, ls="--",
-            connectionstyle="arc3,rad=-0.25"))
-ax.text(3.3, 1.45, "precursors and\nfragments", fontsize=7.5, color=MUTED, ha="center")
-fig.tight_layout(); fig.savefig(os.path.join(out, "overview.png"), dpi=170); plt.close(fig)
+def overview(out):
+    """Data flow: library and run in, calibration from the run, extraction, traces out. No line crosses a box."""
+    fig, ax = plt.subplots(figsize=(10, 3.6)); ax.set_xlim(0, 10); ax.set_ylim(0, 3.8); ax.axis("off")
+    box(ax, 0.1, 2.0, 2.0, 0.8, "Spectral library\n(predicted, RT-tuned)")
+    box(ax, 0.1, 0.4, 2.0, 0.8, "DIA run\n(centroided mzML / mzPeak)")
+    box(ax, 2.9, 2.0, 2.0, 0.8, "Calibration\nfrom the run itself")
+    box(ax, 2.9, 0.4, 2.0, 0.8, "Run grid\ncycles × isolation windows")
+    box(ax, 5.8, 1.2, 2.2, 0.8, "Extraction\nfragment + MS1 isotope traces", fc="#dbe7ff", bold=True)
+    box(ax, 8.4, 1.2, 1.5, 0.8, "Traces\n(Parquet)", fc="#f3f4f6", ec=MUTED)
+    # left column to middle column
+    arrow(ax, 2.1, 2.4, 2.9, 2.4); arrow(ax, 2.1, 0.8, 2.9, 0.8)
+    # the grid feeds the calibration (its spectra) and the extraction
+    arrow(ax, 3.9, 1.2, 3.9, 2.0); ax.text(4.0, 1.6, "spectra", fontsize=7.5, color=MUTED, ha="left", va="center")
+    arrow(ax, 4.9, 0.8, 5.8, 1.45)
+    # the calibration result feeds the extraction
+    arrow(ax, 4.9, 2.4, 5.8, 1.75)
+    ax.text(5.45, 2.45, "RT map, mass model,\ntolerances", fontsize=7.5, color=MUTED, ha="center", va="bottom")
+    # the library's precursors and fragments go to the extraction, routed above the boxes
+    xs, ys = [1.1, 1.1, 6.9], [2.8, 3.45, 3.45]
+    ax.plot(xs, ys, color=MUTED, lw=1.0, ls="--")
+    arrow(ax, 6.9, 3.45, 6.9, 2.0, ls="--")
+    ax.text(4.0, 3.5, "precursors and fragments", fontsize=7.5, color=MUTED, ha="center", va="bottom")
+    # traces out
+    arrow(ax, 8.0, 1.6, 8.4, 1.6)
+    fig.tight_layout(); fig.savefig(os.path.join(out, "overview.png"), dpi=170); plt.close(fig)
+
+
+if len(sys.argv) == 3 and sys.argv[1] == "--overview":
+    os.makedirs(sys.argv[2], exist_ok=True); overview(sys.argv[2]); sys.exit(0)
+
+mzml, traces_dir, axes_file, anchors_file, pid, out = sys.argv[1:7]
+os.makedirs(out, exist_ok=True)
+overview(out)
 
 # ---------------------------------------------------------------- example precursor: our traces and axes
 t = ds.dataset(traces_dir).to_table(filter=ds.field("precursor_id") == pid).to_pandas()
