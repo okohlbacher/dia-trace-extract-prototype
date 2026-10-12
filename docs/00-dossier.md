@@ -262,20 +262,34 @@ Ours A is now the recommended rule (MS2 ±6 ppm, MS1 measured); before it used D
 
 ProteoBench diaPASEF module (HYE mixed-species, 25 ng, 30-min gradient, 8 TIMS ramps × 3 windows of 25 Th per cycle),
 two runs (condition A/B replicate 01), converted with mzpeak-convert 0.18.0 (6.7–6.9 GB mzPeak each), a DIALibGen
-timsTOF library of the HYE FASTA (4.15 M precursors), no reference engine (DIA-NN 1.7.12 reads no `.d`).
+timsTOF library of the HYE FASTA (4.15 M precursors).
 
 - **Grid.** A diaPASEF frame carries three isolation windows separated by ion mobility; the loader splits each frame by
-  the per-peak mobility into its windows: 4,348 cycles × 24 windows, 104,340 window-spectra, 2.77 G points (the
-  ims-compact layout expands every TIMS scan), 21 GB grid.
-- **Calibration** (RT map and masses from the run): 146 / 142 strict anchors, 236 / 235 anchors; offsets MS2 −2.7 / −3.2
-  ppm, MS1 −3.7 / −4.0 ppm; error widths MS2 5.7 / 5.2 ppm, MS1 5.5 / 5.7 ppm (Astral: 1.0 / 0.4); peak FWHM 3
-  cycles (2.9 s); RT residual p99 55 / 60 s. Tolerances at 6σ: MS2 ±34 / ±31 ppm, MS1 ±33 / ±34 ppm.
-- **Trade-off on the anchors' traces** (±10 / 15 / 20 / 25 / 34 ppm): co-elution 0.863 / 0.872 / 0.869 / 0.869 / 0.860,
-  dropouts 6.1 / 4.5 / 3.5 / 3.3 / 2.8%: a plateau from ±15 ppm, 6σ at its upper edge.
-- **Cost.** 73 s per run at 32 threads (ingest 24 s on the per-spectrum mzPeak path, calibration 5 s, extraction
-  40–44 s), 33 GB peak RSS, 36.7 M traces.
-- **Not yet:** a trace-level comparison with another engine on this data; the mobility dimension is not used in the
-  extraction beyond the window split.
+  the per-peak mobility into its windows and collapses the per-scan centroids of each ion (15 ppm, summed; the
+  ims-compact layout stores every TIMS scan): 4,348 cycles × 24 windows, 104,340 window-spectra, 0.71 G points
+  (2.77 G before the collapse), 5.4 GB grid.
+- **Calibration** (RT map and masses from the run): 347 / 355 strict anchors, 670 / 633 anchors; offsets MS2 −4.5 / −4.5
+  ppm, MS1 −3.4 / −2.8 ppm; error widths MS2 2.7 / 2.6 ppm, MS1 3.4 / 3.2 ppm (Astral: 1.0 / 0.4); peak FWHM 3 cycles
+  (2.9 s); RT residual p99 104 / 78 s (predicted RT, `-rt_mode auto`). Tolerances (6σ): MS2 ±16 / ±16 ppm, MS1 ±20 / ±19
+  ppm. Before the scan collapse the widths were 5.2–5.7 ppm and the anchors ~145: the intensity-weighted collapsed
+  centroids are the better mass measurement.
+- **Trade-off on the anchors' traces** (±10 / 15 / 20 / 25 / 34 ppm, uncollapsed grid): co-elution 0.863 / 0.872 / 0.869 /
+  0.869 / 0.860, dropouts 6.1 / 4.5 / 3.5 / 3.3 / 2.8%: a plateau from ±15 ppm, where the 6σ rule now lands.
+- **Reference engine.** DIA-NN 1.7.12 reads no `.d`, so the loaded grid is exported as a centroided mzML with one
+  spectrum per window (`-out_mzml`, 6.9 GB, 108,688 spectra). DIA-NN on it: 54,557 precursors at 1% FDR in 35 min
+  (16.9 GB), mass accuracy ±11.8 ppm, XICs via `--xic`. On its IDs (44,990 in our library, 641 k traces):
+
+  | ours vs DIA-NN, run A01 | MS2 median r | MS2 r > 0.9 | MS1 M+0 median r | MS1 r > 0.9 | log2 ratio MS2 / MS1 |
+  |---|---|---|---|---|---|
+  | measured tolerances (±16 / ±20 ppm) | 0.956 | 67% | 0.849 | 43% | +0.18 / +0.46 |
+  | at DIA-NN's ±11.8 ppm | **0.9993** | **91.7%** | 0.944 | 60% | 0.00 / +0.10 |
+
+  Same grid, same windows: at the same tolerance the engines agree on diaPASEF as on Astral (91.2%). The gap at the
+  measured tolerances is the tolerance choice itself (our anchor trade-off puts the optimum at ±15–20 ppm, DIA-NN
+  picks ±11.8); a quality verdict between the two needs the all-ID shape analysis done for Astral.
+- **Cost.** 36–45 s per run at 32 threads (ingest 19–26 s on the per-spectrum mzPeak path, calibration 5 s,
+  extraction 12–13 s), 17 GB peak RSS, 36.7 M traces.
+- **Not yet:** the mobility dimension beyond the window split; the all-ID tolerance trade-off on this data.
 
 ## 5. Open items
 
