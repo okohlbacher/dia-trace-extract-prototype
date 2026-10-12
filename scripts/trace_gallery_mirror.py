@@ -152,7 +152,7 @@ def figure(rows, title, path):
     for ext in ("png", "pdf"): fig.savefig(f"{path}.{ext}", dpi=200)
     plt.close(fig)
 
-tag = "random 50" if a.sample == "random" else "stratified sample"
+tag = f"random {len(sel)}" if a.sample == "random" else "stratified sample"
 figure(sel, f"Run 01, {tag}: mirrored pairwise XICs by divergence mode",
        os.path.join(a.fig_dir, f"trace_mirror_{a.sample}"))
 print("->", os.path.join(a.fig_dir, f"trace_mirror_{a.sample}.png"))

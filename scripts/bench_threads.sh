@@ -34,7 +34,7 @@ for t in $THREADS; do
   /usr/bin/time -v $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 \
       -threads $t -out $T/odiaA.parquet > $W/odiaA.log 2>&1
   /usr/bin/time -v $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
-      -aggregation sum -ms1_isotope_spacing unit -threads $t -out $T/odiaB.parquet > $W/odiaB.log 2>&1
+      -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads $t -out $T/odiaB.parquet > $W/odiaB.log 2>&1
   if [ "${ODIA_ONLY:-0}" = 1 ]; then
     ln -sfn $(realpath $REF/t$t/diann/diann.log) $W/diann/diann.log; ln -sfn $(realpath $REF/t$t/osw.log) $W/osw.log
   else

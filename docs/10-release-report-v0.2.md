@@ -13,7 +13,7 @@ instruments; the differences between them are rule choices. Ours are the best-su
 measured from the run (every data set here needs it, by 1–5 ppm, and the timsTOF MS1 needs an m/z-dependent one),
 tolerances expressed in multiples of the measured error width, and an MS1 window at the corrected m/z, which at
 DIA-NN's own width captures 98% of the true signal at 1% interference where DIA-NN's export captures 92% at 5% and
-OpenSWATH 100% at 22%. The extraction runs 16–26× faster than DIA-NN and 52–114× faster than OpenSWATH on the same
+OpenSWATH 100% at 22%. The extraction runs 19–28× faster than DIA-NN and 55–136× faster than OpenSWATH on the same
 run and library, in 2.7 GiB, with byte-identical output at any thread count and, on run 01, from any of the three readers (fast
 mzML, OpenMS mzML, mzPeak). Two things are open and both concern the width of the window, not its centre: the tolerance
 multiple is set per instrument class from an identification screen rather than measured from the run, because the
@@ -94,13 +94,15 @@ merge join, the output.
 ## 3. Are the traces the same? (both instruments, DIA-NN's IDs)
 
 **Astral**, run 01, shared tuned library, all 79,953 DIA-NN IDs, every library fragment
-(`results/refined/.../run01/cmpA.tsv`, `cmpP.tsv`, `cmpB.tsv`):
+(`results/gallery_v02/cmpA.tsv`, `cmpB.tsv` for the V0.2 binary; `results/refined/.../run01/cmpA.tsv`, `cmpP.tsv`
+for the earlier rules):
 
 | pair | MS2 median r | MS2 r > 0.9 | MS1 M+0 median r |
 |---|---|---|---|
 | ours B vs OpenSWATH | 0.9999 | 95.3% | 0.9995 |
 | ours P (DIA-NN's tolerances) vs DIA-NN | 1.0000 | 92.0% | 0.954 |
 | ours A-V0.1 vs DIA-NN | 1.0000 | 92.0% | 0.978 |
+| ours A-V0.2 (defaults) vs DIA-NN | 0.9997 | 83.1% | 0.977 |
 | DIA-NN vs OpenSWATH | 0.971 | 62.7% | 0.953 |
 
 ![Trace correlation](figures/correlation_pairs_entrapment.png)
@@ -113,9 +115,37 @@ is entirely its float32 quadratic window centre, shifted by about 0.5 ppm from o
 reproduces DIA-NN's traces in a 3,000-precursor sample with none of 34,923 traces differing at r < 0.99 or
 L1 > 0.01 (dossier §3.2). It is a DIA-NN rule choice, and its quadratic describes the true mass error worse than a
 constant does. At the defaults, A-V0.2's wider MS2 window (±7.9 ppm against DIA-NN's ±5.9) lowers the share of
-traces at r > 0.9 to 82% with all fragments (dossier §7) and 87% with the top 6 (`results/tolscreen/
-cmp_v02_astral01_shared.tsv`), by construction of the comparison; §4 shows what the wider window does to the traces
+traces at r > 0.9 to 83%, by construction of the comparison; §4 shows what the wider window does to the traces
 themselves.
+
+**A random sample of the traces, all four arms.** The figure shows 12 of 50 randomly drawn precursors (seed
+20261010) as mirrored pairs: ours A-V0.2 against DIA-NN, ours B against OpenSWATH, and OpenSWATH against DIA-NN,
+the top library fragment above and MS1 M+0 below, each trace scaled to its maximum inside DIA-NN's exported span
+(grey). The full 50 are in `figures/gallery_v02/trace_mirror_random.png`, the same precursors overlaid in
+`trace_gallery_by_mode.png`, and one figure per mode in `trace_gallery_mode_*.png`
+(`scripts/trace_gallery_features.py`, `trace_gallery.py`, `trace_gallery_mirror.py`).
+
+![Random traces, mirrored pairs](figures/gallery_v02/trace_mirror_random12.png)
+
+Each of the 73,350 precursors with traces in all four arms is assigned one divergence mode from the per-trace
+metrics (first matching rule wins; thresholds anchored on the B-vs-OpenSWATH re-implementation noise floor):
+
+| mode | share | in the random 50 |
+|---|---|---|
+| all engines agree | 19.0% | 9 |
+| minor differences | 27.1% | 16 |
+| MS1 differs, ours A vs DIA-NN (MS2 agrees) | 25.6% | 10 |
+| MS2 shape differs, DIA-NN higher | 11.5% | 9 |
+| MS2 shape differs, OpenSWATH higher | 3.6% | 1 |
+| DIA-NN's XIC span off-centre (truncated common span) | 6.2% | 3 |
+| low signal / noisy | 5.9% | 2 |
+| scale only (sum vs max) | 1.2% | 0 |
+
+No mode is caused by an RT shift: all engines read the same spectra. The "MS2 shape differs" modes are the
+OpenSWATH window centre (§4) and DIA-NN's quadratic centre; the "MS1 differs" mode is DIA-NN's MS1 export at the
+uncorrected m/z against our corrected, narrow window (§4), visible in the figure as DIA-NN's MS1 trace carrying
+extra peaks ours does not. The galleries were regenerated for this release; the 2026-10-10 versions in
+`figures/` show the pre-V0.1 configuration.
 
 **timsTOF diaPASEF**, runs A01 and B01, DIA-NN 1.7.12 on our mzML export, top 6 fragments
 (`results/diapasef/cmpdef_*.tsv`, `cmpP_*.tsv`; constant mass model, so the MS1 window of the default rows is
@@ -232,18 +262,19 @@ defaults (commit cb466f0), DIA-NN and OpenSWATH from the same series with unchan
 
 | threads | ours A (defaults) | ours B (OpenSWATH rules) | DIA-NN 1.7.12 | OpenSwathWorkflow |
 |---|---|---|---|---|
-| 4 | 4.4 s / 2.4 GiB | 4.4 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 2.6 s | 2.6 s | 59 s | 189 s |
-| 16 | 1.9 s | 1.9 s | 34 s | 183 s |
-| 32 | 1.6 s | 1.6 s | 26 s | 183 s |
-| 64 | 1.6 s / 2.7 GiB | 1.6 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 4 | 4.1 s / 2.4 GiB | 4.1 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 2.5 s | 2.4 s | 59 s | 189 s |
+| 16 | 1.7 s | 1.6 s | 34 s | 183 s |
+| 32 | 1.3 s | 1.3 s | 26 s | 183 s |
+| 64 | 1.4 s / 2.6 GiB | 1.3 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
-Ours is 26× faster than DIA-NN at 4 threads and 16–18× from 16 threads up, and 52–114× faster than OpenSWATH.
-Ours flattens beyond 32 threads at this library size: of the 1.6 s, the tool's own stages take 1.1 s (ingest 0.4 s,
-calibration 0.1 s, extraction 0.4 s), the rest is process start-up and teardown. OpenSWATH stops scaling at 8
-threads while its memory grows to 14 GiB. Ours read the inputs from the node's local disk, the references in their
-earlier series from the network file system (same files); the node carried a load of 13–16 from other users
-(recorded in the series' stdout, `results/threads_cb466f0.out`).
+Ours is 28× faster than DIA-NN at 4 threads and 19–20× from 16 threads up, and 55–136× faster than OpenSWATH.
+Ours flattens beyond 32 threads at this library size: the tool's own stages take about 1.1 s (ingest 0.4 s,
+calibration 0.1 s, extraction 0.4 s), the rest is process start-up and teardown; B, which skips the calibration,
+is 0.1 s faster. OpenSWATH stops scaling at 8 threads while its memory grows to 14 GiB. Ours read the inputs from
+the node's local disk, the references in their earlier series from the network file system (same files); the
+node carried a load of 5–15 from other users during this series (recorded in the series' stdout,
+`results/threads_cb466f0.out`).
 
 **Full libraries**, Astral run 01, 64 threads, top 6 fragments, V0.2 defaults:
 
@@ -379,7 +410,7 @@ $DIANN --f $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML --lib lib_diann17.ts
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/refined/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
    -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 0 -aggregation max -mass_calibration auto -threads 64 -out odiaA.parquet -out_stats odiaA.json
 $X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation max -mass_calibration auto -threads 64 -out odiaP.parquet
-$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation sum -ms1_isotope_spacing unit -threads 64 -out odiaB.parquet
+$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads 64 -out odiaB.parquet
 # OpenSwathWorkflow (full window = 2 x DIA-NN's accuracy)
 $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -tr lib_openswath.tsv -out_chrom osw.xic -out_features osw.featureXML \
      -rt_extraction_window 120 -mz_extraction_window 11.8102 -mz_extraction_window_unit ppm -mz_extraction_window_ms1 11.8102 -mz_extraction_window_ms1_unit ppm \
@@ -395,7 +426,7 @@ binary cb466f0).** `$t` = 4, 8, 16, 32, 64; DIA-NN and OpenSWATH as above with `
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
    -rt_mode minutes -rt_window 60 -top_fragments 0 -threads $t -out $S/out/t$t/odiaA.parquet
 # ours B
-$X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation sum -ms1_isotope_spacing unit -threads $t -out $S/out/t$t/odiaB.parquet
+$X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads $t -out $S/out/t$t/odiaB.parquet
 ```
 
 **Astral, full libraries (§6; `results/full_cb466f0/`, binary cb466f0, top 6 fragments, 2 runs each).**
@@ -403,6 +434,21 @@ $X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms
 ```bash
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/human_UP000005640_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_human.parquet
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_entrap.parquet
+```
+
+**Astral, trace galleries and the V0.2 pair table (§3; `results/gallery_v02/`, binary cb466f0).** Rule B needs
+`-mass_calibration off` now that calibration is the default; without it B extracts at the corrected m/z and its
+parity with OpenSWATH drops from 95% to 64% of MS2 traces at r > 0.9 (caught while regenerating the galleries).
+
+```bash
+$X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
+   -rt_mode minutes -rt_window 60 -top_fragments 0 -threads 32 -out results/gallery_v02/odiaA.parquet -out_stats results/gallery_v02/odiaA.json
+$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads 32 -out results/gallery_v02/odiaB.parquet
+tools/pyenv/bin/python scripts/compare_traces.py --odia results/gallery_v02/odiaA.parquet --axes results/gallery_v02/odiaA.axes.parquet \
+    --diann results/gallery_v02/diann/diann_xic.parquet --openswath results/gallery_v02/osw_traces.parquet --out results/gallery_v02/cmpA.tsv
+tools/pyenv/bin/python scripts/trace_gallery_features.py results/gallery_v02 results/analysis/gallery_v02/features_run01.parquet
+tools/pyenv/bin/python scripts/trace_gallery.py results/gallery_v02 results/analysis/gallery_v02/features_run01.parquet docs/figures/gallery_v02 results/analysis/gallery_v02/gallery_run01
+tools/pyenv/bin/python scripts/trace_gallery_mirror.py results/gallery_v02 results/analysis/gallery_v02/gallery_run01_selection.tsv docs/figures/gallery_v02 --sample random
 ```
 
 **Astral, mass-error structure and the linear-vs-constant check (`EXTRACTION.md`, mass model; binary 4e89acc and its parent).**

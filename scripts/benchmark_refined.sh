@@ -83,7 +83,7 @@ echo "DIA-NN round 2: $(grep -oE 'Number of IDs at 0.01 FDR: [0-9]+' $O/diann/di
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
     -aggregation max -mass_calibration auto -threads $THREADS -out $O/odiaP.parquet -out_stats $O/odiaP.json > $O/odiaP.log 2>&1
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
-    -aggregation sum -ms1_isotope_spacing unit -threads $THREADS -out $O/odiaB.parquet -out_stats $O/odiaB.json > $O/odiaB.log 2>&1
+    -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads $THREADS -out $O/odiaB.parquet -out_stats $O/odiaB.json > $O/odiaB.log 2>&1
 
 # 3c'. tuned library: the extractor on the full library (all precursors, top 6 fragments; timing and memory)
 if [ $RECAL = tuned ]; then

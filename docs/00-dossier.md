@@ -49,7 +49,9 @@ therefore a different ion. M+0 agrees (r 0.998).
   differences to DIA-NN are explained in §3.
 - **The two reference engines disagree with each other** more than either disagrees with its matching configuration of ours.
 - **Galleries.** `figures/trace_mirror_random.png` holds 50 random precursors with mirrored pairs (ours A vs DIA-NN | ours B vs
-  OpenSWATH | OpenSWATH vs DIA-NN). Precursors are grouped by how the engines diverge:
+  OpenSWATH | OpenSWATH vs DIA-NN), made 2026-10-10 with the pre-V0.1 configuration; `figures/gallery_v02/` holds the same
+  galleries regenerated with the V0.2 binary (`results/gallery_v02/`, modes in `results/analysis/gallery_v02/`: all agree 19%,
+  minor 27%, MS1 only 26%, MS2 shape 15%, truncated 6%, low signal 6%, scale 1%). Precursors are grouped by how the engines diverge:
 
   | divergence mode | share |
   |---|---|
@@ -231,24 +233,24 @@ How the extraction works:
 
 **Runtime vs threads** (run 01, shared tuned library of 82,333 precursors with all fragments, one run per point;
 `scripts/bench_threads.sh`, `results/threads_cb466f0/`; ours re-measured with cb466f0 at the V0.2 defaults, DIA-NN and
-OpenSWATH from `results/threads/`, unchanged binaries; node load 13–16 from other users):
+OpenSWATH from `results/threads/`, unchanged binaries; node load 5–15 from other users):
 
 ![Thread scaling](figures/thread_scaling.png)
 
 | threads | ours A | ours B | DIA-NN 1.7.12³ | OpenSwathWorkflow⁴ |
 |---|---|---|---|---|
-| 4 | 4.4 s / 2.4 GiB | 4.4 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 2.6 s | 2.6 s | 59 s | 189 s |
-| 16 | 1.9 s | 1.9 s | 34 s | 183 s |
-| 32 | 1.6 s | 1.6 s | 26 s | 183 s |
-| 64 | 1.6 s / 2.7 GiB | 1.6 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 4 | 4.1 s / 2.4 GiB | 4.1 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 2.5 s | 2.4 s | 59 s | 189 s |
+| 16 | 1.7 s | 1.6 s | 34 s | 183 s |
+| 32 | 1.3 s | 1.3 s | 26 s | 183 s |
+| 64 | 1.4 s / 2.6 GiB | 1.3 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
 ³ DIA-NN can export traces only while it searches, so its time includes the search. ⁴ OpenSWATH's time includes its scoring.
 Ours A runs at the V0.2 defaults (tolerances as instrument-class multiples of the measured widths, m/z-dependent
 offset when material); the first version of this series used DIA-NN's tolerances (22.9 s at 4 threads, 6.1 s at 64).
 
-- **Speed.** Ours A is 16–26× faster than DIA-NN (26× at 4 threads, 16–18× from 16 up) and 52–114× faster than OpenSWATH.
-- **Ours A vs ours B.** The self-calibration (panel load and calibration) now costs nothing measurable at this size.
+- **Speed.** Ours A is 19–28× faster than DIA-NN (28× at 4 threads, 19–20× from 16 up) and 55–136× faster than OpenSWATH.
+- **Ours A vs ours B.** B runs with `-mass_calibration off` (needed since calibration became the default; 2026-10-12 re-run) and is 0.1 s faster at 64 threads: the self-calibration costs that much at this size.
 - **Scaling.** Ours flattens beyond 32 threads at this size (1.6 s, of which ingest 0.3 s, calibration ~0.5 s);
   on the full 7 M library extraction still scales to 64 threads.
 - **OpenSWATH stops scaling at 8 threads,** while its memory grows to 14 GiB.
