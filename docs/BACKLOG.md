@@ -19,8 +19,10 @@
 ## Libraries
 - DIALibGen's plain-string Parquet writer (okohlbacher/DIALibGen#4, merged 2026-10-10): the v0.11.1 Astral
   libraries were generated with it; `library/hye_timstof.parquet` had been written by a stale build and was
-  regenerated on 2026-10-12 (DIALibGen rebuilt against OpenMS develop: TOPPBase now lives in `OpenMS_CLI`,
-  `OpenMS::String` is gone; both fixed in `tools/DIALibGen`, branch compact-parquet-plain-strings, not yet pushed).
+  regenerated on 2026-10-12 (content identical in every column; 650 → 511 MB; calibration panel load 3.6 → 1.3 s,
+  peak RSS of an A01 run 15.4 → 13.8 GB). DIALibGen was rebuilt against OpenMS develop: TOPPBase now lives in
+  `OpenMS_CLI`, `OpenMS::String` is gone; both fixed in `tools/DIALibGen`, branch compact-parquet-plain-strings,
+  not yet pushed.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist; ~4.3 GiB).
 
 ## Open: data-driven criteria (review of fixed thresholds, 2026-10-11)
