@@ -201,7 +201,7 @@ local `/scratch`, 2 runs each, node load ~21 (`results/full_cb466f0/`):
 
 | library | total | calibration | extraction | peak RSS | traces |
 |---|---|---|---|---|---|
-| human, 3.49 M precursors | 5.8–6.1 s | 0.5 s | 3.3–3.4 s | 3.9 GiB | 31.3 M |
+| human, 3.49 M precursors | 5.8–6.1 s | 0.5 s | 3.3–3.4 s | 3.8 GiB | 31.3 M |
 | entrapment, 7.0 M precursors | 9.3 s (8.6–9.0 s with 6d26c49 on a quieter node) | 1.0 s | 6.1–6.2 s | 4.8 GiB | 63.0 M |
 
 **How we got here** (entrapment, full library, 64 threads):
@@ -247,7 +247,7 @@ OpenSWATH from `results/threads/`, unchanged binaries; node load 13–16 from ot
 Ours A runs at the V0.2 defaults (tolerances as instrument-class multiples of the measured widths, m/z-dependent
 offset when material); the first version of this series used DIA-NN's tolerances (22.9 s at 4 threads, 6.1 s at 64).
 
-- **Speed.** Ours A is 21–26× faster than DIA-NN and 52–114× faster than OpenSWATH at every thread count.
+- **Speed.** Ours A is 16–26× faster than DIA-NN (26× at 4 threads, 16–18× from 16 up) and 52–114× faster than OpenSWATH.
 - **Ours A vs ours B.** The self-calibration (panel load and calibration) now costs nothing measurable at this size.
 - **Scaling.** Ours flattens beyond 32 threads at this size (1.6 s, of which ingest 0.3 s, calibration ~0.5 s);
   on the full 7 M library extraction still scales to 64 threads.

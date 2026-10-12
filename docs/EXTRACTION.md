@@ -45,7 +45,7 @@ window). Overlapping or staggered window schemes have not been tested.
 **Which cycles.** The library retention time is mapped to run seconds (`-rt_mode`): as is, in minutes (DIALibGen's
 tuned libraries carry run minutes), a linear map, a transformation file, external anchors, or `auto`, which fits
 the map from the run (§4). The trace covers the cycles within ±60 s of the mapped time (`-rt_window`, a half
-width; ≤ 0 extracts the whole run). The window is a fixed default, not measured; what the calibration says about
+width; 0 = a window measured from the calibration, negative = the whole run). The window is a fixed default, not measured; what the calibration says about
 the remaining RT error is reported (§4) and can be used to change it.
 
 **Which centroids.** For every fragment, the centroids of a cell within a mass window around the fragment's m/z.
@@ -188,7 +188,7 @@ Four kinds of work, one pool of threads:
 | option | default | meaning |
 |---|---|---|
 | `-rt_mode` | `linear` (as is) | `minutes` for DIALibGen tuned libraries; `auto` fits the map from the run |
-| `-rt_window` | 60 s | half width of the extraction window around the mapped RT (≤ 0: whole run) |
+| `-rt_window` | 60 s | half width of the extraction window around the mapped RT (0: measured; negative: whole run) |
 | `-mass_calibration` | `auto` | measure the MS2/MS1 offsets (and the tolerances when they are 0) from the run |
 | `-mz_sigma_ms2`, `-mz_sigma_ms1` | by instrument (9 / 4 / 6), 4 | tolerances as multiples of the measured error widths |
 | `-mz_tol`, `-mz_tol_ms1` | 0 | fixed ± ppm half widths, overriding the multiples |
