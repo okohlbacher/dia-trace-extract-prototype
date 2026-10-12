@@ -125,6 +125,7 @@ namespace ODIA
     static RunGrid load(const std::string& filename, int decode_threads = 1);
 
     std::unique_ptr<PeakPool> pool;      ///< every peak of the run (lanes and MS1 reference it)
+    std::string instrument;              ///< instrument model name from the run's metadata (empty if none)
     std::vector<double> cycle_rt;        ///< the global RT axis (seconds)
     std::vector<WindowLane> windows;     ///< sorted by isolation target
     Ms1Lane ms1;

@@ -245,7 +245,7 @@ namespace ODIA
     /// mzPeak through the mzpeak-openms library: the metadata table once (one record per spectrum, including
     /// spectra without peaks), then the signal tables in partitions of whole row groups decoded concurrently
     /// (one Spectra per thread, the library's rule) straight into the pool; routed in spectrum order.
-    void loadMzPeak(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)
+    void loadMzPeak(const std::string& filename, int threads, PeakPool& pool, std::string& instrument, const std::function<void(Decoded&&)>& route)
     {
       static prof::Counter& c_open = prof::counter("ingest.mzpeak_1_open");
       static prof::Counter& c_meta = prof::counter("ingest.mzpeak_2_metadata");
@@ -261,6 +261,17 @@ namespace ODIA
       {
         prof::Scope sc(c_open);
         index.emplace(MzPeak::open(filename));
+        for (const auto& ic : index->metadata().instrument_configurations())
+        {
+          for (const auto& c : ic.parameters)
+          {
+            // the model name: any parameter but the generic terms (instrument model, serial number, customization)
+            if (!c.name || c.name->empty()) { continue; }
+            if (c.accession && (*c.accession == "MS:1000031" || *c.accession == "MS:1000529" || *c.accession == "MS:1000032")) { continue; }
+            if (*c.name == "instrument model" || *c.name == "instrument serial number" || *c.name == "customization") { continue; }
+            if (instrument.empty()) { instrument = *c.name; }
+          }
+        }
         openReaders(MzPeak::MetadataDetail::Minimal);
       }
       const std::size_t n = readers[0]->size();
@@ -496,7 +507,30 @@ namespace ODIA
       }
     }
 
-    bool loadChunked(const std::string& filename, int threads, PeakPool& pool, const std::function<void(Decoded&&)>& route)
+    /// The instrument model named in an mzML header: the first cvParam of the first instrumentConfiguration that is
+    /// not a generic term (instrument model, serial number, customization).
+    std::string instrumentFromMzMLHeader(std::string_view h)
+    {
+      const auto a = h.find("<instrumentConfiguration ");
+      if (a == std::string_view::npos) { return ""; }
+      const auto b = std::min(h.find("<componentList", a), h.find("</instrumentConfiguration>", a));
+      std::string_view block = h.substr(a, b == std::string_view::npos ? std::string_view::npos : b - a);
+      for (std::size_t p = block.find("<cvParam"); p != std::string_view::npos; p = block.find("<cvParam", p + 8))
+      {
+        const std::string_view tag = block.substr(p, block.find('>', p) - p);
+        const auto attr = [&](std::string_view name) -> std::string_view {
+          const auto k = tag.find(name); if (k == std::string_view::npos) { return {}; }
+          const auto v = tag.find('"', k); const auto e = tag.find('"', v + 1);
+          return v == std::string_view::npos || e == std::string_view::npos ? std::string_view{} : tag.substr(v + 1, e - v - 1);
+        };
+        const std::string_view acc = attr("accession="), name = attr("name=");
+        if (acc == "MS:1000031" || acc == "MS:1000529" || acc == "MS:1000032" || name.empty()) { continue; }
+        return std::string(name);
+      }
+      return "";
+    }
+
+    bool loadChunked(const std::string& filename, int threads, PeakPool& pool, std::string& instrument, const std::function<void(Decoded&&)>& route)
     {
       using Size = std::size_t;
       std::ifstream in(filename, std::ios::binary);
@@ -582,6 +616,7 @@ namespace ODIA
       in.seekg(0);
       in.read(header.data(), static_cast<std::streamsize>(header.size()));
       if (!in) { return false; }
+      instrument = instrumentFromMzMLHeader(header);
       Size count_begin = none, count_end = none;
       for (Size q = list_start + std::string_view("<spectrumList").size();;)
       {
@@ -817,14 +852,15 @@ namespace ODIA
       fh.getOptions().setPrecursorMZSelectedIon(false);
       fh.loadExperiment(filename, exp, {OpenMS::FileTypes::RAW});
       exp.sortSpectra(false);
+      g.instrument = exp.getInstrument().getName();
       std::uint32_t index = 0;
       for (auto& s : exp.getSpectra()) { router.route(decode(s, index++)); }
     }
     else if (hasExtension(filename, ".mzpeak"))
     {
-      loadMzPeak(filename, decode_threads, *g.pool, [&](Decoded&& d) { router.route(std::move(d)); });
+      loadMzPeak(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); });
     }
-    else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, [&](Decoded&& d) { router.route(std::move(d)); }))
+    else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); }))
     {
       // parsed in parallel chunks (see loadChunked)
     }
@@ -858,11 +894,12 @@ namespace ODIA
             batch.clear();
             cv.notify_all();
           };
+          consumer.setExperimentalSettingsFunc([&](const OpenMS::ExperimentalSettings& es) { g.instrument = es.getInstrument().getName(); });
           consumer.setSpectraProcessingFunc([&](OpenMS::MSSpectrum& s) {
             batch.push_back(decode(s, index++));
             if (batch.size() == batch_size) { push(); }
           });
-          file.transform(filename, &consumer, true, true);
+          file.transform(filename, &consumer, false, false);
           if (!batch.empty()) { push(); }
         }
         catch (const StopParsing&) {}

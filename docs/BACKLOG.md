@@ -21,11 +21,11 @@
   time and the library-load memory peak (~4.3 GiB transient).
 
 ## Open: data-driven criteria (review of fixed thresholds, 2026-10-11)
-- **Mass tolerance estimator.** Now: Student-t + flat-background mixture of the apex mass errors, tolerance = 99%
-  coverage of the peak (`calibration:accuracy_coverage`). Explore: kernel-density estimate of the error
-  distribution (as FeatureFinderMetabo's mass-trace detection in OpenMS) and choosing the coverage by a quality
-  objective (fragment co-elution of re-extracted anchors vs tolerance). Also: remove the strict-anchor restriction
-  of the mass model once the background component is validated on a full predicted library.
+- **Mass tolerance estimator.** Now: width = 1.4826 × MAD of the apex errors, tolerance = instrument-specific multiple
+  (dossier §7). Tried and rejected as defaults: 99%-coverage of a background-subtracted histogram, a Student-t +
+  background mixture (both too narrow / unstable), the anchors' co-elution curve (right on Astral, not on TOF).
+  Explore: a kernel-density estimate of the error distribution (as FeatureFinderMetabo's mass-trace detection in
+  OpenMS); an anchor-based criterion that reproduces the TOF optimum.
 - **RT window.** Now fixed `-rt_window 60`. Explore: peak width and RT-map uncertainty as a function of RT from the
   calibration anchors (iterative refinement, iterative re-extraction with a narrowed window).
 - **Co-elution window**: now measured (stage 2 uses twice the median FWHM of the stage-1 anchors, ≥ 3 cycles; stage

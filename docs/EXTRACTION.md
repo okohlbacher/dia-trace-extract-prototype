@@ -121,8 +121,9 @@ are at least 200 of them; at least 50 centroids are needed for a measurement):
   weighted median);
 - the **width** is 1.4826 × the median absolute deviation, a measure that the random centroids of a few false
   anchors do not move;
-- the **tolerance** is 6 × that width at MS2 (`calibration:accuracy_sigma`) and 4 × at MS1 (`calibration:ms1_sigma`),
-  never below 0.1 ppm.
+- the **tolerance** is a multiple of that width: `-mz_sigma_ms2` (default by instrument class from the run's metadata:
+  Orbitrap/Astral 9, timsTOF 4, other TOF 4, unknown 6 with a warning) and `-mz_sigma_ms1` (default 4), never below
+  0.1 ppm; `-mz_tol`/`-mz_tol_ms1` in ppm override them.
 
 The mass search then narrows to ±3 × the tolerance around the offset (never wider than the first pass) and the
 anchors are searched again, so that the first wide pass does not bias the offset; the passes stop when the window
@@ -130,12 +131,13 @@ and the offset change by less than a quarter of the window (at most `calibration
 
 The width is stable: 0.92–1.08 ppm at MS2 and 0.37–0.43 ppm at MS1 on the three Astral runs and both libraries
 (offsets −3.2 / −2.4 / −2.0 ppm at MS2, +1.3 / +1.2 / +1.4 at MS1 on runs 01 / 02 / 03), 2.6–2.7 and 3.2–3.4 ppm on
-two timsTOF SCP diaPASEF runs (offsets −4.5 and −2.8 / −3.4). The multiples 6 (MS2) and 4 (MS1) are the constants
-of the rule. They come from a screen of trace quality against k × σ on the identified precursors of both
-instruments (`00-dossier.md` §7): the MS2 co-elution optimum is 8–10σ on Astral (heavy error tail) and 4–5σ on
-timsTOF (Gaussian errors), 6σ is within 6% of both; the MS1 optimum is 4σ on both. DIA-NN's own accuracies sit at
-those optima (6.4σ and 4.4σ). The calibration anchors' own co-elution curve (`calibration:accuracy_sigma 0`)
-finds the Astral optimum but not the timsTOF one, so the multiples stay fixed. Two shape-adaptive alternatives
+two timsTOF SCP diaPASEF runs (offsets −4.5 and −2.8 / −3.4). The multiples are the constants of the rule, and they are instrument
+specific: a screen of trace quality against k × σ on the identified precursors of both instruments
+(`00-dossier.md` §7) puts the MS2 co-elution optimum at 8–10σ on Astral (heavy error tail) and 4–5σ on timsTOF
+(Gaussian errors), and the MS1 optimum at 4σ on both; DIA-NN's own accuracies sit at those optima (6.4σ and
+4.4σ). Hence 9σ for Orbitrap-class instruments, 4σ for TOFs, 4σ at MS1. The calibration anchors' own co-elution
+curve (`calibration:accuracy_rule curve`) finds the Astral optimum but not the timsTOF one, which is why the
+multiples are set per instrument class rather than measured. Two shape-adaptive alternatives
 were measured and are kept as options: the half width holding 99% of the background-subtracted apex matches
 (`calibration:accuracy_sigma 0`), which fits both instruments when the anchors are many and clean but is unstable
 with a few hundred anchors or a dense background, and choosing k by the co-elution curve, which is too flat to
@@ -179,7 +181,8 @@ Four kinds of work, one pool of threads:
 | `-rt_mode` | `linear` (as is) | `minutes` for DIALibGen tuned libraries; `auto` fits the map from the run |
 | `-rt_window` | 60 s | half width of the extraction window around the mapped RT (≤ 0: whole run) |
 | `-mass_calibration` | `auto` | measure the MS2/MS1 offsets (and the tolerances when they are 0) from the run |
-| `-mz_tol`, `-mz_tol_ms1` | 0 = measured | ± ppm half widths; a value fixes them |
+| `-mz_sigma_ms2`, `-mz_sigma_ms1` | by instrument (9 / 4 / 6), 4 | tolerances as multiples of the measured error widths |
+| `-mz_tol`, `-mz_tol_ms1` | 0 | fixed ± ppm half widths, overriding the multiples |
 | `-aggregation` | `max` | most intense centroid in the window (`sum`: their sum) |
 | `-top_fragments` | 6 | fragments per precursor by library intensity (0: all) |
 | `-ms1_isotopes` | 2 | isotopes after the monoisotope (−1: no MS1) |

@@ -3,9 +3,14 @@
 // spectra go to the peaks table, profile spectra to the data table; the first precursor's isolation window is
 // kept per MS2 spectrum.
 #include <mzpeak/writer.h>
+#include <mzpeak/run_metadata.h>
+
+#include <boost/json.hpp>
 
 #include <OpenMS/FORMAT/DATAACCESS/MSDataTransformingConsumer.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/METADATA/ExperimentalSettings.h>
+#include <OpenMS/METADATA/Instrument.h>
 
 #include <iostream>
 
@@ -16,6 +21,14 @@ int main(int argc, char** argv)
   {
     MzPeak::RunArchiveWriter writer(argv[2]);
     OpenMS::MSDataTransformingConsumer consumer;
+    consumer.setExperimentalSettingsFunc([&](const OpenMS::ExperimentalSettings& es) {
+      // the instrument model, so a reader can tell the instrument class (DIATraceExtractor's tolerance defaults)
+      const std::string name = es.getInstrument().getName();
+      if (name.empty()) { return; }
+      boost::json::object md;
+      md["instrument_configuration_list"] = boost::json::array{boost::json::object{{"parameters", boost::json::array{boost::json::object{{"name", name}}}}}};
+      writer.set_metadata(MzPeak::RunMetadata(md));
+    });
     consumer.setSpectraProcessingFunc([&](OpenMS::MSSpectrum& s) {
       MzPeak::SpectrumData d;
       d.mz.reserve(s.size());
@@ -41,7 +54,7 @@ int main(int argc, char** argv)
     });
     OpenMS::MzMLFile file;
     file.getOptions().setSkipXMLChecks(true);
-    file.transform(argv[1], &consumer, true, true);
+    file.transform(argv[1], &consumer, false, false);
     writer.finish();
     std::cout << writer.size() << " spectra -> " << argv[2] << "\n";
   }

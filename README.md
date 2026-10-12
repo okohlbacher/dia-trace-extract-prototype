@@ -48,9 +48,9 @@ build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode anchors -rt_a
 - RT: `-rt_mode identity|minutes|linear|trafo|anchors|auto` maps library RT to run seconds (`auto`:
   self-calibration from co-eluting anchors); `-rt_window` is
   a half width (≤ 0 = whole run).
-- m/z: `-mz_tol`/`-mz_tol_ms1` are ± ppm half widths (default 0 = measured: `calibration:accuracy_sigma` × the
-  robust width of the apex mass errors of the calibration anchors); `-mass_calibration auto` (default) measures
-  the offsets, `-mz_offset*` set them; `-aggregation max` (default) or `sum` (OpenSWATH); `-ms1_isotopes` (default 2);
+- m/z: tolerances are multiples of the error widths measured from the run (`-mz_sigma_ms2`, by instrument class:
+  Orbitrap/Astral 9, timsTOF 4; `-mz_sigma_ms1` 4), or fixed ± ppm with `-mz_tol`/`-mz_tol_ms1`;
+  `-mass_calibration auto` (default) measures the offsets, `-mz_offset*` set them; `-aggregation max` (default) or `sum` (OpenSWATH); `-ms1_isotopes` (default 2);
   `-ms1_isotope_spacing unit` reproduces OpenSWATH's charge-independent isotope positions.
 - Output: traces Parquet (one row per trace; MS2 rows on the global cycle axis, MS1 rows on the MS1 scan axis;
   intensity as float32 blob or `-encoding log8`), `<out>.axes.parquet` (both axes, exact acquisition times),

@@ -24,6 +24,7 @@
 #include <malloc.h>
 #include <unistd.h>
 #include <vector>
+#include <cctype>
 #include <future>
 #include <optional>
 #include <omp.h>
@@ -110,6 +111,17 @@ namespace
     }
     return o;
   }
+}
+
+/// Instrument class and its MS2 tolerance multiple (docs/00-dossier.md section 7) from the model name.
+std::pair<std::string, double> instrumentClass(std::string name)
+{
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+  const auto has = [&](const char* w) { return name.find(w) != std::string::npos; };
+  if (has("tims")) { return {"timsTOF", 4.0}; }
+  if (has("orbitrap") || has("astral") || has("exploris") || has("exactive") || has("lumos") || has("fusion") || has("eclipse") || has("velos") || has("elite") || has("tribrid") || has("ascend")) { return {"Orbitrap", 9.0}; }
+  if (has("tof")) { return {"TOF", 4.0}; }
+  return {"unknown", 6.0};
 }
 
 /// The run grid as mzML: every MS1 scan and every window cell in acquisition-time order, centroided, each MS2
@@ -208,10 +220,13 @@ protected:
                           "mapped RT; 0 = measured (99th percentile of the calibration anchors' RT residuals plus the peak width); "
                           "negative extracts the whole run.", false);
 
-    registerDoubleOption_("mz_tol", "<ppm>", 0.0, "Fragment tolerance, +- ppm (half width). 0 (default) = the MS2 accuracy measured "
-                          "by -mass_calibration auto (calibration:accuracy_sigma x the robust error width; about 6 ppm on Astral).", false);
-    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm (half width). 0 (default) = the MS1 accuracy measured "
-                          "by -mass_calibration auto (calibration:accuracy_sigma x the robust MS1 error width; about 2.4 ppm on Astral).", false);
+    registerDoubleOption_("mz_sigma_ms2", "<k>", 0.0, "Fragment tolerance as a multiple of the robust width (1.4826 x MAD) of the "
+                          "fragment mass errors measured from the run. 0 (default): by instrument class from the run's metadata -- "
+                          "Orbitrap/Astral 9, timsTOF 4, other TOF 4, unknown 6 (the trace-quality optima, docs/00-dossier.md section 7).", false);
+    registerDoubleOption_("mz_sigma_ms1", "<k>", 4.0, "MS1 tolerance as a multiple of the robust width of the MS1 mass errors "
+                          "(4: the MS1-fragment co-elution optimum on Astral and timsTOF).", false);
+    registerDoubleOption_("mz_tol", "<ppm>", 0.0, "Fixed fragment tolerance, +- ppm (half width); overrides -mz_sigma_ms2 when > 0.", false);
+    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "Fixed MS1 tolerance, +- ppm (half width); overrides -mz_sigma_ms1 when > 0.", false);
     registerStringOption_("mass_calibration", "<mode>", "auto", "auto (default): measure the fragment and MS1 mass offsets "
                           "from the run (calibration anchors) and apply them instead of -mz_offset*.", false);
     setValidStrings_("mass_calibration", {"off", "auto"});
@@ -227,13 +242,10 @@ protected:
     registerDoubleOption_("calibration:search_factor", "<f>", 3.0, "Narrowing factor of the mass search (see search_ppm).", false, true);
     registerIntOption_("calibration:search_rounds", "<n>", 3, "Maximum stage-2 passes (stops when the search window "
                        "changes by less than 25%).", false, true);
-    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "> 0: MS2 tolerance = k x the robust width (1.4826 x MAD) of the "
-                          "apex mass errors (6: within a few % of the trace-quality optimum on Astral and timsTOF; 5 is DIA-NN's rule; "
-                          "0: the k at which the calibration anchors' co-elution curve is highest -- right on Astral, too wide on timsTOF). "
-                          "0: calibration:coverage_factor x the half width that holds calibration:coverage of the true apex matches "
-                          "(background subtracted) -- shape-adaptive, but unstable with few anchors or a dense background.", false, true);
-    registerDoubleOption_("calibration:ms1_sigma", "<k>", 4.0, "MS1 tolerance = k x the robust width of the MS1 apex errors (the "
-                          "MS1-fragment co-elution optimum on Astral and timsTOF).", false, true);
+    registerStringOption_("calibration:accuracy_rule", "<rule>", "fixed", "fixed: the tolerances are -mz_sigma_ms2/-mz_sigma_ms1 x the "
+                          "measured widths. curve: MS2 takes the multiple (of 2, 3, 4, 5, 6, 8) at which the calibration anchors' "
+                          "all-fragment co-elution is highest (finds the Astral optimum, too wide on timsTOF).", false, true);
+    setValidStrings_("calibration:accuracy_rule", {"fixed", "curve"});
     registerDoubleOption_("calibration:coverage", "<f>", 0.99, "Share of the true apex matches inside the coverage half width.", false, true);
     registerDoubleOption_("calibration:coverage_factor", "<f>", 1.3, "Tolerance = this x the coverage half width (flank and weak-fragment "
                           "centroids err more than apex centroids).", false, true);
@@ -268,7 +280,7 @@ protected:
     registerDoubleOption_("calibration:min_reject", "<s>", 3.0, "Smallest rejection distance (s) of the RT refits.", false, true);
     setMinFloat_("calibration:panel_fraction", 1e-6); setMaxFloat_("calibration:panel_fraction", 1.0);
     setMinFloat_("calibration:search_ppm", 0.1); setMinFloat_("calibration:search_factor", 1.0);
-    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.0); setMinFloat_("calibration:ms1_sigma", 0.1); setMinFloat_("calibration:coverage", 0.5); setMaxFloat_("calibration:coverage", 0.9999); setMinFloat_("calibration:coverage_factor", 0.5);
+    setMinInt_("calibration:search_rounds", 1); setMinFloat_("mz_sigma_ms2", 0.0); setMinFloat_("mz_sigma_ms1", 0.1); setMinFloat_("calibration:coverage", 0.5); setMaxFloat_("calibration:coverage", 0.9999); setMinFloat_("calibration:coverage_factor", 0.5);
     setMinFloat_("calibration:min_relative_intensity", 0.0); setMaxFloat_("calibration:min_relative_intensity", 1.0);
     setMinInt_("calibration:strict_min_fragments", 1); setMinInt_("calibration:min_fragments", 1);
     for (const char* o : {"calibration:strict_min_correlation", "calibration:strict_min_cosine", "calibration:min_correlation", "calibration:min_cosine"})
@@ -436,6 +448,20 @@ protected:
       if (out.empty() && out_tsv.empty()) { return EXECUTION_OK; }
     }
 
+    // --- tolerance multiples: given, or by instrument class
+    double sigma_ms2 = getDoubleOption_("mz_sigma_ms2");
+    {
+      const auto cls = instrumentClass(grid.instrument);
+      if (sigma_ms2 <= 0.0) { sigma_ms2 = cls.second; }
+      OPENMS_LOG_INFO << "Instrument: " << (grid.instrument.empty() ? std::string("(none in the run's metadata)") : "'" + grid.instrument + "'")
+                      << " -> " << cls.first << "; tolerances " << sigma_ms2 << " sigma (MS2), " << getDoubleOption_("mz_sigma_ms1") << " sigma (MS1)"
+                      << (getDoubleOption_("mz_sigma_ms2") > 0 ? " [MS2 given]" : "") << std::endl;
+      if (grid.instrument.empty() || cls.first == "unknown")
+      {
+        OPENMS_LOG_WARN << "Instrument class unknown: MS2 tolerance " << sigma_ms2 << " sigma; set -mz_sigma_ms2 (Orbitrap 9, TOF 4)." << std::endl;
+      }
+    }
+
     // --- calibration (from the run itself) and RT map
     std::optional<ODIA::CalibrationResult> cal;
     if (panel_future.valid())
@@ -457,8 +483,8 @@ protected:
       copt.search_ppm = getDoubleOption_("calibration:search_ppm");
       copt.search_narrow_factor = getDoubleOption_("calibration:search_factor");
       copt.search_rounds = getIntOption_("calibration:search_rounds");
-      copt.accuracy_sigma = getDoubleOption_("calibration:accuracy_sigma");
-      copt.ms1_sigma = getDoubleOption_("calibration:ms1_sigma");
+      copt.accuracy_sigma = getStringOption_("calibration:accuracy_rule") == "curve" ? 0.0 : sigma_ms2;
+      copt.ms1_sigma = getDoubleOption_("mz_sigma_ms1");
       copt.coverage = getDoubleOption_("calibration:coverage");
       copt.coverage_factor = getDoubleOption_("calibration:coverage_factor");
       copt.min_relative_intensity = getDoubleOption_("calibration:min_relative_intensity");
@@ -526,14 +552,14 @@ protected:
       if (!cal) { OPENMS_LOG_ERROR << "-mz_tol 0 (measured MS2 accuracy) needs -mass_calibration auto; with it off, give -mz_tol <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms2_ppm = cal->ms2_accuracy_ppm;
       if (eopt.ms2_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS2 accuracy could not be measured (too few apex centroids); give -mz_tol <ppm>." << std::endl; return INPUT_FILE_CORRUPT; }
-      OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (measured)" << std::endl;
+      OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (" << cal->accuracy_sigma << " x the measured width)" << std::endl;
     }
     if (eopt.ms1_ppm <= 0.0)
     {
       if (!cal) { OPENMS_LOG_ERROR << "-mz_tol_ms1 0 (measured MS1 accuracy, the default) needs -mass_calibration auto; with it off, give -mz_tol_ms1 <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
       if (eopt.ms1_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS1 accuracy could not be measured (too few MS1 centroids); give -mz_tol_ms1 <ppm>." << std::endl; return INPUT_FILE_CORRUPT; }
-      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (measured)" << std::endl;
+      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << getDoubleOption_("mz_sigma_ms1") << " x the measured width)" << std::endl;
     }
     eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");

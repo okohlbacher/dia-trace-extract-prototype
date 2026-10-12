@@ -313,9 +313,11 @@ around the apex, a fragment absent at the apex counts 0), fragments absent at th
   (reported in the log, `calibration:accuracy_sigma 0`) peaks at k = 8. On timsTOF no: the anchors' curve rises to 8σ
   as well, because the anchors are present, strongly co-eluting precursors for which widening costs little, while
   the ID screen's optimum comes from the weak precursors. The automatic choice is therefore not the default.
-- **Decision.** MS2 tolerance 6σ (within 6% of the optimum on both instruments, ±5.5 ppm Astral / ±16 ppm timsTOF),
-  MS1 tolerance 4σ (`calibration:ms1_sigma`; ±1.6 ppm Astral, ±13.5 ppm timsTOF). Agreement with DIA-NN on Astral is
-  unchanged at MS2 (91.2% / 80.7%); at MS1 the narrower window changes it little (62% / 72% with r > 0.9).
+- **Decision.** Tolerances are multiples of the measured widths, set per instrument class from the run's metadata:
+  MS2 9σ on Orbitrap/Astral (±8.3 ppm on run 01), 4σ on timsTOF (±10.6 ppm), 6σ with a warning when the class is
+  unknown; MS1 4σ everywhere (±1.6 ppm Astral, ±13.5 ppm timsTOF). `-mz_sigma_ms2`/`-mz_sigma_ms1` set the multiples,
+  `-mz_tol`/`-mz_tol_ms1` fixed ppm values. At 9σ the Astral MS2 traces are wider than DIA-NN's (±5.9): 82% with
+  r > 0.9 instead of 91%, by construction of that comparison; the screen's own metrics are better.
 - Tables: `figures/tolerance_screen_*.tsv`.
 
 ## 5. Open items
