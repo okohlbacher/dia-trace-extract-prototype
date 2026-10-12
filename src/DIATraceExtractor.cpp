@@ -227,11 +227,13 @@ protected:
     registerDoubleOption_("calibration:search_factor", "<f>", 3.0, "Narrowing factor of the mass search (see search_ppm).", false, true);
     registerIntOption_("calibration:search_rounds", "<n>", 3, "Maximum stage-2 passes (stops when the search window "
                        "changes by less than 25%).", false, true);
-    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "> 0: measured tolerance = k x the robust width (1.4826 x MAD) "
-                          "of the apex mass errors (6: the measured optimum on Astral, inside the co-elution plateau on Astral and timsTOF; "
-                          "5 is DIA-NN's rule). "
+    registerDoubleOption_("calibration:accuracy_sigma", "<k>", 6.0, "> 0: MS2 tolerance = k x the robust width (1.4826 x MAD) of the "
+                          "apex mass errors (6: within a few % of the trace-quality optimum on Astral and timsTOF; 5 is DIA-NN's rule; "
+                          "0: the k at which the calibration anchors' co-elution curve is highest -- right on Astral, too wide on timsTOF). "
                           "0: calibration:coverage_factor x the half width that holds calibration:coverage of the true apex matches "
                           "(background subtracted) -- shape-adaptive, but unstable with few anchors or a dense background.", false, true);
+    registerDoubleOption_("calibration:ms1_sigma", "<k>", 4.0, "MS1 tolerance = k x the robust width of the MS1 apex errors (the "
+                          "MS1-fragment co-elution optimum on Astral and timsTOF).", false, true);
     registerDoubleOption_("calibration:coverage", "<f>", 0.99, "Share of the true apex matches inside the coverage half width.", false, true);
     registerDoubleOption_("calibration:coverage_factor", "<f>", 1.3, "Tolerance = this x the coverage half width (flank and weak-fragment "
                           "centroids err more than apex centroids).", false, true);
@@ -266,7 +268,7 @@ protected:
     registerDoubleOption_("calibration:min_reject", "<s>", 3.0, "Smallest rejection distance (s) of the RT refits.", false, true);
     setMinFloat_("calibration:panel_fraction", 1e-6); setMaxFloat_("calibration:panel_fraction", 1.0);
     setMinFloat_("calibration:search_ppm", 0.1); setMinFloat_("calibration:search_factor", 1.0);
-    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.0); setMinFloat_("calibration:coverage", 0.5); setMaxFloat_("calibration:coverage", 0.9999); setMinFloat_("calibration:coverage_factor", 0.5);
+    setMinInt_("calibration:search_rounds", 1); setMinFloat_("calibration:accuracy_sigma", 0.0); setMinFloat_("calibration:ms1_sigma", 0.1); setMinFloat_("calibration:coverage", 0.5); setMaxFloat_("calibration:coverage", 0.9999); setMinFloat_("calibration:coverage_factor", 0.5);
     setMinFloat_("calibration:min_relative_intensity", 0.0); setMaxFloat_("calibration:min_relative_intensity", 1.0);
     setMinInt_("calibration:strict_min_fragments", 1); setMinInt_("calibration:min_fragments", 1);
     for (const char* o : {"calibration:strict_min_correlation", "calibration:strict_min_cosine", "calibration:min_correlation", "calibration:min_cosine"})
@@ -407,7 +409,7 @@ protected:
         omp_set_num_threads(panel_threads);
         Panel p;
         ODIA::LibraryLoadOptions popt;
-        popt.top_fragments = 6;
+        popt.top_fragments = 0;   // all fragments: the anchor search uses the top 6, the tolerance curve all of them
         popt.targets_only = true;
         popt.threads = panel_threads;
         popt.keep_every = keep_every;
@@ -456,6 +458,7 @@ protected:
       copt.search_narrow_factor = getDoubleOption_("calibration:search_factor");
       copt.search_rounds = getIntOption_("calibration:search_rounds");
       copt.accuracy_sigma = getDoubleOption_("calibration:accuracy_sigma");
+      copt.ms1_sigma = getDoubleOption_("calibration:ms1_sigma");
       copt.coverage = getDoubleOption_("calibration:coverage");
       copt.coverage_factor = getDoubleOption_("calibration:coverage_factor");
       copt.min_relative_intensity = getDoubleOption_("calibration:min_relative_intensity");

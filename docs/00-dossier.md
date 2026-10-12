@@ -291,6 +291,33 @@ timsTOF library of the HYE FASTA (4.15 M precursors).
   extraction 12–13 s), 17 GB peak RSS, 36.7 M traces.
 - **Not yet:** the mobility dimension beyond the window split; the all-ID tolerance trade-off on this data.
 
+## 7. Trace quality as a function of the mass tolerance (both instruments)
+
+`scripts/tolerance_screen.py`: the DIA-NN-identified precursors (Astral run 01: 82,333; timsTOF A01: 44,990) extracted at
+k × σ for k = 1 … 12 (MS2 and MS1 at the same k, σ as measured by the calibration: Astral 0.92 / 0.40 ppm, timsTOF
+2.66 / 3.38 ppm), all library fragments, scored on the traces: fragment co-elution (mean pairwise r over ±4 cycles
+around the apex, a fragment absent at the apex counts 0), fragments absent at the apex, off-peak signal share
+(outside ±12 cycles: interference and noise the window admits), library cosine at the apex, MS1–fragment co-elution.
+
+![Trace quality vs tolerance](figures/tolerance_screen.png)
+
+| | MS2 co-elution optimum | MS1 co-elution optimum | DIA-NN's accuracy | 6σ / 4σ (defaults) |
+|---|---|---|---|---|
+| Astral run 01 | k = 8–10 (±7.4–9.2 ppm; 0.190–0.192) | k = 4 (±1.6 ppm) | 6.4σ (±5.9 ppm) | 0.180 (−6%) / optimum |
+| timsTOF A01 | k = 4–5 (±10.6–13.3 ppm; 0.115) | k = 4 (±13.5 ppm) | 4.4σ (±11.8 ppm) | 0.108 (−6%) / optimum |
+
+- **Shape.** On Astral the MS2 curve saturates (the error tail is heavy, dropouts keep falling to 12σ, interference grows
+  only ~1% per step); on timsTOF it peaks and falls (Gaussian errors: beyond 5σ nothing is gained and interference
+  costs). DIA-NN's own accuracy sits at each instrument's optimum. MS1 peaks at 4σ on both.
+- **Can the calibration find it?** On Astral yes: the all-fragment co-elution curve of the calibration anchors
+  (reported in the log, `calibration:accuracy_sigma 0`) peaks at k = 8. On timsTOF no: the anchors' curve rises to 8σ
+  as well, because the anchors are present, strongly co-eluting precursors for which widening costs little, while
+  the ID screen's optimum comes from the weak precursors. The automatic choice is therefore not the default.
+- **Decision.** MS2 tolerance 6σ (within 6% of the optimum on both instruments, ±5.5 ppm Astral / ±16 ppm timsTOF),
+  MS1 tolerance 4σ (`calibration:ms1_sigma`; ±1.6 ppm Astral, ±13.5 ppm timsTOF). Agreement with DIA-NN on Astral is
+  unchanged at MS2 (91.2% / 80.7%); at MS1 the narrower window changes it little (62% / 72% with r > 0.9).
+- Tables: `figures/tolerance_screen_*.tsv`.
+
 ## 5. Open items
 
 - **mzPeak:** integrated (mzpeak-openms `partitioned-read-2026-10-11`). Open: the reader's decode scales to ~12 cores

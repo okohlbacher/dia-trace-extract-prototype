@@ -46,10 +46,12 @@
   export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). Open: the all-ID tolerance trade-off on
   this data (our ±16 ppm vs DIA-NN's ±11.8); the MS1 agreement (r > 0.9 for 60% at equal tolerance); run B01 through
   DIA-NN.
-- **Tolerance rule:** `calibration:accuracy_sigma 0` (coverage-based, shape-adaptive) is implemented but unstable
-  with few anchors or a dense background (timsTOF B01 ±44 vs A01 ±21; full-library MS1 ±7); the co-elution-by-k
-  curve is reported in the log but too flat to choose k. Peptide decoys from the library generator would give both
-  a cleaner anchor set and a proper FDR for the acceptance thresholds.
+- **Tolerance rule:** the trace-quality screen (dossier §7) gives MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
+  MS1 4σ on both; defaults 6σ / 4σ. An anchor-based criterion that reproduces the timsTOF optimum is open: the
+  anchors' co-elution curve (`calibration:accuracy_sigma 0`) rises to 8σ on both instruments because anchors are
+  present, strong precursors; weighting it with the off-peak share, or scoring the anchors' weakest fragments, may
+  recover the balance. Peptide decoys from the library generator would give both a cleaner anchor set and a proper
+  FDR for the acceptance thresholds.
 
 ## Open: from the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md)
 - Panel sampling (`keep_every`) only for compact Parquet libraries; TSV/TraML/PQP load the whole library for the panel.

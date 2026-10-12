@@ -268,12 +268,13 @@ namespace ODIA
       {
         const int hw = opt.half_window_cycles;
         const std::size_t lo = c > static_cast<std::size_t>(hw) ? c - hw : 0, hi = std::min(C, c + hw + 1), n = hi - lo;
-        std::vector<float> tr(F * n);
+        const std::size_t Fa = lib.fragmentsOf(p);   // every library fragment, weak ones included: what the extraction must serve
+        std::vector<float> tr(Fa * n);
         for (double k : kSigmaGrid)
         {
           const double width = k * ms.ms2_sigma;
           std::vector<std::size_t> present;
-          for (std::size_t f = 0; f < F; ++f)
+          for (std::size_t f = 0; f < Fa; ++f)
           {
             const double t = lib.fragment_mz[f0 + f] * (1.0 + ms.ms2_offset * 1e-6), tol = t * width * 1e-6;
             const MzFixed blo = toFixed(t - tol), bhi = toFixed(t + tol);
@@ -285,12 +286,12 @@ namespace ODIA
           }
           // Mean over ALL fragment pairs; a pair with a fragment absent at the apex counts 0 (a window that drops
           // fragments loses, a window that admits interference loses): the trade-off the multiple must settle.
-          std::vector<bool> has(F, false);
+          std::vector<bool> has(Fa, false);
           for (std::size_t f : present) { has[f] = true; }
           double rsum = 0; int rn = 0;
-          for (std::size_t i = 0; i < F; ++i)
+          for (std::size_t i = 0; i < Fa; ++i)
           {
-            for (std::size_t j = i + 1; j < F; ++j)
+            for (std::size_t j = i + 1; j < Fa; ++j)
             {
               ++rn;
               if (!has[i] || !has[j]) { continue; }
@@ -782,21 +783,28 @@ namespace ODIA
       std::vector<std::vector<double>> curves(nk);
       for (std::size_t i = 0; i < stage2.size(); ++i)
       {
-        if (!res.anchors[i].used || !strict_ok(res.anchors[i]) || stage2[i].coelution.size() != nk) { continue; }
+        if (!res.anchors[i].used || stage2[i].coelution.size() != nk) { continue; }
         for (std::size_t k = 0; k < nk; ++k) { curves[k].push_back(stage2[i].coelution[k]); }
       }
-      for (std::size_t k = 0; k < nk; ++k) { res.coelution_by_sigma.emplace_back(kSigmaGrid[k], curves[k].size() >= 50 ? quantile(curves[k], 0.5) : -1); }
+      for (std::size_t k = 0; k < nk; ++k)
+      {
+        const double mean = curves[k].size() >= 50 ? std::accumulate(curves[k].begin(), curves[k].end(), 0.0) / static_cast<double>(curves[k].size()) : -1;
+        res.coelution_by_sigma.emplace_back(kSigmaGrid[k], mean);
+      }
     }
     // Tolerances: coverage_factor x the coverage half width (shape-adaptive), else accuracy_sigma / fallback_sigma x sigma.
-    const auto tolerance = [&](const MassModel& m, double& coverage_out) {
-      coverage_out = m.coverage_width;
-      if (m.n == 0) { return 0.0; }
-      if (opt.accuracy_sigma <= 0 && m.coverage_width > 0) { return std::max(opt.coverage_factor * m.coverage_width, 0.1); }
-      return m.accuracy;
-    };
-    res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = tolerance(m2, res.ms2_coverage_ppm);
-    res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = tolerance(m1, res.ms1_coverage_ppm);
-    res.accuracy_sigma = m2.sigma > 0 ? res.ms2_accuracy_ppm / m2.sigma : 0.0;
+    // MS2 tolerance: accuracy_sigma x sigma when given; 0 = the k of kSigmaGrid at which the anchors' all-fragment
+    // co-elution curve is highest (ties to the narrower window), else fallback_sigma. MS1: ms1_sigma x sigma.
+    double k2 = opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma;
+    if (opt.accuracy_sigma <= 0)
+    {
+      double best = -1;
+      for (const auto& [k, v] : res.coelution_by_sigma) { if (v > best + 1e-9) { best = v; k2 = k; } }
+    }
+    res.ms2_coverage_ppm = m2.coverage_width; res.ms1_coverage_ppm = m1.coverage_width;
+    res.ms2_offset_ppm = m2.offset; res.ms2_sigma_ppm = m2.sigma; res.ms2_accuracy_ppm = m2.n ? std::max(k2 * m2.sigma, 0.1) : 0.0;
+    res.ms1_offset_ppm = m1.offset; res.ms1_sigma_ppm = m1.sigma; res.ms1_accuracy_ppm = m1.n ? std::max(opt.ms1_sigma * m1.sigma, 0.1) : 0.0;
+    res.accuracy_sigma = k2;
     res.ms2_search_ppm = search.ms2_width; res.ms1_search_ppm = search.ms1_width;
     res.strict_mass_anchors = mass_anchors;
     res.decoy_anchors = stage2_decoys;
