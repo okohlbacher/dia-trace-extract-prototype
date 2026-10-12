@@ -83,7 +83,6 @@ namespace ODIA
         d.lower = p.getMZ() - p.getIsolationWindowLowerOffset();
         d.upper = p.getMZ() + p.getIsolationWindowUpperOffset();
       }
-      if (!s.isSorted()) { s.sortByPosition(); d.was_unsorted = true; }
       d.n = static_cast<std::uint32_t>(s.size());
       d.mz.resize(s.size());
       d.intensity.resize(s.size());
@@ -91,6 +90,19 @@ namespace ODIA
       {
         d.mz[i] = toFixed(s[i].getMZ());
         d.intensity[i] = s[i].getIntensity();
+      }
+      // Ascending quantized m/z with a stable sort in file order: the same order as the fast mzML parser and the
+      // mzPeak path, so centroids equal at 1e-5 Th are summed in the same order whichever reader loaded the run.
+      if (!std::is_sorted(d.mz.begin(), d.mz.end()))
+      {
+        std::vector<std::size_t> o(d.n);
+        std::iota(o.begin(), o.end(), 0);
+        std::stable_sort(o.begin(), o.end(), [&](std::size_t a, std::size_t b) { return d.mz[a] < d.mz[b]; });
+        std::vector<MzFixed> mz(d.n);
+        std::vector<float> in(d.n);
+        for (std::size_t i = 0; i < d.n; ++i) { mz[i] = d.mz[o[i]]; in[i] = d.intensity[o[i]]; }
+        d.mz.swap(mz); d.intensity.swap(in);
+        d.was_unsorted = true;
       }
       return d;
     }
@@ -155,6 +167,17 @@ namespace ODIA
           auto& lane = lanes_[i];
           padTo_(lane, n);
           g_.windows.push_back(std::move(lane));
+        }
+        // Isolation windows that overlap by more than 5% of the narrower one (staggered or overlapping schemes):
+        // the default nearest-window assignment serves each precursor from one of them (-window_assignment all
+        // extracts it from every window that contains it).
+        for (std::size_t w = 1; w < g_.windows.size(); ++w)
+        {
+          const auto& a = g_.windows[w - 1];
+          const auto& b = g_.windows[w];
+          const double overlap = std::min(a.upper, b.upper) - std::max(a.lower, b.lower);
+          const double narrower = std::min(a.upper - a.lower, b.upper - b.lower);
+          if (narrower > 0 && overlap > 0.05 * narrower) { ++g_.stats.overlapping_windows; }
         }
       }
 

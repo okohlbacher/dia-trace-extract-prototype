@@ -147,16 +147,18 @@ namespace ODIA
       l->cached += n;
       return;
     }
-    if (cached_.load() + n <= cache_cap_)
+    // Reserve the cache space first (fetch_add), give it back if the cap is exceeded: two threads cannot both
+    // pass a check-then-add and overshoot the cap by a block each.
+    if (cached_.fetch_add(n) + n <= cache_cap_)
     {
       auto& f = free_[static_cast<std::size_t>(c)];
       static prof::Counter& lc = prof::counter("lock.arrow_pool_put");
       prof::timedLock(f.mtx, lc);
       std::lock_guard lock(f.mtx, std::adopt_lock);
       f.blocks.push_back(p);
-      cached_ += n;
       return;
     }
+    cached_ -= n;
     ::munmap(p, static_cast<std::size_t>(n));
     mapped_ -= n;
   }

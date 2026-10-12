@@ -16,9 +16,12 @@
 - Open (converter): the MS1 centroiding difference (24% of MS1 traces differ from the mzML) is a centroider
   difference, not a defect; decide which centroids are the reference.
 
-## Waiting
-- **DIALibGen PR #4** (plain string columns): after merge, regenerate the libraries and re-measure load
-  time and the library-load memory peak (~4.3 GiB transient).
+## Libraries
+- DIALibGen's plain-string Parquet writer (okohlbacher/DIALibGen#4, merged 2026-10-10): the v0.11.1 Astral
+  libraries were generated with it; `library/hye_timstof.parquet` had been written by a stale build and was
+  regenerated on 2026-10-12 (DIALibGen rebuilt against OpenMS develop: TOPPBase now lives in `OpenMS_CLI`,
+  `OpenMS::String` is gone; both fixed in `tools/DIALibGen`, branch compact-parquet-plain-strings, not yet pushed).
+- Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist; ~4.3 GiB).
 
 ## Open: data-driven criteria (review of fixed thresholds, 2026-10-11)
 - **Mass tolerance estimator.** Now: width = 1.4826 × MAD of the apex errors, tolerance = instrument-specific multiple
@@ -43,9 +46,11 @@
   0.15): configurable now; could be expressed in measured peak widths / chosen by cross-validation.
 - **Nearest-window assignment** assumes non-overlapping isolation windows; overlapping or staggered schemes untested.
 - **Generality:** ProteoBench diaPASEF (timsTOF SCP) runs end to end and agrees with DIA-NN 1.7.12 (on our mzML
-  export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). Open: the all-ID tolerance trade-off on
-  this data (our ±16 ppm vs DIA-NN's ±11.8); the MS1 agreement (r > 0.9 for 60% at equal tolerance); run B01 through
-  DIA-NN.
+  export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). The MS1 disagreement (60%) is DIA-NN's
+  export rule (uncorrected m/z, MS2 accuracy): 79% when emulated; closed. Mass model: offset + slope × m/z when
+  material (`calibration:mass_model`, 2026-10-12), which timsTOF MS1 needs (+15 ppm/kTh). Open: the
+  intensity dependence of the errors (weak centroids low, strong high, on both instruments) cannot be modelled
+  before extraction; it argues for the ID-screen multiples rather than the anchor width.
 - **Tolerance rule:** the trace-quality screen (dossier §7) gives MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
   MS1 4σ on both; the multiples are set per instrument class (`-mz_sigma_ms2`). Tried and rejected as a measured
   criterion (2026-10-12, `ODIA_PROFILE=1` prints the curves): the anchors' all-fragment co-elution curve, the same on
@@ -55,16 +60,18 @@
   decoy-calibrated false rate vs the search tolerance, which the shifted-fragment decoys make meaningless (0–5
   decoys). A criterion needs a population with absent peptides: peptide decoys from the library generator.
 
-## Open: from the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md)
-- Panel sampling (`keep_every`) only for compact Parquet libraries; TSV/TraML/PQP load the whole library for the panel.
-- A precursor whose MS2 cycle range is empty gets no MS1 trace either (MS1-only extraction at the run's edges).
-- `TraceWriter` removes every `part-*` file in the output directory before writing.
-- `RecyclingPool::ReleaseUnused` leaves the per-thread caches (threads x 2 MiB) mapped; `putLarge_` can overshoot
-  the cache cap by one block per thread.
-- Error exits leak the in-flight unit's trace blocks (process ends anyway); `tryCommit_` erases a `loaded_` node
-  the caller's range-for is bound to (safe only because it returns immediately).
-- Tie order of centroids equal at 1e-5 Th differs between the fast and the OpenMS mzML parser (matters for `sum`
-  in the last float bit only).
+## From the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md), closed 2026-10-12
+- Panel sampling (`keep_every`) now applies to TSV/TraML/PQP too (the file is parsed whole, only the sample stays).
+- `TraceWriter` removes only its own shard names (`part-NNN.parquet`) from the output directory.
+- `putLarge_` reserves the cache space atomically (no overshoot); `tryCommit_`'s erase is documented as an
+  invariant at its one call site inside the `loaded_` loop.
+- The OpenMS mzML loader orders centroids like the fast parser and the mzPeak path (stable sort of the quantized
+  m/z in file order): with `-aggregation sum` both parsers now give byte-identical traces (run 01, 682,793 traces).
+- Overlapping isolation windows are counted at ingest and reported (`overlapping_windows` in the footer and the
+  log); still untested on such a scheme.
+- Left as is: a precursor whose MS2 cycle range is empty gets no MS1 trace (both axes span the same run; the
+  window can miss MS2 cycles but hit MS1 scans only within one cycle of the run's edges); `ReleaseUnused` cannot
+  touch other threads' caches (threads × 2 MiB stay mapped); error exits leak the in-flight blocks (process ends).
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open

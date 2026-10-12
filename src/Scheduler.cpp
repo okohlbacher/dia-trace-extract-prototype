@@ -402,6 +402,8 @@ namespace ODIA
       relock_(lock);
       end_(SchedulerStats::Extract, t0);
       keep->parked.emplace(unit, std::move(block));
+      // tryCommit_ may erase nodes of loaded_, the map this loop iterates: nothing after it touches the loop's
+      // iterator, the function returns at once.
       tryCommit_(lock);
       cv_.notify_all();
       return true;

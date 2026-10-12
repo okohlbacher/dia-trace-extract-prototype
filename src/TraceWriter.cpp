@@ -3,6 +3,9 @@
 #include "ArrowPool.h"
 #include "ArrowCheck.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include <arrow/api.h>
 #include <arrow/io/file.h>
 #include <arrow/util/key_value_metadata.h>
@@ -118,9 +121,14 @@ namespace ODIA
         namespace fs = std::filesystem;
         if (fs::exists(cfg_.parquet) && !fs::is_directory(cfg_.parquet)) { fs::remove(cfg_.parquet); }
         fs::create_directories(cfg_.parquet);
-        for (const auto& e : fs::directory_iterator(cfg_.parquet))   // stale parts of an earlier run
+        // Stale parts of an earlier run (a reader would take them for ours): only files named like our own
+        // shards, part-NNN.parquet, are removed; anything else in the directory is left alone.
+        for (const auto& e : fs::directory_iterator(cfg_.parquet))
         {
-          if (e.path().filename().string().starts_with("part-")) { fs::remove(e.path()); }
+          const std::string f = e.path().filename().string();
+          const bool ours = f.size() == 16 && f.starts_with("part-") && f.ends_with(".parquet")
+                            && std::all_of(f.begin() + 5, f.begin() + 8, [](unsigned char c) { return std::isdigit(c) != 0; });
+          if (ours && e.is_regular_file()) { fs::remove(e.path()); }
         }
         for (int i = 0; i < n; ++i)
         {

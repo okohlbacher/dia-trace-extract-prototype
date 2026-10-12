@@ -106,6 +106,7 @@ namespace ODIA
     std::uint64_t unsorted_spectra = 0;   ///< spectra that had to be sorted by m/z
     std::uint64_t missing_cells = 0;      ///< (window, cycle) cells without a spectrum
     std::uint64_t duplicate_cells = 0;    ///< extra spectra of a window within one cycle (merged)
+    std::uint64_t overlapping_windows = 0; ///< adjacent isolation windows overlapping by > 5% of the narrower one
     StageTime ingest;
   };
 

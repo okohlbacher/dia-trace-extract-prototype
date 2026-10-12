@@ -727,6 +727,34 @@ namespace ODIA
     else
     {
       loadLibrary(filename, opt, I.whole);   // filters already applied; parts are slices of the result
+      if (opt.keep_every > 1)
+      {
+        // Sampled read (calibration panel): keep every keep_every-th precursor, as the compact Parquet reader
+        // does by library row; the whole file still has to be parsed, but only the sample stays resident.
+        Library sampled;
+        sampled.fragment_begin.assign(1, 0);
+        const Library& w = I.whole;
+        for (std::size_t p = 0; p < w.size(); p += opt.keep_every)
+        {
+          sampled.precursor_id.push_back(w.precursor_id[p]);
+          sampled.modified_sequence.push_back(w.modified_sequence[p]);
+          sampled.precursor_mz.push_back(w.precursor_mz[p]);
+          sampled.charge.push_back(w.charge[p]);
+          sampled.decoy.push_back(w.decoy[p]);
+          sampled.library_rt.push_back(w.library_rt[p]);
+          for (std::uint32_t f = w.fragment_begin[p]; f < w.fragment_begin[p + 1]; ++f)
+          {
+            sampled.fragment_mz.push_back(w.fragment_mz[f]);
+            sampled.fragment_intensity.push_back(w.fragment_intensity[f]);
+            sampled.fragment_type.push_back(w.fragment_type[f]);
+            sampled.fragment_ordinal.push_back(w.fragment_ordinal[f]);
+            sampled.fragment_charge.push_back(w.fragment_charge[f]);
+            sampled.fragment_loss.push_back(w.fragment_loss[f]);
+          }
+          sampled.fragment_begin.push_back(static_cast<std::uint32_t>(sampled.fragment_mz.size()));
+        }
+        I.whole = std::move(sampled);
+      }
       Impl::Source s;
       s.rows = I.whole.size();
       I.rows = s.rows;
