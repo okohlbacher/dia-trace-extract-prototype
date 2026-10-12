@@ -233,7 +233,8 @@ costs.
 
 ## 11. Reproduction
 
-- Build: `README.md` (OpenMS develop build with Arrow/Parquet from its vcpkg tree; `git submodule update --init`).
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2` (this report is attached to
+  the release); build instructions in the appendix and in `README.md`.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/compare_traces.py` (pairwise metrics),
   `scripts/tolerance_screen.py` and `plot_tolerance_screen.py` (§6), `scripts/plot_thread_scaling.py` (§8),
@@ -242,7 +243,49 @@ costs.
   and diaPASEF module; libraries in `library/` (DIALibGen 0.11.1, `library/generate.sh`, `library/hye_timstof.log`).
 - Tests: `ctest` in the build directory (7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare).
 
-## Appendix: command lines
+## Appendix A: repository and installation
+
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype (tag `V0.2`, commit 663dc39 and the
+report commits after it). The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+`partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.1; the build fix for current
+OpenMS develop is on its branch `compact-parquet-plain-strings`).
+
+**Requirements.** Linux, GCC ≥ 13, CMake ≥ 3.24, Ninja; an OpenMS develop (≥ 3.7) build tree with its vcpkg
+dependencies, which provide Arrow/Parquet and, with `boost-json` and `boost-program-options` added to the OpenMS
+vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfig.cmake` directory can be given with
+`-DMZPEAK_BOOST_DIR`). Python 3 with pyarrow, pandas, numpy and matplotlib (`tools/pyenv` here) for the scripts;
+`markdown` and `weasyprint` for the PDF.
+
+```bash
+git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
+git checkout V0.2
+git submodule update --init
+# OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
+O=$PWD/OpenMS/OpenMS-build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic"
+cmake --build build -j 16
+ctest --test-dir build        # 7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare
+```
+
+**Use.**
+
+```bash
+# defaults: RT map, mass offsets and tolerances measured from the run; +-60 s around the library RT
+# (-rt_mode minutes: tuned libraries carry run minutes; auto: predicted RT, the map is fitted from the run)
+build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes -threads 64 \
+  -out traces.parquet -out_stats stats.json -out_calibration anchors.tsv
+build/DIATraceExtractor -in run.mzpeak -lib library.parquet -rt_mode auto -threads 64 -out traces.parquet
+build/DIATraceExtractor -in run.mzpeak -out_mzml run.mzML            # the loaded run as centroided mzML, for other tools
+build/DIATraceExtractor --help                                       # all options, including calibration:*
+```
+
+Input formats: mzML (indexed, centroided) and mzPeak; libraries as DIALibGen compact Parquet, DIA-NN/OpenSWATH TSV,
+TraML or PQP. The benchmark inputs come from the ProteoBench DIA Astral entrapment and diaPASEF modules
+(https://proteobench.cubimed.rub.de/raws/DIA-astral-entrapment/); the reference engines are DIA-NN 1.7.12 (the
+last open-source version, with its `--xic` export patched: `tools/DiaNN-1.7.12/`) and OpenSwathWorkflow from the
+same OpenMS build.
+
+## Appendix B: command lines
 
 Paths: `$P` = the repository, `$S` = `/scratch/$USER/odia-bench` (inputs staged from `benchmark-data/` and
 `library/`), `$X` = `build-stream/DIATraceExtractor` at the commit named, `$DIANN` =
