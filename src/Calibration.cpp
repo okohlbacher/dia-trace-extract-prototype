@@ -122,6 +122,8 @@ namespace ODIA
       float score = 0;        ///< correlation x cosine of the accepted apex
       float fwhm_cycles = 0;  ///< width of the summed fragment trace at half the apex, in cycles
       std::vector<float> coelution;   ///< mean pairwise fragment correlation when extracted at k sigma, per k of kSigmaGrid
+      std::vector<float> coelution_weak;   ///< the same over the weak library fragments only (< 30% of the strongest)
+      float apex_sum = 0;             ///< summed fragment intensity at the apex
       std::vector<std::pair<double, double>> ms2_ppm;  ///< (ppm, intensity) of the fragments over the co-elution window
       std::vector<std::pair<double, double>> ms1_ppm;  ///< (ppm, intensity) of M+0 at the MS1 scans of that window
     };
@@ -286,20 +288,27 @@ namespace ODIA
           }
           // Mean over ALL fragment pairs; a pair with a fragment absent at the apex counts 0 (a window that drops
           // fragments loses, a window that admits interference loses): the trade-off the multiple must settle.
+          // The same over the weak fragments only (diagnostic: the population the ID screen's optimum comes from).
           std::vector<bool> has(Fa, false);
           for (std::size_t f : present) { has[f] = true; }
-          double rsum = 0; int rn = 0;
+          float li_max = 0;
+          for (std::size_t f = 0; f < Fa; ++f) { li_max = std::max(li_max, lib.fragment_intensity[f0 + f]); }
+          double rsum = 0, wsum = 0; int rn = 0, wn = 0;
           for (std::size_t i = 0; i < Fa; ++i)
           {
             for (std::size_t j = i + 1; j < Fa; ++j)
             {
-              ++rn;
+              const bool weak = lib.fragment_intensity[f0 + i] < 0.3f * li_max && lib.fragment_intensity[f0 + j] < 0.3f * li_max;
+              ++rn; wn += weak;
               if (!has[i] || !has[j]) { continue; }
               const double r = pearson(&tr[i * n], &tr[j * n], n);
-              if (!std::isnan(r)) { rsum += r; }
+              if (std::isnan(r)) { continue; }
+              rsum += r; if (weak) { wsum += r; }
             }
           }
           out.coelution.push_back(static_cast<float>(rn ? rsum / rn : 0.0));
+          out.coelution_weak.push_back(static_cast<float>(wn >= 3 ? wsum / wn : std::numeric_limits<float>::quiet_NaN()));
+          out.apex_sum = sum[c];
         }
       }
       // MS1 monoisotope at the MS1 scan nearest to the apex.
@@ -771,6 +780,26 @@ namespace ODIA
       for (const auto& [e, w] : ms2_ppm) { o << "2\t" << e << '\t' << w << '\n'; }
       for (const auto& [e, w] : ms1_ppm) { o << "1\t" << e << '\t' << w << '\n'; }
     }
+    if (std::getenv("ODIA_PROFILE"))
+    {
+      // Diagnostic: anchors found at a 1% decoy-calibrated false rate when the SEARCH tolerance is k sigma -- the
+      // extraction-side analogue of the identification count an engine maximises over its mass accuracy.
+      std::fprintf(stderr, "[calibration] anchors at 1%% false rate by search k:");
+      for (double k : kSigmaGrid)
+      {
+        MassSearch sk = search;
+        sk.ms2_width = k * m2.sigma; sk.ms1_width = k * std::max(m1.sigma, 1e-3); sk.ms2_sigma = 0;
+        Criteria open = relaxed; open.min_correlation = -1; open.min_cosine = -1; open.min_score = -1;
+        auto targets = examinePanel(lib, grid, opt2, panel, open, sk, &map1, res.stage2_window_s);
+        Criteria decoy = open; decoy.decoy_shift_th = opt.decoy_shift;
+        const auto decoys = examinePanel(lib, grid, opt2, panel, decoy, sk, &map1, res.stage2_window_s);
+        const double cut = scoreCut(targets, decoys, 0.01);
+        const auto n_t = std::count_if(targets.begin(), targets.end(), [&](const PanelResult& x) { return x.score >= cut; });
+        const auto n_d = std::count_if(decoys.begin(), decoys.end(), [&](const PanelResult& x) { return x.score >= cut; });
+        std::fprintf(stderr, " %g:%ld(%ld decoys, cut %.2f)", k, static_cast<long>(n_t), static_cast<long>(n_d), cut);
+      }
+      std::fprintf(stderr, "\n");
+    }
     std::vector<double> absres;
     res.used = 0;
     for (const auto& a : res.anchors) { if (a.used) { absres.push_back(std::fabs(a.residual)); ++res.used; } }
@@ -781,10 +810,32 @@ namespace ODIA
     {
       const std::size_t nk = sizeof(kSigmaGrid) / sizeof(kSigmaGrid[0]);
       std::vector<std::vector<double>> curves(nk);
+      std::vector<float> apex;
+      for (std::size_t i = 0; i < stage2.size(); ++i) { if (res.anchors[i].used && stage2[i].coelution.size() == nk) { apex.push_back(stage2[i].apex_sum); } }
+      std::sort(apex.begin(), apex.end());
+      const float apex_median = apex.empty() ? 0.0f : apex[apex.size() / 2];
+      std::vector<std::vector<double>> curves_low(nk), curves_weak(nk), curves_weak_low(nk);   // diagnostics
       for (std::size_t i = 0; i < stage2.size(); ++i)
       {
         if (!res.anchors[i].used || stage2[i].coelution.size() != nk) { continue; }
-        for (std::size_t k = 0; k < nk; ++k) { curves[k].push_back(stage2[i].coelution[k]); }
+        const bool low = stage2[i].apex_sum < apex_median;
+        for (std::size_t k = 0; k < nk; ++k)
+        {
+          curves[k].push_back(stage2[i].coelution[k]);
+          if (low) { curves_low[k].push_back(stage2[i].coelution[k]); }
+          const float w = stage2[i].coelution_weak[k];
+          if (w == w) { curves_weak[k].push_back(w); if (low) { curves_weak_low[k].push_back(w); } }
+        }
+      }
+      if (std::getenv("ODIA_PROFILE"))
+      {
+        const auto show = [&](const char* name, const std::vector<std::vector<double>>& cs) {
+          std::fprintf(stderr, "[calibration] co-elution by k, %s (n=%zu):", name, cs[0].size());
+          for (std::size_t k = 0; k < nk; ++k) { std::fprintf(stderr, " %g:%.3f", kSigmaGrid[k], cs[k].empty() ? -1.0 : std::accumulate(cs[k].begin(), cs[k].end(), 0.0) / cs[k].size()); }
+          std::fprintf(stderr, "\n");
+        };
+        show("all anchors, all fragments", curves); show("weaker half of the anchors", curves_low);
+        show("weak fragments (< 30% of the strongest)", curves_weak); show("weak fragments, weaker half", curves_weak_low);
       }
       for (std::size_t k = 0; k < nk; ++k)
       {

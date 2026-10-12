@@ -47,11 +47,13 @@
   this data (our ±16 ppm vs DIA-NN's ±11.8); the MS1 agreement (r > 0.9 for 60% at equal tolerance); run B01 through
   DIA-NN.
 - **Tolerance rule:** the trace-quality screen (dossier §7) gives MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
-  MS1 4σ on both; defaults 6σ / 4σ. An anchor-based criterion that reproduces the timsTOF optimum is open: the
-  anchors' co-elution curve (`calibration:accuracy_sigma 0`) rises to 8σ on both instruments because anchors are
-  present, strong precursors; weighting it with the off-peak share, or scoring the anchors' weakest fragments, may
-  recover the balance. Peptide decoys from the library generator would give both a cleaner anchor set and a proper
-  FDR for the acceptance thresholds.
+  MS1 4σ on both; the multiples are set per instrument class (`-mz_sigma_ms2`). Tried and rejected as a measured
+  criterion (2026-10-12, `ODIA_PROFILE=1` prints the curves): the anchors' all-fragment co-elution curve, the same on
+  the weaker half of the anchors, on the weak fragments only, and on both -- all rise monotonically to 8σ on
+  timsTOF too (anchors are present precursors whose fragments stay correlated when the window widens; the ID
+  screen's fall comes from interference in weak and absent precursors); and the anchor yield at a 1%
+  decoy-calibrated false rate vs the search tolerance, which the shifted-fragment decoys make meaningless (0–5
+  decoys). A criterion needs a population with absent peptides: peptide decoys from the library generator.
 
 ## Open: from the V0.1 adversarial review (docs/09-adversarial-review-v0.1.md)
 - Panel sampling (`keep_every`) only for compact Parquet libraries; TSV/TraML/PQP load the whole library for the panel.
