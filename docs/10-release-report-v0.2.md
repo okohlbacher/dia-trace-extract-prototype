@@ -58,6 +58,21 @@ DIA-NN exports traces only while searching, so its times include the search; Ope
 
 ![Calibration](figures/doc/calibration.png)
 
+**The two extraction schemes, A and B.** The engines differ in a handful of rules, and the tool can follow either
+set, so that each comparison measures the rules and not the implementation:
+
+| rule | A (DIA-NN's rules; the default) | B (OpenSWATH's rules) |
+|---|---|---|
+| value per spectrum | the most intense centroid in the m/z window (`-aggregation max`) | the sum of all centroids in the window (`sum`) |
+| mass correction | offsets (and the m/z-dependent term) measured from the run (`-mass_calibration auto`) | none: the window sits at the library m/z |
+| tolerance | multiples of the measured widths (`-mz_sigma_ms2`, `-mz_sigma_ms1`), or fixed ppm | DIA-NN's optimised MS2 accuracy for both levels, as the benchmark gave OpenSWATH (`-mz_tol`, `-mz_tol_ms1`) |
+| MS1 isotopes | M+k at m/z + k · 1.00336 / z | M+k at m/z + k · 1.00336 regardless of charge (`-ms1_isotope_spacing unit`) |
+| RT window, MS1 axis | ±60 s around the mapped library RT; MS1 at its own scans | the same |
+
+Scheme A with both tolerances set to DIA-NN's accuracy is called P (parity) in the dossier. Scheme B exists to
+show that the tool reproduces OpenSWATH's traces; its rules are not recommended (§4). Everything else is shared:
+the run grid, the RT map, the merge join, the output.
+
 ## 3. Are the traces the same? (Astral, shared tuned library, all DIA-NN IDs)
 
 ![Trace correlation](figures/correlation_pairs_entrapment.png)
@@ -201,46 +216,15 @@ was accepted only with a byte-identical trace hash. The library-load transient (
 joined copy coexisting) and the mzPeak reader's serialised decode (scales to 10–14 cores) are the known remaining
 costs.
 
-## 9. Changes since V0.1
-
-- Tolerances as multiples of the measured error widths, per instrument class (`-mz_sigma_ms2`, `-mz_sigma_ms1`);
-  the instrument read from the run's metadata.
-- Mass model with an m/z-dependent term when the data support it (`calibration:mass_model`).
-- `-rt_window 0` = measured window; co-elution window from the measured peak width; calibration constants
-  configurable; panel as a share of the library (`calibration:panel_fraction`, 5%).
-- timsTOF diaPASEF: mzPeak frames split per window and collapsed across TIMS scans; `-out_mzml` exports the
-  loaded run as centroided mzML; instrument model carried through the converter.
-- mzPeak through the mzpeak-openms library (submodule, partitioned parallel read); Boost.JSON from the OpenMS
-  vcpkg tree.
-- Review leftovers closed: panel sampling for TSV/TraML/PQP, writer removes only its own shard names, atomic pool
-  cache cap, identical centroid tie order across the three readers, overlapping windows counted.
-- Libraries regenerated with DIALibGen's plain-string Parquet writer (timsTOF: 650 → 511 MB, panel load
-  3.6 → 1.3 s); DIALibGen adapted to current OpenMS develop (`OpenMS_CLI`).
-
-## 10. Open issues (from `BACKLOG.md`)
-
-- **Tolerance multiple as a measured criterion** needs peptide decoys from DIALibGen; the same decoys would replace
-  the fixed anchor-acceptance thresholds (a decoy-calibrated cut exists, `calibration:anchor_fdr`, off by default
-  because fragment-shift decoys are too easy).
-- **RT window**: peak width and map uncertainty as a function of RT; iterative re-extraction with a narrowed
-  window. RT model constants could be expressed in measured peak widths.
-- **mzPeak reader** (other agent): decode scaling, the diaPASEF per-spectrum path, ions attached to the first
-  precursor when `precursor_index` is NULL; **converter**: vendor vs ProteoWizard MS1 centroids as the reference.
-- **Memory**: the library-load transient (~4.3 GiB on the 7 M library).
-- **Untested**: overlapping or staggered isolation windows (counted and reported, nearest-window assignment or
-  `-window_assignment all`); MS1-only records at the run's edges.
-- Scheduler beyond 64 threads; compact-v2 library layout; the 50K shared library; results to the group.
-
-## 11. Reproduction
+## 9. Reproduction
 
 - Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2` (this report is attached to
-  the release); build instructions in the appendix and in `README.md`.
+  the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/compare_traces.py` (pairwise metrics),
   `scripts/tolerance_screen.py` and `plot_tolerance_screen.py` (§6), `scripts/plot_thread_scaling.py` (§8),
   `scripts/doc_figures.py` (§2 figures). Mass-error dumps: `ODIA_DUMP_MASS_ERRORS=file`.
-- Inputs: ProteoBench DIA entrapment Astral module (https://proteobench.cubimed.rub.de/raws/DIA-astral-entrapment/)
-  and diaPASEF module; libraries in `library/` (DIALibGen 0.11.1, `library/generate.sh`, `library/hye_timstof.log`).
+- Inputs: Appendix B; libraries in `library/` (DIALibGen 0.11.1, `library/generate.sh`, `library/hye_timstof.log`).
 - Tests: `ctest` in the build directory (7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare).
 
 ## Appendix A: repository and installation
@@ -285,7 +269,45 @@ TraML or PQP. The benchmark inputs come from the ProteoBench DIA Astral entrapme
 last open-source version, with its `--xic` export patched: `tools/DiaNN-1.7.12/`) and OpenSwathWorkflow from the
 same OpenMS build.
 
-## Appendix B: command lines
+## Appendix B: data sets
+
+**Orbitrap Astral (ProteoBench DIA ion entrapment module).** Three single-species human runs of the "LFQ Benchmark
+Dataset - Generation Beta" (Van Puyvelde et al., Dhaenens lab, Ghent; ProteomeXchange **PXD070049**,
+https://www.ebi.ac.uk/pride/archive/projects/PXD070049): `LFQ_Astral_DIA_15min_50ng_Human_01/02/03.raw`, Orbitrap
+Astral, 15-min gradient, 50 ng. ProteoBench mirrors them with the module's search database:
+
+| file | source |
+|---|---|
+| `LFQ_Astral_DIA_15min_50ng_Human_01.raw` (3.1 GB), `_02.raw`, `_03.raw` | https://proteobench.cubimed.rub.de/raws/DIA-astral-entrapment/ (also `all_data_Entrapment_DIA_Astral.tar.gz`, 5.6 GB) |
+| `ProteoBenchFASTA_Entrapment_Human_with_contaminants_entrapment_pep.zip` (2,841,736 peptide-level entries: human targets, contaminants and entrapment peptides, 1:1) | https://proteobench.cubimed.rub.de/fasta/ |
+| `UP000005640_9606.fasta` (UniProt human reference proteome, 20,652 entries; the human library) | https://www.uniprot.org/proteomes/UP000005640 |
+
+The `.raw` files were converted to centroided, indexed mzML with OpenMS `FileConverter` from the same OpenMS
+develop build (Thermo raw read through its ThermoRawFileParser bridge, vendor centroiding;
+`benchmark-data/DIA-astral-entrapment/mzML/convert_*.log`); mzPeak variants were made with mzpeak-convert
+0.17.2 / 0.18.0 and with this tool's `MzMLToMzPeak`.
+
+**timsTOF SCP diaPASEF (ProteoBench DIA quantification, precursor-ion level, diaPASEF module).** Three-species
+mixture (human, yeast, E. coli commercial digests in the proportions of Van Puyvelde et al., 2022, Scientific Data
+9:126, https://www.nature.com/articles/s41597-022-01216-6; expected log2 A/B: human 0, yeast −1, E. coli +2),
+25 ng in triplicate, Bruker timsTOF SCP with an UltiMate 3000 RS nanoLC and a 25 cm IonOpticks Aurora column,
+diaPASEF with precursor m/z 400–1000, 1/K0 0.64–1.37, 0.96 s cycle. ProteomeXchange **PXD062685** (announced by
+the module; at the time of writing the files are served by ProteoBench):
+
+| file | source |
+|---|---|
+| `ttSCP_diaPASEF_Condition_A_Sample_Alpha_01_11494.d.zip` (7.3 GB), `..._Condition_B_Sample_Alpha_01_11496.d.zip` (7.1 GB); replicates 02/03 of both conditions available, not used | https://proteobench.cubimed.rub.de/raws/diaPASEF/ |
+| `ProteoBenchFASTA_MixedSpecies_HYE.zip` (31,889 entries: three proteomes plus contaminants prefixed `Cont_`, Frankenfield et al., J. Proteome Res. 2022) | https://proteobench.cubimed.rub.de/fasta/ProteoBenchFASTA_MixedSpecies_HYE.zip |
+
+The `.d` folders were converted with mzpeak-convert 0.18.0 (`benchmark-data/diaPASEF/convert_*.log`); the mzML
+files DIA-NN read are this tool's `-out_mzml` export of the loaded grid.
+
+**Reference software.** DIA-NN 1.7.12 (https://github.com/vdemichev/DiaNN, release 1.7.12, the last open-source
+version; built here with a one-line fix to its `--xic` export, `tools/DiaNN-1.7.12/`); OpenSwathWorkflow from the
+OpenMS develop build used for the tool itself; DIALibGen 0.11.1 (https://github.com/okohlbacher/DIALibGen) with
+AlphaPeptDeep ONNX models for the predicted libraries.
+
+## Appendix C: command lines
 
 Paths: `$P` = the repository, `$S` = `/scratch/$USER/odia-bench` (inputs staged from `benchmark-data/` and
 `library/`), `$X` = `build-stream/DIATraceExtractor` at the commit named, `$DIANN` =
