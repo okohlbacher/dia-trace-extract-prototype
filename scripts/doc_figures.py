@@ -39,7 +39,8 @@ def overview(out):
     box(ax, 2.9, 2.0, 2.0, 0.8, "Calibration\nfrom the run itself")
     box(ax, 2.9, 0.4, 2.0, 0.8, "Run grid\ncycles × isolation windows")
     box(ax, 5.8, 1.2, 2.2, 0.8, "Extraction\nfragment + MS1 isotope traces", fc="#dbe7ff", bold=True)
-    box(ax, 8.4, 1.2, 1.5, 0.8, "Traces\n(Parquet)", fc="#f3f4f6", ec=MUTED)
+    box(ax, 8.4, 1.2, 1.5, 0.8, "Traces\n(Parquet or TSV)", fc="#f3f4f6", ec=MUTED)
+    ax.text(9.15, 1.05, "+ axes (Parquet), run statistics (JSON),\ncalibration anchors (TSV), the run as mzML", fontsize=6.8, color=MUTED, ha="center", va="top")
     # left column to middle column
     arrow(ax, 2.1, 2.4, 2.9, 2.4); arrow(ax, 2.1, 0.8, 2.9, 0.8)
     # the grid feeds the calibration (its spectra) and the extraction
