@@ -219,8 +219,6 @@ jobs:
         run: |
           cygpath -w "$OPENMS_BUILD/bin" >> "$GITHUB_PATH"
           cygpath -w "$QT_ROOT_DIR/bin" >> "$GITHUB_PATH"
-          # the LLVM OpenMP runtime (/openmp:llvm) lives only in Visual Studio's redistributable directory
-          for d in "$VCToolsRedistDir"/${{ matrix.vsarch }}/Microsoft.VC*.OpenMP.LLVM; do [ -d "$d" ] && cygpath -w "$d" >> "$GITHUB_PATH"; done
           echo "added to PATH:"; cat "$GITHUB_PATH"
       - name: "Diagnostics (Windows): --help and one extraction under a time limit, thread stacks if it hangs"
         if: runner.os == 'Windows'

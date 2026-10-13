@@ -34,7 +34,9 @@ endif()
 
 # Compiler-specific flags shared by every target of this project (and applied to the mzpeak submodule below).
 if(MSVC)
-  set(ODIA_CXX_OPTIONS /W3 /bigobj /utf-8 /EHsc /openmp:llvm)   # LLVM OpenMP runtime: 64-bit loop indices, dynamic schedules
+  # MSVC's own OpenMP (vcomp140, OpenMP 2.0), as OpenMS uses: one OpenMP runtime per process (the loops use signed
+  # indices and only 2.0 constructs, so the LLVM runtime of /openmp:llvm is not needed)
+  set(ODIA_CXX_OPTIONS /W3 /bigobj /utf-8 /EHsc)
   set(ODIA_CXX_DEFINITIONS NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 else()
   set(ODIA_CXX_OPTIONS -Wall -Wextra)
@@ -148,20 +150,12 @@ install(RUNTIME_DEPENDENCY_SET odia_deps
                        "^/System/" "^/usr/lib/.*\\.dylib"
   DIRECTORIES ${ODIA_DEP_DIRS})
 if(MSVC)
-  # App-local Visual C++ runtime: the C++ runtime, MSVC's OpenMP (vcomp140) and the LLVM OpenMP runtime that
-  # /openmp:llvm links (libomp140.<arch>.dll, not part of the standard redistributable package). The dependency
-  # collector above skips them because they resolve to System32 on the build machine.
+  # App-local Visual C++ runtime and MSVC's OpenMP (vcomp140): the dependency collector above skips them because
+  # they resolve to System32 on the build machine.
   set(CMAKE_INSTALL_OPENMP_LIBRARIES ON)
   set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
   set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)
   include(InstallRequiredSystemLibraries)
-  string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" _arch)
-  file(GLOB ODIA_LLVM_OPENMP_DLLS "$ENV{VCToolsRedistDir}/${_arch}/Microsoft.VC*.OpenMP.LLVM/libomp140*.dll")
-  if(ODIA_LLVM_OPENMP_DLLS)
-    install(FILES ${ODIA_LLVM_OPENMP_DLLS} DESTINATION bin)
-  else()
-    message(WARNING "LLVM OpenMP runtime (libomp140) not found under $ENV{VCToolsRedistDir}/${_arch}: the package will need it on PATH")
-  endif()
 endif()
 if(ODIA_OPENMS_SHARE)
   install(DIRECTORY "${ODIA_OPENMS_SHARE}/" DESTINATION share/OpenMS)
