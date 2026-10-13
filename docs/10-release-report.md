@@ -1,12 +1,15 @@
-# DIATraceExtractor V0.2.5: release report (2026-10-13)
+# DIATraceExtractor V0.2.7: release report (2026-10-13)
 
-**Versions.** This report accompanies release **V0.2.5** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
-The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.5 added the
-`-scheme B` preset, macOS support, three defect fixes and this report's corrections, and every number here was
-re-checked against archived runs. Which binary produced which measurement is stated at each table and in
-Appendix C: the Astral and diaPASEF quality and speed tables come from cb466f0 (V0.2), the laptop series from
-V0.2.2-2-gfff45ea (the laptop's branch, = V0.2.3), the 1- and 2-thread cluster rows from V0.2.4; the earlier
-rule comparisons (A-V0.1, P) from the pre-release binaries named in Appendix C.
+**Versions.** This report accompanies release **V0.2.7** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
+`-scheme B` preset, macOS and Windows support with release packages, three defect fixes, a faster mzML ingest
+(V0.2.7: positional reads and an unbounded in-order commit, output byte-identical) and this report's corrections,
+and every number here was re-checked against archived runs. Which binary produced which measurement is stated at
+each table and in Appendix C: the Astral and diaPASEF quality tables come from cb466f0 (V0.2); the §6 speed
+tables (cluster thread series, full libraries, laptop) were re-measured with the V0.2.7 binary (d963cb5 on the
+cluster, 318e5aa on the laptop; the two differ only in the floating-point parser used on Apple's libc++, whose
+output is value-identical); the earlier rule comparisons (A-V0.1, P) from the pre-release binaries named in
+Appendix C.
 
 **What it is.** `DIATraceExtractor` is an OpenMS TOPP tool (C++23, OpenMS develop) that extracts DIA fragment and
 precursor-isotope traces (XICs) from a predicted spectral library and writes them as Parquet or TSV. It calibrates
@@ -263,67 +266,82 @@ containing absent peptides, i.e. peptide decoys from the library generator (back
 
 ## 6. Performance
 
-Machine: 2 × AMD EPYC 9654 (56 cores per socket online, SMT), shared node; inputs on local `/scratch`; one run per
-point unless stated; peak RSS from `/usr/bin/time`.
+Machine: 2 × AMD EPYC 9654 (`dax`: 192 cores, SMT, 2.3 TB), shared node at a load of 45–96 (0.12–0.25 per
+hardware thread) during the series; inputs on local `/scratch`; one run per point unless stated; peak RSS from
+`/usr/bin/time`.
 
-**Runtime vs threads**, Astral run 01, shared tuned library (82,333 precursors, all fragments); ours at the V0.2
-defaults (commit cb466f0), DIA-NN and OpenSWATH from the same series with unchanged binaries:
+**Runtime vs threads**, Astral run 01, shared tuned library (82,333 precursors, all fragments); ours V0.2.7 (commit
+d963cb5, `results/threads_v0.2.7_d963cb5/`), DIA-NN and OpenSWATH from the cb466f0 series with unchanged binaries
+(`results/threads_cb466f0/`):
 
 ![Thread scaling](figures/thread_scaling.png)
 
 | threads | ours A (defaults) | ours B (OpenSWATH rules) | DIA-NN 1.7.12 | OpenSwathWorkflow |
 |---|---|---|---|---|
-| 1 | 13.8 s / 2.3 GiB | 11.9 s / 2.4 GiB | – | – |
-| 2 | 6.9 s | 6.7 s | – | – |
-| 4 | 4.1 s / 2.4 GiB | 4.1 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 2.5 s | 2.4 s | 59 s | 189 s |
+| 1 | 14.6 s / 2.3 GiB | 12.0 s / 2.4 GiB | – | – |
+| 2 | 6.8 s | 6.5 s | – | – |
+| 4 | 4.2 s / 2.3 GiB | 4.0 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 2.3 s | 2.4 s | 59 s | 189 s |
 | 16 | 1.7 s | 1.6 s | 34 s | 183 s |
-| 32 | 1.3 s | 1.3 s | 26 s | 183 s |
-| 64 | 1.4 s / 2.6 GiB | 1.3 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 32 | 1.3 s | 1.2 s | 26 s | 183 s |
+| 64 | 1.3 s / 2.6 GiB | 1.2 s / 2.6 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
-Ours is 28× faster than DIA-NN at 4 threads and 19–20× from 16 threads up, and 55–136× faster than OpenSWATH.
-Ours flattens beyond 32 threads at this library size: the tool's own stages take about 1.0 s (ingest 0.3 s,
-calibration 0.1 s, extraction 0.4 s), the remaining 0.3–0.4 s is process start-up and teardown; B, which skips
-the calibration, is 0.1 s faster. OpenSWATH stops scaling at 8 threads while its memory grows to 14 GiB. Shared
-node (load 5–15 from other users); ours read the inputs from local disk, the references from the network file
-system (Appendix C). The 1- and 2-thread rows were measured with the V0.2.4 binary after the one-thread ingest fix
-described below; the references were not run below 4 threads.
+Ours is 28× faster than DIA-NN at 4 threads and 20–21× from 16 threads up, and 55–149× faster than OpenSWATH.
+Ours flattens beyond 32 threads at this library size: the tool's own stages take 0.6 s at 64 threads (ingest
+0.24 s, calibration 0.04 s, extraction 0.34 s; tool total 0.93 s), the remaining 0.3–0.4 s is process start-up and
+teardown; B, which skips the calibration, is 0.1 s faster. OpenSWATH stops scaling at 8 threads while its memory
+grows to 14 GiB. Ours read the inputs from local disk, the references from the network file system (Appendix C);
+the references were not run below 4 threads. Against the cb466f0 series the V0.2.7 ingest changes are within the
+run-to-run spread on Linux (64 threads: 1.44 → 1.28 s; 1 thread: 13.8 → 14.6 s at a higher node load), as expected:
+libstdc++ never had the small-read problem described for the laptop below.
 
-**Full libraries**, Astral run 01, 64 threads, top 6 fragments, V0.2 defaults:
+**Full libraries**, Astral run 01, 64 threads, top 6 fragments, V0.2 defaults, V0.2.7 binary
+(`results/full_v0.2.7_318e5aa/`; the directory is named after the checkout, the binary is d963cb5):
 
-| library | tool total (wall incl. start-up), 2 runs | calibration | extraction | peak RSS | traces |
-|---|---|---|---|---|---|
-| human, 3.49 M precursors | 5.6–5.9 s (6.2–6.4 s) | 0.5 s | 3.3–3.4 s | 3.8 GiB | 31.3 M |
-| entrapment, 7.0 M precursors | 9.1 s (9.7 s) | 1.0 s | 6.1–6.2 s | 4.8 GiB | 63.0 M |
+| library | tool total (wall incl. start-up), 2 runs | ingest | calibration | extraction | peak RSS | traces |
+|---|---|---|---|---|---|---|
+| human, 3.49 M precursors | 5.7–5.8 s (6.2–6.7 s) | 0.3 s | 0.4–0.6 s | 3.3–3.8 s | 3.8 GiB | 31.3 M |
+| entrapment, 7.0 M precursors | 8.0–9.3 s (8.4–9.8 s) | 0.3 s | 0.9 s | 5.3–6.7 s | 4.8 GiB | 63.0 M |
 
-Measured at a node load of about 21; an earlier commit (6d26c49) measured 8.6–9.0 s on the entrapment library on a
-quieter node (dossier §4). The thread table above uses `/usr/bin/time` wall clock, this one the tool's own total.
+Measured on `dax` at a load of 45–55 (0.12–0.14 per hardware thread); cb466f0 had measured 5.6–5.9 s and 9.1 s at a
+load of about 21, and 6d26c49 8.6–9.0 s on the entrapment library on a quieter node (dossier §4). The thread table
+above uses `/usr/bin/time` wall clock, this one the tool's own total.
 
 **diaPASEF** (A01, 4.15 M-precursor library, 32 threads, `results/diapasef/odia_A01.log`): 45 s wall, 17 GB peak
 RSS (13.8 GB with the regenerated library, `odia_A01_regenlib.log`), 36.7 M traces; the mzPeak per-spectrum read
 and the mobility collapse take 26 s of it, the calibration 5 s, the extraction 13 s.
 
 **On a laptop** (MacBook Pro, Apple M4 Max: 12 performance + 4 efficiency cores, no SMT, 128 GiB, macOS 26.6,
-inputs on the internal SSD, Homebrew libomp; Appendix C). Same run and shared library, mean of two repeats, run on
-battery without visible throttling (repeat 2 within 7% of repeat 1):
+inputs on the internal SSD, Homebrew libomp; Appendix C). Same run and shared library, V0.2.7 binary (318e5aa,
+`results/macos-benchmark/v0.2.7/`), mean of two repeats on mains power (repeats within 2 %):
 
 ![Cluster vs laptop](figures/machine_scaling.png)
 
 | threads | ours A | ours B | OpenSwathWorkflow |
 |---|---|---|---|
-| 1 | 41.4 s / 2.0 GiB (serial parser, see below) | 41.3 s | – |
-| 2 | 5.4 s | 5.2 s | – |
-| 4 | 4.4 s | 4.3 s | – |
-| 8 | 3.9 s | 3.9 s | – |
-| 12 (performance cores) | 3.8 s | 3.8 s | – |
-| 16 | 3.3 s / 2.1 GiB | 3.4 s / 2.2 GiB | 120 s / 12.7 GiB |
+| 1 | 6.2 s / 1.9 GiB | 5.9 s / 2.0 GiB | – |
+| 2 | 3.2 s | 3.1 s | – |
+| 4 | 1.7 s | 1.6 s | – |
+| 8 | 0.94 s | 0.89 s | – |
+| 12 (performance cores) | 0.74 s | 0.69 s | – |
+| 16 | 0.70 s / 2.2 GiB | 0.66 s / 2.2 GiB | 120 s / 12.8 GiB |
 
-The full 7.0 M-precursor library takes 14.9–15.7 s at 16 threads in 3.9 GiB. Per core the laptop is the faster
-machine (OpenSWATH: 120 s at 16 cores against 183 s on the node), while ours flattens from 8 cores on: the ingest
-of the 5.8 GB mzML is page-fault-bound on macOS (2.9 s of the 3.3 s at 16 threads, with 19–23 s of system time;
-on the node the same ingest takes 0.4 s), which was not investigated further. The laptop needed no change to the
-extraction but exposed three defects, all present on Linux too; the first two were fixed on the laptop (tag
-V0.2.3), the third here (V0.2.4):
+The full 7.0 M-precursor library takes 14.2–15.3 s at 16 threads in 4.0 GiB (ingest 0.3 s, extraction about
+9.6 s at 11.6 active cores, the rest calibration panel and final drain). Per core the laptop is the faster
+machine, and in absolute terms it now matches the node: 0.70 s at 16 cores against 0.93 s at 64 threads on the
+node (OpenSWATH: 120 s against 183 s); ours A speeds up 8.9× from 1 to 16 threads.
+
+The laptop's V0.2.3 series (3.3 s at 16 threads, 41 s at 1 thread, 19–23 s of system time) exposed what V0.2.7
+fixes (`12-macos-benchmark-note.md`): libc++'s `ifstream::read` refills a 4 KiB buffer with one `read()` per
+4 KiB, and macOS serialises concurrent small reads of one file in the kernel, so the two passes over the 5.8 GB
+mzML (~2.9 M syscalls) cost 21 s of system time at 16 threads and kept the ingest at about 3 s regardless of the
+thread count (libstdc++ reads large requests directly, so the node never showed it); and the ordered chunk
+pipeline's look-ahead of 32 chunks kept the workers waiting on the in-order commit 85 % of the time, on Linux as
+well. Both passes now use positional reads (`platform::FileReader`), and the fast parser's look-ahead is unbounded
+(a parked chunk holds only metadata; +40 MB peak RSS). Ingest at 16 laptop threads 2.9 → 0.27 s, 1 thread 41 →
+6.2 s overall; traces and axes byte-identical to V0.2.3 at 1 and 16 threads. The laptop had also exposed three
+defects, all present on Linux too; the first two were fixed on the laptop (tag V0.2.3), the third on the node
+(V0.2.4):
 
 - `--help` aborted (an unregistered TOPP subsection, since `calibration:mass_model` became a visible option on
   2026-10-12; `--helphelp` had aborted on every build);
@@ -332,7 +350,7 @@ V0.2.3), the third here (V0.2.4):
   pool is now never destroyed;
 - `-threads 1` fell back to the serial OpenMS mzML parser instead of the chunk parser with one worker: 70 s
   instead of 14 s on the node for the shared library (`results/threads_cb466f0/t1/odiaA_serial_parser.log` vs
-  `odiaA.log`). The laptop's 41 s at 1 thread was measured before this fix and has not been re-run.
+  `odiaA.log`); 41 s instead of 6.2 s on the laptop.
 
 **What the speed rests on** beyond the design of §2 (dossier §4, `06-parallel-efficiency.md`,
 `07-contention-diagnosis.md`): the parsers decode straight into the peak pool; a bucket index over m/z skips
@@ -342,7 +360,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.5` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.7` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -354,9 +372,9 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.5`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.7`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
-fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 this report's version stamp. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -368,7 +386,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.5
+git checkout V0.2.7
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build
@@ -466,7 +484,7 @@ $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Hum
 ```
 
 **Astral, runtime vs threads (§6; `ODIA_ONLY=1 REF=results/threads scripts/bench_threads.sh results/threads_cb466f0 4 8 16 32 64`,
-binary cb466f0; 1 and 2 threads added with V0.2.4).** `$t` = 1 … 64; DIA-NN and OpenSWATH as above with `--threads $t` /
+binary d963cb5 = V0.2.7, `results/threads_v0.2.7_d963cb5/`; the cb466f0 series in `results/threads_cb466f0/`).** `$t` = 1 … 64; DIA-NN and OpenSWATH as above with `--threads $t` /
 `-threads $t` (`results/threads/`, unchanged binaries, reading the mzML from `benchmark-data/` on the network file
 system rather than `$S`).
 
@@ -499,11 +517,11 @@ tools/pyenv/bin/python scripts/trace_gallery.py results/gallery_v02 results/anal
 tools/pyenv/bin/python scripts/trace_gallery_mirror.py results/gallery_v02 results/analysis/gallery_v02/gallery_run01_selection.tsv docs/figures/gallery_v02 --sample random
 ```
 
-**Laptop series (§6; `scripts/bench_macos.sh bench`, binary V0.2.2-2-gfff45ea = V0.2.3 minus the note,
+**Laptop series (§6; `scripts/bench_macos.sh bench`, binary V0.2.7 = 318e5aa, on mains power,
 `OMP_WAIT_POLICY=PASSIVE`; machine and defects: `docs/12-macos-benchmark-note.md`).** The same
 ours A / ours B commands as the thread series with `$t` in 1 2 4 8 12 16, timed with `/usr/bin/time -l`; the full
 library at 16 threads; `RUN_OSW=1` for the OpenSwathWorkflow run (same options, `-threads 16`). Results:
-`results/macos-benchmark/` (tarball and `bench.log`), summarised in `docs/figures/laptop_m4max_summary.tsv`.
+`results/macos-benchmark/v0.2.7/` (tarball, `bench-v0.2.7b.log`; the V0.2.3 series in `results/macos-benchmark/`), summarised in `docs/figures/laptop_m4max_summary.tsv`.
 
 **Astral, mass-error structure and the linear-vs-constant check (`EXTRACTION.md`, mass model; binary 4e89acc and its parent).**
 
