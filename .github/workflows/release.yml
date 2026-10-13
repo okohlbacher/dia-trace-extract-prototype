@@ -205,7 +205,7 @@ jobs:
             EXTRA+=("-DCMAKE_TOOLCHAIN_FILE=$OPENMS_SRC/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DVCPKG_MANIFEST_MODE=OFF"
                     "-DVCPKG_INSTALLED_DIR=C:/vi" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"
                     "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_APPLOCAL_DEPS=OFF"
-                    "-DCMAKE_CXX_FLAGS=/Z7" "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG")   # symbols for the diagnostic stack dumps
+                    "-DCMAKE_CXX_FLAGS=-Z7" "-DCMAKE_EXE_LINKER_FLAGS=-DEBUG")   # symbols for the diagnostic stack dumps (dash form: Git Bash rewrites /Z7 into a path)
           fi
           cmake -S tool -B tool/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_PREFIX_PATH="$OPENMS_BUILD;$VCPKG_INSTALLED" \
