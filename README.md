@@ -8,8 +8,8 @@ How it works (grid, criteria, calibration, parallel layout): [docs/EXTRACTION.md
 Results and history: [docs/00-dossier.md](docs/00-dossier.md); design notes [docs/01-trace-extractor-design.md](docs/01-trace-extractor-design.md);
 benchmark (ProteoBench Astral entrapment): [docs/02-benchmark-astral.md](docs/02-benchmark-astral.md).
 
-Release report (V0.2, benchmarks against DIA-NN 1.7.12 and OpenSWATH on Astral and timsTOF diaPASEF):
-[docs/10-release-report-v0.2.md](docs/10-release-report-v0.2.md).
+Release report (benchmarks against DIA-NN 1.7.12 and OpenSWATH on Astral and timsTOF diaPASEF, with the version of
+the tool each number came from): [docs/10-release-report.md](docs/10-release-report.md).
 
 ## Build
 

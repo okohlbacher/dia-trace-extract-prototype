@@ -1,4 +1,12 @@
-# DIATraceExtractor V0.2: release report (2026-10-12; V0.2.4 2026-10-13)
+# DIATraceExtractor V0.2.5: release report (2026-10-13)
+
+**Versions.** This report accompanies release **V0.2.5** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.5 added the
+`-scheme B` preset, macOS support, three defect fixes and this report's corrections, and every number here was
+re-checked against archived runs. Which binary produced which measurement is stated at each table and in
+Appendix C: the Astral and diaPASEF quality and speed tables come from cb466f0 (V0.2), the laptop series from
+V0.2.2-2-gfff45ea (the laptop's branch, = V0.2.3), the 1- and 2-thread cluster rows from V0.2.4; the earlier
+rule comparisons (A-V0.1, P) from the pre-release binaries named in Appendix C.
 
 **What it is.** `DIATraceExtractor` is an OpenMS TOPP tool (C++23, OpenMS develop) that extracts DIA fragment and
 precursor-isotope traces (XICs) from a predicted spectral library and writes them as Parquet or TSV. It calibrates
@@ -16,8 +24,7 @@ DIA-NN's own width captures 98% of the true signal at 1% interference where DIA-
 OpenSWATH 100% at 22%. The extraction runs 19–28× faster than DIA-NN and 55–136× faster than OpenSWATH on the same
 run and library, in 2.7 GiB, with byte-identical output at 1 and 64 threads and, on run 01, from any of the three
 readers (fast mzML, OpenMS mzML, mzPeak); on a MacBook Pro (M4 Max) the same run takes 3.3 s at 16 cores, with
-OpenSWATH at 120 s. V0.2.4 is a correction release: a preset for OpenSWATH's rules, macOS support, and three
-defects the port exposed (§6). Two things are open and both concern the width of the window, not its centre: the tolerance
+OpenSWATH at 120 s. Two things are open and both concern the width of the window, not its centre: the tolerance
 multiple is set per instrument class from an identification screen rather than measured from the run, because the
 calibration anchors cannot see the interference that sets the optimum; and the MS1 multiple of 4σ is on the narrow
 side (93% of the modelled true signal captured, §4) and should move to 5–6σ once re-screened.
@@ -335,7 +342,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.4` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.5` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -347,9 +354,9 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype (tag `V0.2.4`; V0.2.1 added the
-`-scheme` preset, V0.2.2 the macOS portability guards, V0.2.3 the `--help` and exit-time fixes from the laptop,
-V0.2.4 the one-thread ingest fix and the laptop results; `V0.2` is 663dc39 without any of these). The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.5`. History: V0.2 (663dc39) the
+extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 this report's version stamp. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -361,7 +368,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.4
+git checkout V0.2.5
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build

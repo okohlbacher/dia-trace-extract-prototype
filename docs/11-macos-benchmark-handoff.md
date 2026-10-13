@@ -66,7 +66,7 @@ JUMP=kohlbach@sshgw.cs.uni-tuebingen.de bash /tmp/bench/bench_macos.sh inputs   
 ## 5. The benchmark (what the numbers are compared against)
 
 Cluster reference (2 × AMD EPYC 9654, Linux, V0.2.1 binary, run 01, shared library of 82,333 precursors, all
-fragments, `docs/10-release-report-v0.2.md` §6): ours A 4.1 s at 4 threads, 2.5 s at 8, 1.7 s at 16, 1.3–1.4 s at
+fragments, `docs/10-release-report.md` §6): ours A 4.1 s at 4 threads, 2.5 s at 8, 1.7 s at 16, 1.3–1.4 s at
 32–64, peak RSS 2.4–2.7 GiB; full 7 M-precursor library at 64 threads 9.3 s, 4.8 GiB; OpenSwathWorkflow 227 s at
 4 threads, 182 s at 64.
 
@@ -95,7 +95,7 @@ mzML lives on the internal SSD.
 
 ## 7. Repository pointers
 
-- Build: `README.md`; options: `docs/EXTRACTION.md`; results and context: `docs/10-release-report-v0.2.md`.
+- Build: `README.md`; options: `docs/EXTRACTION.md`; results and context: `docs/10-release-report.md`.
 - The script: `scripts/bench_macos.sh` (main branch; `--force`-fetches tags, prints compile errors on failure).
 - Tests: `ctest --test-dir build` (7 tests; need the OpenMS build's `bin/OpenSwathWorkflow` and `TextExporter`,
   found through `OpenMS_DIR`).

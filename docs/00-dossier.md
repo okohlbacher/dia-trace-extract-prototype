@@ -1,4 +1,4 @@
-# ODIA-V3 trace extraction: dossier (2026-10-11, updated 2026-10-12; release report: 10-release-report-v0.2.md)
+# ODIA-V3 trace extraction: dossier (2026-10-11, updated 2026-10-12; release report: 10-release-report.md)
 
 **Goal.** Fast, memory-efficient extraction of DIA fragment and precursor traces (XICs) from a *predicted, recalibrated*
 library, exported as Parquet/TSV for comparison with DIA-NN and OpenSWATH. Scoring, FDR and PyProphet are out of scope.
