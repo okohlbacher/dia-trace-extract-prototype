@@ -203,8 +203,8 @@ local `/scratch`, 2 runs each, node load ~21 (`results/full_cb466f0/`):
 
 | library | total | calibration | extraction | peak RSS | traces |
 |---|---|---|---|---|---|
-| human, 3.49 M precursors | 5.8–6.1 s | 0.5 s | 3.3–3.4 s | 3.8 GiB | 31.3 M |
-| entrapment, 7.0 M precursors | 9.3 s (8.6–9.0 s with 6d26c49 on a quieter node) | 1.0 s | 6.1–6.2 s | 4.8 GiB | 63.0 M |
+| human, 3.49 M precursors | 5.6–5.9 s (6.2–6.4 s wall) | 0.5 s | 3.3–3.4 s | 3.8 GiB | 31.3 M |
+| entrapment, 7.0 M precursors | 9.1 s (9.7 s wall; 8.6–9.0 s with 6d26c49 on a quieter node) | 1.0 s | 6.1–6.2 s | 4.8 GiB | 63.0 M |
 
 **How we got here** (entrapment, full library, 64 threads):
 

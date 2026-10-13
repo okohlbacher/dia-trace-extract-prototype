@@ -887,9 +887,10 @@ namespace ODIA
     {
       loadMzPeak(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); });
     }
-    else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); }))
+    else if (loadChunked(filename, std::max(1, decode_threads), *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); }))
     {
-      // parsed in parallel chunks (see loadChunked)
+      // parsed in chunks (see loadChunked), also with one thread: the streaming OpenMS parser below is ~20x
+      // slower and is kept for ODIA_MZML_PARSER=openms and for files the chunked parser declines
     }
     else
     {

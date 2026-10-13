@@ -360,9 +360,9 @@ protected:
     setMinFloat_("log8_decades", 0.1);
     registerFlag_("expand_rt", "Also write the RT list per trace row (convenience; larger file).");
     registerFlag_("skip_empty", "Do not write traces that are all zero.");
-    registerIntOption_("ingest_threads", "<n>", 0, "Threads for the mzML ingest (parallel chunk parsing; 1 = serial "
-                       "streaming parser; 0 = min(-threads, 32): the parse is memory-bandwidth bound, measured flat beyond "
-                       "~32 threads while CPU time keeps growing).", false, true);
+    registerIntOption_("ingest_threads", "<n>", 0, "Threads for the mzML ingest (chunk parsing, also with 1; ODIA_MZML_PARSER=openms "
+                       "selects the serial streaming parser); 0 = min(-threads, 32): the parse is memory-bandwidth bound, measured "
+                       "flat beyond ~32 threads while CPU time keeps growing.", false, true);
     setMinInt_("ingest_threads", 0);
     registerIntOption_("out_shards", "<n>", 32, "Parquet part files written concurrently; > 1 makes -out a directory of "
                        "part-NNN.parquet files (read as one table by pyarrow/DuckDB). Each part is written serially, so the "

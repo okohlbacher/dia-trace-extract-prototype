@@ -1,0 +1,12 @@
+date 
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+Apple M4 Max
+hw.physicalcpu: 16
+hw.logicalcpu: 16
+hw.perflevel0.physicalcpu: 12
+hw.perflevel1.physicalcpu: 4
+hw.memsize: 137438953472
+tool V0.2.2-2-gfff45ea openms 10b0a7af09
+threads: 1 2 4 8 12 16 
