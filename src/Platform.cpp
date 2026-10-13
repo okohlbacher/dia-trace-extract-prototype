@@ -1,5 +1,6 @@
 #include "Platform.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -21,6 +22,7 @@
   #include <sys/time.h>
   #include <time.h>
   #include <unistd.h>
+  #include <fcntl.h>
   #if defined(__linux__)
     #include <malloc.h>
     #include <fstream>
@@ -82,6 +84,27 @@ namespace ODIA::platform
     return ::GetProcessMemoryInfo(::GetCurrentProcess(), &m, sizeof m) ? m.PageFaultCount : 0;
   }
   void trimHeap() {}
+  FileReader::FileReader(const char* path)
+  {
+    HANDLE h = ::CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    handle_ = h == INVALID_HANDLE_VALUE ? -1 : reinterpret_cast<std::intptr_t>(h);
+  }
+  FileReader::~FileReader() { if (ok()) { ::CloseHandle(reinterpret_cast<HANDLE>(handle_)); } }
+  bool FileReader::readAt(void* dst, std::size_t bytes, std::uint64_t offset) const
+  {
+    auto* out = static_cast<char*>(dst);
+    while (bytes > 0)
+    {
+      OVERLAPPED ov{};
+      ov.Offset = static_cast<DWORD>(offset & 0xffffffffu);
+      ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
+      const DWORD want = static_cast<DWORD>(std::min<std::size_t>(bytes, 1u << 30));
+      DWORD got = 0;
+      if (!::ReadFile(reinterpret_cast<HANDLE>(handle_), out, want, &got, &ov) || got == 0) { return false; }
+      out += got; bytes -= got; offset += got;
+    }
+    return true;
+  }
   void reexecWithEnv(const char* var, const char* value, int, const char**)
   {
     // No exec on Windows; the MSVC/LLVM OpenMP runtimes read the variable at first use, which is after main().
@@ -186,6 +209,19 @@ namespace ODIA::platform
   #if defined(__linux__)
     ::malloc_trim(0);
   #endif
+  }
+  FileReader::FileReader(const char* path) { handle_ = ::open(path, O_RDONLY); }
+  FileReader::~FileReader() { if (ok()) { ::close(static_cast<int>(handle_)); } }
+  bool FileReader::readAt(void* dst, std::size_t bytes, std::uint64_t offset) const
+  {
+    auto* out = static_cast<char*>(dst);
+    while (bytes > 0)
+    {
+      const ssize_t got = ::pread(static_cast<int>(handle_), out, bytes, static_cast<off_t>(offset));
+      if (got <= 0) { return false; }
+      out += got; bytes -= static_cast<std::size_t>(got); offset += static_cast<std::uint64_t>(got);
+    }
+    return true;
   }
   void reexecWithEnv(const char* var, const char* value, int argc, const char** argv)
   {

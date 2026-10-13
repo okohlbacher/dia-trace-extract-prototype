@@ -37,6 +37,21 @@ namespace ODIA::platform
   /// Hand memory the allocator holds back to the OS (glibc's malloc_trim; a no-op elsewhere).
   void trimHeap();
 
+  /// Positional reads of one file from any thread: one shared handle, no per-thread stream state (pread; ReadFile
+  /// with an offset on Windows). readAt fails when the range is short. Not copyable.
+  class FileReader
+  {
+  public:
+    explicit FileReader(const char* path);
+    ~FileReader();
+    FileReader(const FileReader&) = delete;
+    FileReader& operator=(const FileReader&) = delete;
+    bool ok() const { return handle_ != -1; }
+    bool readAt(void* dst, std::size_t bytes, std::uint64_t offset) const;
+  private:
+    std::intptr_t handle_ = -1;
+  };
+
   /// Re-execute the running program once with `var=value` in its environment (needed where a runtime reads the
   /// variable only at load, e.g. libgomp's OMP_WAIT_POLICY). Returns only on failure or where re-exec is not
   /// supported, in which case the variable is set for the current process as far as that helps.
