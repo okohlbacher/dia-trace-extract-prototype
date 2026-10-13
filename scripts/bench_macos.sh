@@ -47,7 +47,8 @@ json.dump(m, open("vcpkg.json", "w"), indent=2)
 EOF
   bash tools/ci/deps-macos.sh --skip-doc-deps --skip-gui-deps || true
   cmake --preset macos-arm64-release $(toolchain) -DOpenMP_ROOT=$(brew --prefix libomp) -DWITH_GUI=OFF -DOPENMS_BUILD_TESTS=OFF 2>&1 | tail -3
-  cmake --build build/macos-arm64-release -j $(sysctl -n hw.physicalcpu) --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter FileConverter 2>&1 | tail -2
+  cmake --build build/macos-arm64-release -j $(sysctl -n hw.physicalcpu) --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter FileConverter > build/macos-arm64-release/build.log 2>&1 \
+    || { grep -E -B3 -A12 "error:|Error " build/macos-arm64-release/build.log | head -120; log "OpenMS build failed (full log: $PWD/build/macos-arm64-release/build.log)"; exit 1; }
   cd ..; log "OpenMS built: $(ls OpenMS/build/macos-arm64-release/bin | head -3 | tr '\n' ' ')"
 }
 
@@ -57,7 +58,8 @@ tool() {
   O=$WORK/OpenMS/build/macos-arm64-release; V=$O/vcpkg_installed/arm64-osx-dynamic-sysroot
   cmake -S . -B build -G Ninja $(toolchain) -DCMAKE_BUILD_TYPE=Release -DOpenMP_ROOT=$(brew --prefix libomp) -DOPENMS_BIN=$O/bin \
         -DCMAKE_PREFIX_PATH="$O;$V" 2>&1 | tail -2
-  cmake --build build -j $(sysctl -n hw.physicalcpu) --target DIATraceExtractor 2>&1 | tail -2
+  cmake --build build -j $(sysctl -n hw.physicalcpu) --target DIATraceExtractor > build/build.log 2>&1 \
+    || { grep -E -B3 -A12 "error:|Error " build/build.log | head -120; log "tool build failed (full log: $PWD/build/build.log)"; exit 1; }
   ./build/DIATraceExtractor --help > /dev/null && log "DIATraceExtractor built"
   ctest --test-dir build 2>&1 | tail -2 || log "ctest did not pass fully (see build/Testing); the benchmark can still run"
   cd ..
