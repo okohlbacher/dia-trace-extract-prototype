@@ -10,7 +10,12 @@ case "$(uname -s)" in
   Darwin)
     (cd "$STAGE" && cmake -E tar czf "$OUT/$NAME.tar.gz" "$NAME")
     rm -f "$OUT/$NAME.dmg"
-    hdiutil create -volname "$NAME" -srcfolder "$STAGE/$NAME" -ov -format UDZO "$OUT/$NAME.dmg" > /dev/null
+    # hdiutil fails intermittently with "Resource busy" on the hosted runners (a scanner holding the source); retry
+    for attempt in 1 2 3 4 5 6; do
+      hdiutil create -volname "$NAME" -srcfolder "$STAGE/$NAME" -ov -format UDZO "$OUT/$NAME.dmg" > /dev/null && break
+      [ $attempt -eq 6 ] && { echo "hdiutil failed $attempt times" >&2; exit 1; }
+      echo "hdiutil attempt $attempt failed; retrying in $((attempt * 10)) s" >&2; sleep $((attempt * 10))
+    done
     ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
     (cd "$STAGE" && cmake -E tar cf "$OUT/$NAME.zip" --format=zip "$NAME")
