@@ -108,6 +108,7 @@ jobs:
           git -C "$OPENMS_SRC" submodule update --init --depth 1 vcpkg
           NOCOIN=""; [ "${{ matrix.name }}" = "windows-arm64" ] && NOCOIN=--no-coin
           python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC" $NOCOIN
+          [ "${{ matrix.name }}" = "windows-arm64" ] && python3 tool/ci/patch_openms_arm64.py "$OPENMS_SRC" || true
           echo "openms=$(git -C "$OPENMS_SRC" rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       # ---- platform dependencies (as OpenMS's own CI installs them) ----
