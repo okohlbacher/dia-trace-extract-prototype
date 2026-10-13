@@ -354,7 +354,7 @@ protected:
   {
     const ODIA::StageTime t_start = ODIA::stageClock();
     const std::string in = getStringOption_("in"), lib_file = getStringOption_("lib");
-    if (!std::filesystem::is_regular_file(in) || ::access(in.c_str(), R_OK) != 0)
+    if (!std::filesystem::is_regular_file(in) || !std::ifstream(in, std::ios::binary))   // portable readability test
     {
       OPENMS_LOG_ERROR << "Input file not readable: " << in << std::endl;
       return INPUT_FILE_NOT_READABLE;
