@@ -266,6 +266,9 @@ protected:
     registerOutputFile_("out_mzml", "<file>", "", "Write the loaded run as a centroided mzML with one spectrum per isolation window "
                         "(diaPASEF frames split by mobility and collapsed across scans), e.g. for engines that read no mzPeak/.d.", false);
     setValidFormats_("out_mzml", {"mzML"});
+    // TOPPBase::printUsage_ throws for a shown option whose subsection is not registered (every build since
+    // calibration:mass_model became a non-advanced option, and --helphelp always): register the subsection.
+    registerTOPPSubsection_("calibration", "Calibration from the run itself (-rt_mode auto, -mass_calibration auto)");
     registerIntOption_("calibration:panel", "<n>", 0, "Precursors sampled for calibration (stratified over library RT; "
                        "never restricted by -ids); 0 = calibration:panel_fraction of the eligible precursors.", false, true);
     registerDoubleOption_("calibration:panel_fraction", "<f>", 0.05, "Share of the eligible precursors in the panel.", false, true);
