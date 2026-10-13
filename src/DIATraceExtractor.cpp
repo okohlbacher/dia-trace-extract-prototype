@@ -21,10 +21,6 @@
 #include <cstdlib>
 #include <arrow/memory_pool.h>
 #include <filesystem>
-#ifdef __linux__
-#include <malloc.h>
-#endif
-#include <unistd.h>
 #include <vector>
 #include <cctype>
 #include <future>
@@ -33,13 +29,11 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <sys/resource.h>
+#include "Platform.h"
+#include <OpenMS/CONCEPT/VersionInfo.h>
 #ifdef __linux__
+#include <malloc.h>
 #include <sys/prctl.h>
-#endif
-#ifdef __APPLE__
-#include <mach/mach.h>
-#include <mach-o/dyld.h>
 #endif
 
 using namespace OpenMS;
@@ -53,41 +47,8 @@ namespace
     o << " " << (slope >= 0 ? "+" : "") << slope * 1000 << " ppm/kTh about " << ref << " Th";
     return o.str();
   }
-  double peakRssGiB()
-  {
-    rusage u{};
-    getrusage(RUSAGE_SELF, &u);
-#ifdef __APPLE__
-    return static_cast<double>(u.ru_maxrss) / (1024.0 * 1024.0 * 1024.0); // bytes on macOS
-#else
-    return static_cast<double>(u.ru_maxrss) / (1024.0 * 1024.0); // KiB on Linux
-#endif
-  }
-
-  /// Current and peak resident memory (VmRSS, VmHWM) in GiB.
-  std::pair<double, double> rssGiB()
-  {
-#ifdef __APPLE__
-    mach_task_basic_info info{};
-    mach_msg_type_number_t n = MACH_TASK_BASIC_INFO_COUNT;
-    double rss = 0;
-    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &n) == KERN_SUCCESS)
-    {
-      rss = static_cast<double>(info.resident_size) / (1024.0 * 1024.0 * 1024.0);
-    }
-    return {rss, peakRssGiB()};
-#else
-    std::ifstream st("/proc/self/status");
-    std::string line;
-    double rss = 0, hwm = 0;
-    while (std::getline(st, line))
-    {
-      if (line.rfind("VmRSS:", 0) == 0) { rss = std::stod(line.substr(6)) / (1024.0 * 1024.0); }
-      if (line.rfind("VmHWM:", 0) == 0) { hwm = std::stod(line.substr(6)) / (1024.0 * 1024.0); }
-    }
-    return {rss, hwm};
-#endif
-  }
+  double peakRssGiB() { return ODIA::platform::peakRssGiB(); }
+  std::pair<double, double> rssGiB() { return ODIA::platform::rssGiB(); }
 
   std::string mem()
   {
@@ -95,11 +56,10 @@ namespace
     std::ostringstream os;
     os << std::fixed << std::setprecision(2) << "; memory " << rss << " GiB (peak so far " << hwm << " GiB)";
     // Page faults since the previous report (first touch of new memory: allocator churn shows here).
-    static long last_minflt = 0;
-    rusage ru{};
-    ::getrusage(RUSAGE_SELF, &ru);
-    os << ", " << std::setprecision(2) << (ru.ru_minflt - last_minflt) / 1e6 << " M page faults";
-    last_minflt = ru.ru_minflt;
+    static std::uint64_t last_minflt = 0;
+    const std::uint64_t minflt = ODIA::platform::minorFaults();
+    os << ", " << std::setprecision(2) << static_cast<double>(minflt - last_minflt) / 1e6 << " M page faults";
+    last_minflt = minflt;
     return os.str();
   }
 
@@ -109,9 +69,7 @@ namespace
   {
     arrow::default_memory_pool()->ReleaseUnused();
     ODIA::arrowPool()->ReleaseUnused();
-#ifdef __linux__
-    ::malloc_trim(0);
-#endif
+    ODIA::platform::trimHeap();
   }
 
   std::string fmt(const ODIA::StageTime& t)
@@ -215,6 +173,8 @@ public:
                "Extract fragment and MS1 isotope traces (XICs) of a spectral library from a DIA run "
                "on one global RT (cycle) axis.", {}, false)
   {
+    version_ = ODIA_VERSION;
+    verboseVersion_ = std::string(ODIA_VERSION) + " (OpenMS " + VersionInfo::getVersion() + ")";
   }
 
 protected:
@@ -798,21 +758,7 @@ int main(int argc, const char** argv)
   // Idle OpenMP threads should sleep, not spin (spinning burned ~70% extra CPU while workers waited on
   // I/O). libgomp reads OMP_WAIT_POLICY only when it is loaded, so set it and re-execute once; an
   // explicit user setting is respected.
-  if (std::getenv("OMP_WAIT_POLICY") == nullptr)
-  {
-    ::setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
-    std::vector<char*> args;
-    for (int i = 0; i < argc; ++i) { args.push_back(const_cast<char*>(argv[i])); }
-    args.push_back(nullptr);
-#ifdef __APPLE__
-    char exe[4096];
-    std::uint32_t exe_len = sizeof exe;
-    if (_NSGetExecutablePath(exe, &exe_len) == 0) { ::execv(exe, args.data()); }
-#else
-    ::execv("/proc/self/exe", args.data());
-#endif
-    // execv only returns on failure: continue with the inherited policy
-  }
+  if (std::getenv("OMP_WAIT_POLICY") == nullptr) { ODIA::platform::reexecWithEnv("OMP_WAIT_POLICY", "PASSIVE", argc, argv); }
   TOPPDIATraceExtractor tool;
   return tool.main(argc, argv);
 }

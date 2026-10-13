@@ -6,7 +6,7 @@
 #include <bit>
 #include <cstdlib>
 #include <cstring>
-#include <sys/mman.h>
+#include "Platform.h"
 
 namespace ODIA
 {
@@ -130,8 +130,8 @@ namespace ODIA
       }
     }
     const std::size_t n = classSize(c);
-    void* p = ::mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) { return nullptr; }
+    void* p = platform::mapAnonymous(n);
+    if (p == nullptr) { return nullptr; }
     mapped_ += static_cast<int64_t>(n);
     return static_cast<uint8_t*>(p);
   }
@@ -159,7 +159,7 @@ namespace ODIA
       return;
     }
     cached_ -= n;
-    ::munmap(p, static_cast<std::size_t>(n));
+    platform::unmap(p, static_cast<std::size_t>(n));
     mapped_ -= n;
   }
 
@@ -174,9 +174,7 @@ namespace ODIA
     }
     else
     {
-      void* p = nullptr;
-      if (::posix_memalign(&p, static_cast<std::size_t>(std::max<int64_t>(alignment, sizeof(void*))), n) != 0) { p = nullptr; }
-      *out = static_cast<uint8_t*>(p);
+      *out = static_cast<uint8_t*>(platform::alignedAlloc(static_cast<std::size_t>(std::max<int64_t>(alignment, sizeof(void*))), n));
     }
     if (*out == nullptr) { return arrow::Status::OutOfMemory("malloc of size ", size, " failed"); }
     account_(size);
@@ -207,7 +205,7 @@ namespace ODIA
     if (buffer == zero_size_area || buffer == nullptr) { return; }
     const auto n = static_cast<std::size_t>(size);
     if (n >= kLarge && alignment <= 4096) { putLarge_(buffer, classOf(n)); }
-    else { std::free(buffer); }
+    else { platform::alignedFree(buffer); }
     account_(-size);
   }
 
@@ -219,7 +217,7 @@ namespace ODIA
       std::lock_guard lock(f.mtx);
       for (uint8_t* p : f.blocks)
       {
-        ::munmap(p, classSize(c));
+        platform::unmap(p, classSize(c));
         mapped_ -= static_cast<int64_t>(classSize(c));
         cached_ -= static_cast<int64_t>(classSize(c));
       }

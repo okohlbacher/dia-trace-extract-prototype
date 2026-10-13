@@ -1,0 +1,226 @@
+name: release
+
+# Builds OpenMS (develop, pinned in ci/openms.lock, vcpkg dependencies) and DIATraceExtractor on every release
+# platform, runs the tests and a clean-environment smoke test of the installed tree, packages it, and publishes
+# the packages on the GitHub release of the tag. Modelled on okohlbacher/diaspextract's build.yml: a source build
+# at a pinned OpenMS commit, a gate that runs the shipped binary with nothing inherited from the runner, and the
+# version line checked against the project version.
+#
+# First build per platform: 1-3 h (vcpkg compiles Arrow, Boost, Xerces, ... from source); the vcpkg binary cache
+# and ccache make later runs 10-20 min. The Linux arm64 and Windows arm64 runners are not available on every
+# plan and their toolchains are less travelled, so those two jobs do not block the release (continue-on-error);
+# their packages are published when they succeed.
+on:
+  push:
+    tags: ['V[0-9]*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to build (default: the dispatched ref)'
+        required: false
+        default: ''
+      publish:
+        description: 'Publish the packages on the GitHub release of the tag (needs a tag)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64,   os: ubuntu-24.04,     preset: linux-x64-release,   triplet: x64-linux-dynamic,              experimental: false }
+          - { name: linux-aarch64,  os: ubuntu-24.04-arm, preset: linux-arm64-release, triplet: arm64-linux-dynamic,            experimental: true }
+          - { name: macos-arm64,    os: macos-15,         preset: macos-arm64-release, triplet: arm64-osx-dynamic-sysroot,      experimental: false }
+          - { name: windows-x86_64, os: windows-2025,     preset: windows-x64-release, triplet: x64-windows-static-md-release,  experimental: false, vsarch: x64,   qtarch: win64_msvc2022_64 }
+          - { name: windows-arm64,  os: windows-11-arm,   preset: windows-x64-release, triplet: arm64-windows-static-md-release, experimental: true,  vsarch: arm64, qtarch: win64_msvc2022_arm64 }
+    env:
+      OPENMS_SRC: ${{ github.workspace }}/OpenMS
+      OPENMS_BUILD: ${{ github.workspace }}/OpenMS/build/${{ matrix.preset }}
+      VCPKG_INSTALLED: ${{ github.workspace }}/OpenMS/build/${{ matrix.preset }}/vcpkg_installed/${{ matrix.triplet }}
+    steps:
+      - name: Check out the tool
+        uses: actions/checkout@v4
+        with:
+          path: tool
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Versions must agree (CMake project version = git tag)
+        shell: bash
+        run: |
+          V=$(sed -n 's/^project(DIATraceExtractor VERSION \([0-9.]*\).*/\1/p' tool/CMakeLists.txt)
+          echo "version=$V" >> "$GITHUB_ENV"
+          REF="${{ github.event.inputs.ref || github.ref_name }}"
+          case "$REF" in
+            V*) [ "$REF" = "V$V" ] || { echo "::error::tag $REF but CMake project version $V"; exit 1; } ;;
+            *)  echo "not a tag ($REF): version $V" ;;
+          esac
+
+      - name: Check out OpenMS at the pinned commit
+        shell: bash
+        run: |
+          REF=$(sed -n 's/^OPENMS_BASE=//p' tool/ci/openms.lock)
+          git clone --filter=blob:none https://github.com/OpenMS/OpenMS.git "$OPENMS_SRC"
+          git -C "$OPENMS_SRC" checkout "$REF"
+          git -C "$OPENMS_SRC" submodule update --init --depth 1 vcpkg
+          python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC"
+          echo "openms=$(git -C "$OPENMS_SRC" rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      # ---- platform dependencies (as OpenMS's own CI installs them) ----
+      - name: Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf autoconf-archive automake build-essential cmake \
+            git libtool ninja-build patch pkg-config qt6-base-dev ccache
+      - name: Dependencies (macOS)
+        if: runner.os == 'macOS'
+        env: { HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1 }
+        run: |
+          bash "$OPENMS_SRC/tools/ci/deps-macos.sh" --skip-doc-deps --skip-gui-deps
+          brew install ccache qtbase
+      - name: Visual Studio shell (Windows)
+        if: runner.os == 'Windows'
+        uses: egor-tensin/vs-shell@v2
+        with: { arch: '${{ matrix.vsarch }}' }
+      - name: Qt (Windows)
+        if: runner.os == 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: ${{ matrix.qtarch }}
+          cache: false
+          archives: 'qtbase'
+      - name: Dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install -y --no-progress cmake ninja
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Python packages for the tests
+        shell: bash
+        run: python -m pip install --quiet pyarrow pandas numpy
+
+      # ---- caches: vcpkg's binary archives and ccache ----
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/vcpkg/archives
+            ~/AppData/Local/vcpkg/archives
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('OpenMS/vcpkg.json', 'OpenMS/vcpkg-configuration.json') }}-${{ env.openms }}
+          restore-keys: |
+            vcpkg-${{ matrix.name }}-
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: openms-${{ matrix.name }}-${{ env.openms }}
+          max-size: 2G
+
+      # ---- OpenMS: library, CLI base, the two TOPP tools the parity tests need ----
+      - name: Configure OpenMS
+        shell: bash
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+          [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets")
+          cd "$OPENMS_SRC"
+          cmake --preset ${{ matrix.preset }} -DWITH_GUI=OFF -DWITH_THERMO_RAW=OFF -DWITH_OPENTIMS=OFF \
+                -DENABLE_UPDATE_CHECK=OFF -DENABLE_DOCS=OFF -DOPENMS_BUILD_TESTS=OFF "${EXTRA[@]}"
+      - name: Build OpenMS
+        shell: bash
+        run: cmake --build "$OPENMS_BUILD" --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter
+
+      # ---- the tool ----
+      - name: Configure the tool
+        shell: bash
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+          DEPS="$OPENMS_BUILD/lib;$OPENMS_BUILD/bin;$VCPKG_INSTALLED/lib;$VCPKG_INSTALLED/bin"
+          [ "$RUNNER_OS" = "Windows" ] && DEPS="$DEPS;$QT_ROOT_DIR/bin"
+          cmake -S tool -B tool/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_PREFIX_PATH="$OPENMS_BUILD;$VCPKG_INSTALLED" \
+                -DODIA_OPENMS_SHARE="$OPENMS_SRC/share/OpenMS" -DODIA_DEP_DIRS="$DEPS" "${EXTRA[@]}"
+      - name: Build the tool
+        shell: bash
+        run: cmake --build tool/build --target DIATraceExtractor OpenSwathXicToTraces MzMLToMzPeak
+      - name: Tests
+        shell: bash
+        run: ctest --test-dir tool/build --output-on-failure --no-tests=error
+
+      # ---- install, smoke test from a clean environment, package ----
+      - name: Install the self-contained tree
+        shell: bash
+        run: |
+          NAME="DIATraceExtractor-${version}-${{ matrix.name }}"
+          echo "name=$NAME" >> "$GITHUB_ENV"
+          cmake --install tool/build --prefix "$RUNNER_TEMP/stage/$NAME"
+          du -sh "$RUNNER_TEMP/stage/$NAME"; ls "$RUNNER_TEMP/stage/$NAME"
+      - name: The installed tool runs from a clean environment and reports its version
+        shell: bash
+        run: |
+          set -o pipefail
+          T="$RUNNER_TEMP/stage/$name"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            env -i SYSTEMROOT="$SYSTEMROOT" PATH="$SYSTEMROOT/System32" "$T/bin/DIATraceExtractor.exe" --help > help.txt 2>&1 || { cat help.txt; exit 1; }
+          else
+            env -i HOME="$HOME" "$T/bin/DIATraceExtractor" --help > help.txt 2>&1 || { cat help.txt; exit 1; }
+          fi
+          grep -q "^Version: ${version//./\\.} (OpenMS " help.txt || { echo "::error::version line wrong"; cat help.txt; exit 1; }
+          head -4 help.txt
+      - name: Package
+        shell: bash
+        run: bash tool/ci/package.sh "$RUNNER_TEMP/stage" "$name" "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.name }}
+          path: ${{ runner.temp }}/out/*
+          if-no-files-found: error
+
+  publish:
+    name: publish on the release
+    needs: build
+    if: ${{ always() && (startsWith(github.ref, 'refs/tags/V') || github.event.inputs.publish == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tool, ref: '${{ github.event.inputs.ref || github.ref }}' }
+      - uses: actions/download-artifact@v4
+        with: { path: packages, merge-multiple: true }
+      - name: Homebrew formula from the macOS tarball
+        shell: bash
+        run: |
+          V=$(sed -n 's/^project(DIATraceExtractor VERSION \([0-9.]*\).*/\1/p' tool/CMakeLists.txt)
+          TAG="${{ github.event.inputs.ref || github.ref_name }}"
+          MAC=$(ls packages/DIATraceExtractor-*-macos-arm64.tar.gz 2>/dev/null | head -1) || true
+          if [ -n "$MAC" ]; then
+            python3 tool/ci/formula.py "$V" "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$MAC")" "$MAC" packages/diatraceextractor.rb
+          fi
+          ls -la packages
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.ref || github.ref_name }}
+          files: packages/*
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          append_body: true
+          body: |
+            Binary packages built by the release workflow (OpenMS develop at the commit in `ci/openms.lock`): unpack and run
+            `bin/DIATraceExtractor` (Linux, macOS: a launcher that finds the bundled libraries; Windows: `bin\DIATraceExtractor.exe`).
+            macOS: the `.dmg` holds the same folder; `diatraceextractor.rb` is the Homebrew formula for this release
+            (`brew install --formula diatraceextractor.rb`, or through the tap `okohlbacher/odia`).

@@ -31,8 +31,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
-#include <sys/mman.h>
-#include <sys/resource.h>
+#include "Platform.h"
 #include <thread>
 
 #include <omp.h>
@@ -41,9 +40,7 @@ namespace ODIA
 {
   StageTime stageClock()
   {
-    rusage u{};
-    getrusage(RUSAGE_SELF, &u);
-    const double cpu = u.ru_utime.tv_sec + u.ru_utime.tv_usec * 1e-6 + u.ru_stime.tv_sec + u.ru_stime.tv_usec * 1e-6;
+    const double cpu = platform::processCpuSeconds();
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     return {wall, cpu};
   }
@@ -767,17 +764,12 @@ namespace ODIA
   PeakPool::PeakPool(std::uint64_t capacity_peaks) : cap_(std::max<std::uint64_t>(capacity_peaks, 1))
   {
     // Virtual reservations only: pages are backed when first written (by the thread that decodes into them).
-#ifdef MAP_NORESERVE
-    const int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
-#else
-    const int flags = MAP_PRIVATE | MAP_ANONYMOUS;   // macOS over-commits anonymous memory by default
-#endif
-    void* m = ::mmap(nullptr, cap_ * sizeof(MzFixed), PROT_READ | PROT_WRITE, flags, -1, 0);
-    void* i = ::mmap(nullptr, cap_ * sizeof(float), PROT_READ | PROT_WRITE, flags, -1, 0);
-    if (m == MAP_FAILED || i == MAP_FAILED)
+    void* m = platform::mapAnonymous(cap_ * sizeof(MzFixed), true);
+    void* i = platform::mapAnonymous(cap_ * sizeof(float), true);
+    if (m == nullptr || i == nullptr)
     {
-      if (m != MAP_FAILED) { ::munmap(m, cap_ * sizeof(MzFixed)); }
-      if (i != MAP_FAILED) { ::munmap(i, cap_ * sizeof(float)); }
+      platform::unmap(m, cap_ * sizeof(MzFixed));
+      platform::unmap(i, cap_ * sizeof(float));
       throw std::runtime_error("cannot reserve the peak pool (" + std::to_string(cap_) + " peaks)");
     }
     mz_ = static_cast<MzFixed*>(m);
@@ -786,8 +778,8 @@ namespace ODIA
 
   PeakPool::~PeakPool()
   {
-    if (mz_) { ::munmap(mz_, cap_ * sizeof(MzFixed)); }
-    if (in_) { ::munmap(in_, cap_ * sizeof(float)); }
+    platform::unmap(mz_, cap_ * sizeof(MzFixed));
+    platform::unmap(in_, cap_ * sizeof(float));
   }
 
   std::uint64_t PeakPool::claim(std::uint64_t n)

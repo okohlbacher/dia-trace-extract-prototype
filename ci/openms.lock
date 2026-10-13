@@ -1,0 +1,5 @@
+OPENMS_BASE=10b0a7af09
+# OpenMS/OpenMS develop, 2026-10-09: the commit every benchmark in docs/10-release-report.md was built against
+# and the one the release workflow builds. The release adds boost-json and boost-program-options to OpenMS's
+# vcpkg manifest (ci/patch_openms_manifest.py) for the mzPeak reader. Move the pin deliberately: a newer
+# develop can change the TOPP base class, the vcpkg baseline and the data path probing at once.

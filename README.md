@@ -11,6 +11,24 @@ benchmark (ProteoBench Astral entrapment): [docs/02-benchmark-astral.md](docs/02
 Release report (benchmarks against DIA-NN 1.7.12 and OpenSWATH on Astral and timsTOF diaPASEF, with the version of
 the tool each number came from): [docs/10-release-report.md](docs/10-release-report.md).
 
+## Install a binary release
+
+Every tag `V<version>` is built by `.github/workflows/release.yml` for Linux (x86_64, aarch64), macOS (Apple
+silicon) and Windows (x86_64, arm64) and published on the GitHub release: a self-contained folder with the tool,
+the OpenMS and vcpkg libraries it links and OpenMS's shared data. Unpack and run `bin/DIATraceExtractor`
+(Linux, macOS: a launcher that sets the library and data paths; Windows: `bin\DIATraceExtractor.exe`).
+
+- **Linux**: `DIATraceExtractor-<version>-linux-x86_64.tar.gz` (built on Ubuntu 24.04; needs glibc >= 2.39), `-linux-aarch64`.
+- **macOS**: `DIATraceExtractor-<version>-macos-arm64.tar.gz` or the same folder as a `.dmg`; Homebrew:
+  `brew install --formula diatraceextractor.rb` with the formula attached to the release, or
+  `brew tap okohlbacher/odia && brew install diatraceextractor` (the tap tracks the latest release). The release
+  assets of a private repository need a GitHub token to download; the formula works unchanged once the
+  repository or its releases are public.
+- **Windows**: `DIATraceExtractor-<version>-windows-x86_64.zip`, `-windows-arm64.zip`.
+
+The OpenMS commit the releases are built against is pinned in `ci/openms.lock`; `ci/package.sh` and the install
+rules at the end of `CMakeLists.txt` make the folder (CMake's runtime-dependency resolution collects the libraries).
+
 ## Build
 
 Needs an OpenMS develop (≥ 3.7) build tree with its vcpkg dependencies (Arrow/Parquet), CMake ≥ 3.24,

@@ -13,7 +13,7 @@
 #include <new>
 #include <memory>
 #include <functional>
-#include <sys/mman.h>
+#include "Platform.h"
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -448,15 +448,15 @@ namespace ODIA
           const std::size_t need = std::max<std::size_t>(n, 1) * sizeof(float);
           if (need > bytes)
           {
-            if (p) { ::munmap(p, bytes); }
+            platform::unmap(p, bytes);
             bytes = std::max(need, 2 * bytes);
-            p = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            if (p == MAP_FAILED) { p = nullptr; bytes = 0; throw std::bad_alloc(); }
+            p = platform::mapAnonymous(bytes);
+            if (p == nullptr) { bytes = 0; throw std::bad_alloc(); }
           }
           std::memset(p, 0, n * sizeof(float));
           return static_cast<float*>(p);
         }
-        ~TileBuffer() { if (p) { ::munmap(p, bytes); } }
+        ~TileBuffer() { platform::unmap(p, bytes); }
       };
       std::vector<TileBuffer> buffers(static_cast<std::size_t>(threads));
       // Big windows are done in batches so a tile stays <= 256 MiB (members x fragments x cycles x 4 B).

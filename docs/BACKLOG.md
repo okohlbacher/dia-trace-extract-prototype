@@ -77,6 +77,10 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
+- **Release CI (2026-10-13, V0.2.6):** `.github/workflows/release.yml` builds OpenMS (pinned) and the tool on Linux x86_64/aarch64,
+  macOS arm64, Windows x86_64/arm64, packages self-contained folders (tar.gz, dmg, zip) and a Homebrew formula. The
+  arm64 Linux and Windows jobs do not block the release. Open: code signing/notarization (macOS, Windows); a public
+  Homebrew tap only works while the release assets are downloadable without a token.
 - **Laptop benchmark (2026-10-13, MacBook Pro M4 Max, on battery; `docs/12-macos-benchmark-note.md`, report §6):** done and
   merged (V0.2.4). Three defects fixed: `--help` abort (unregistered subsection), exit-time abort under libc++ (pool never
   destroyed), `-threads 1` on the serial parser (70 → 14 s on the node). Open: re-run the laptop's 1-thread point; the macOS

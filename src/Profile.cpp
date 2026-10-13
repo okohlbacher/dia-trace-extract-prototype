@@ -5,7 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <sys/resource.h>
+#include "Platform.h"
 
 namespace ODIA::prof
 {
@@ -35,15 +35,8 @@ namespace ODIA::prof
     struct Usage { std::uint64_t cpu, flt, vcs, ivcs; };
     Usage threadUsage()
     {
-      rusage ru{};
-#ifdef RUSAGE_THREAD
-      ::getrusage(RUSAGE_THREAD, &ru);
-#else
-      ::getrusage(RUSAGE_SELF, &ru);   // macOS: no per-thread rusage; the diagnostics become process-wide
-#endif
-      const auto us = [](const timeval& t) { return static_cast<std::uint64_t>(t.tv_sec) * 1000000000ull + static_cast<std::uint64_t>(t.tv_usec) * 1000ull; };
-      return {us(ru.ru_utime) + us(ru.ru_stime), static_cast<std::uint64_t>(ru.ru_minflt), static_cast<std::uint64_t>(ru.ru_nvcsw),
-              static_cast<std::uint64_t>(ru.ru_nivcsw)};
+      const platform::ThreadUsage u = platform::threadUsage();
+      return {u.cpu_ns, u.minor_faults, u.voluntary_switches, u.involuntary_switches};
     }
   }
 

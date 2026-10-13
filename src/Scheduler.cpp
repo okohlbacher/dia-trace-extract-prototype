@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <ctime>
 #include <cstring>
+#include "Platform.h"
+#ifdef __linux__
 #include <dirent.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -46,11 +49,7 @@ namespace ODIA
           std::fprintf(tl, "t\tread\textract\tencode\twrite\tidle\toutstanding\tunissued\tloaded_parts\tunwritten\t"
                            "encode_queue\tpool_free\tcommit_part\tprocess_cpu\trunning_threads\tmhz_mean\tmhz_min\n");
         }
-        const auto cpu_now = [] {
-          timespec ts{};
-          ::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
-          return ts.tv_sec + ts.tv_nsec * 1e-9;
-        };
+        const auto cpu_now = [] { return platform::processCpuSeconds(); };
         double cpu_last = cpu_now(), t_last = 0;
         int ticks = 0;
         Lock lock(mtx_);
