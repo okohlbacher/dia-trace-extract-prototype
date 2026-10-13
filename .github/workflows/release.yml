@@ -112,12 +112,10 @@ jobs:
         run: |
           bash "$OPENMS_SRC/tools/ci/deps-macos.sh" --skip-doc-deps --skip-gui-deps
           brew install ccache qtbase
-      - name: Visual Studio 2022 shell (Windows; vcpkg is pinned to the same toolset by ci/triplets)
+      - name: Visual Studio shell (Windows; the runners carry Visual Studio 2026 only)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.vsarch }}
-          vsversion: 2022
+        uses: egor-tensin/vs-shell@v2
+        with: { arch: '${{ matrix.vsarch }}' }
       - name: Qt (Windows)
         if: runner.os == 'Windows'
         uses: jurplel/install-qt-action@v4
@@ -163,7 +161,7 @@ jobs:
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
-          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_PORTS=$GITHUB_WORKSPACE/tool/ci/overlay-ports")
           [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_MANIFEST_FEATURES=lp-glpk" "-DLP_SOLVER=GLPK")
           cd "$OPENMS_SRC"
           cmake --preset ${{ matrix.preset }} -DWITH_GUI=OFF -DWITH_THERMO_RAW=OFF -DWITH_OPENTIMS=OFF \
