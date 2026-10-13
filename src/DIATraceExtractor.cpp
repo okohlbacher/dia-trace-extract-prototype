@@ -712,11 +712,15 @@ protected:
     if (std::getenv("ODIA_PROFILE") != nullptr)
     {
       auto* ap = ODIA::arrowPool();
+      std::fprintf(stderr, "[memory profile] arrow pool '%s': %.2f GiB allocated now, %.2f GiB max, %.2f GiB mapped, %lld reuses",
+                   ap->backend_name().c_str(), ap->bytes_allocated() / 1073741824.0, ap->max_memory() / 1073741824.0,
+                   ap->mappedBytes() / 1073741824.0, static_cast<long long>(ap->reuses()));
+#ifdef __linux__
       const struct mallinfo2 mi = ::mallinfo2();
-      std::fprintf(stderr, "[memory profile] arrow pool '%s': %.2f GiB allocated now, %.2f GiB max, %.2f GiB mapped, %lld reuses; glibc: %.2f GiB arena "
-                   "(%.2f in use, %.2f free), %.2f GiB mmapped\n", ap->backend_name().c_str(), ap->bytes_allocated() / 1073741824.0,
-                   ap->max_memory() / 1073741824.0, ap->mappedBytes() / 1073741824.0, static_cast<long long>(ap->reuses()), mi.arena / 1073741824.0, mi.uordblks / 1073741824.0,
-                   mi.fordblks / 1073741824.0, mi.hblkhd / 1073741824.0);
+      std::fprintf(stderr, "; glibc: %.2f GiB arena (%.2f in use, %.2f free), %.2f GiB mmapped", mi.arena / 1073741824.0,
+                   mi.uordblks / 1073741824.0, mi.fordblks / 1073741824.0, mi.hblkhd / 1073741824.0);
+#endif
+      std::fprintf(stderr, "\n");
     }
     OPENMS_LOG_INFO << "Total: " << fmt(t_total) << ", peak RSS " << peakRssGiB() << " GiB" << std::endl;
 
