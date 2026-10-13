@@ -23,6 +23,10 @@ on:
         description: 'Publish the packages on the GitHub release of the tag (needs a tag)'
         type: boolean
         default: false
+      platforms:
+        description: 'Comma-separated subset of linux-x86_64,linux-aarch64,macos-arm64,windows-x86_64,windows-arm64 (empty: all)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -31,6 +35,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    if: ${{ github.event.inputs.platforms == '' || contains(github.event.inputs.platforms, matrix.name) }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 360
     strategy:
@@ -73,7 +78,8 @@ jobs:
           git clone --filter=blob:none https://github.com/OpenMS/OpenMS.git "$OPENMS_SRC"
           git -C "$OPENMS_SRC" checkout "$REF"
           git -C "$OPENMS_SRC" submodule update --init --depth 1 vcpkg
-          python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC"
+          NOCOIN=""; [ "${{ matrix.name }}" = "windows-arm64" ] && NOCOIN=--no-coin
+          python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC" $NOCOIN
           echo "openms=$(git -C "$OPENMS_SRC" rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       # ---- platform dependencies (as OpenMS's own CI installs them) ----
@@ -89,10 +95,12 @@ jobs:
         run: |
           bash "$OPENMS_SRC/tools/ci/deps-macos.sh" --skip-doc-deps --skip-gui-deps
           brew install ccache qtbase
-      - name: Visual Studio shell (Windows)
+      - name: Visual Studio 2022 shell (Windows; vcpkg is pinned to the same toolset by ci/triplets)
         if: runner.os == 'Windows'
-        uses: egor-tensin/vs-shell@v2
-        with: { arch: '${{ matrix.vsarch }}' }
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.vsarch }}
+          vsversion: 2022
       - name: Qt (Windows)
         if: runner.os == 'Windows'
         uses: jurplel/install-qt-action@v4
@@ -138,8 +146,8 @@ jobs:
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
-          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt")
-          [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}")
+          [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_MANIFEST_FEATURES=lp-glpk" "-DLP_SOLVER=GLPK")
           cd "$OPENMS_SRC"
           cmake --preset ${{ matrix.preset }} -DWITH_GUI=OFF -DWITH_THERMO_RAW=OFF -DWITH_OPENTIMS=OFF \
                 -DENABLE_UPDATE_CHECK=OFF -DENABLE_DOCS=OFF -DOPENMS_BUILD_TESTS=OFF "${EXTRA[@]}"
