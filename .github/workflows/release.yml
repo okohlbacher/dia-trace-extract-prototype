@@ -159,8 +159,7 @@ jobs:
           key: vcpkg-${{ matrix.name }}-${{ hashFiles('tool/ci/openms.lock', 'tool/ci/patch_openms_manifest.py', 'tool/ci/overlay-ports/**', 'tool/ci/triplets/**') }}
           restore-keys: |
             vcpkg-${{ matrix.name }}-
-      - name: ccache
-        if: runner.os != 'Windows'
+      - name: ccache (Windows too, as in OpenMS's CI; MSVC release builds carry no /Zi debug info)
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: openms-${{ matrix.name }}-${{ env.openms }}
@@ -172,7 +171,7 @@ jobs:
         run: |
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
-          [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+          EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
           [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt;--x-packages-root=C:/pk" "-DVCPKG_INSTALLED_DIR=C:/vi" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_PORTS=$GITHUB_WORKSPACE/tool/ci/overlay-ports")
           [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_MANIFEST_FEATURES=lp-glpk" "-DLP_SOLVER=GLPK")
           cd "$OPENMS_SRC"
@@ -196,7 +195,7 @@ jobs:
         run: |
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
-          [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+          EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
           DEPS="$OPENMS_BUILD/lib;$OPENMS_BUILD/bin;$VCPKG_INSTALLED/lib;$VCPKG_INSTALLED/bin"
           [ "$RUNNER_OS" = "Windows" ] && DEPS="$DEPS;$QT_ROOT_DIR/bin"
           # Windows: the vcpkg dependencies are static, and several (zlib's static 'zs.lib', OpenSSL) are only found

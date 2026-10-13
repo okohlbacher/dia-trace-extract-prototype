@@ -63,9 +63,17 @@ set(MZPEAK_BOOST_DIR "" CACHE PATH "Directory of a BoostConfig.cmake (Boost >= 1
 if(MZPEAK_BOOST_DIR)
   set(Boost_DIR "${MZPEAK_BOOST_DIR}" CACHE PATH "" FORCE)
 endif()
+# The submodule links Arrow::arrow_shared and Parquet::parquet_shared by name; static Arrow builds (the Windows vcpkg
+# triplets) provide only the *_static targets, so alias the shared names to them.
+foreach(_lib Arrow::arrow Parquet::parquet)
+  if(NOT TARGET ${_lib}_shared AND TARGET ${_lib}_static)
+    add_library(${_lib}_shared ALIAS ${_lib}_static)
+  endif()
+endforeach()
 add_subdirectory(external/mzpeak EXCLUDE_FROM_ALL)
 if(MSVC)
-  target_compile_options(mzpeak PRIVATE /bigobj /utf-8 /EHsc)
+  # the submodule's GCC/Clang warning flags mean /Wall (thousands of warnings) or unknown options under MSVC
+  set_property(TARGET mzpeak PROPERTY COMPILE_OPTIONS /W3 /bigobj /utf-8 /EHsc)
   target_compile_definitions(mzpeak PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   if(TARGET numpress)
     target_compile_options(numpress PRIVATE /utf-8 /EHsc)
