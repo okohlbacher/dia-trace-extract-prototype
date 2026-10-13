@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include "Parse.h"
 #include <cstring>
 #include <numeric>
 #include <zlib.h>
@@ -34,9 +35,7 @@ namespace ODIA
 
     bool toDouble(std::string_view s, double& v)
     {
-      if (s.empty()) { return false; }
-      const auto r = std::from_chars(s.data(), s.data() + s.size(), v);
-      return r.ec == std::errc();
+      return parseDoublePrefix(s, v);
     }
 
     /// RFC 4648 base64 (whitespace ignored). Returns false on invalid input.
@@ -98,7 +97,7 @@ namespace ODIA
     std::size_t n = 0;
     {
       const auto v = attribute(xml.substr(0, head_end), "defaultArrayLength");
-      if (v.empty() || std::from_chars(v.data(), v.data() + v.size(), n).ec != std::errc()) { return false; }
+      if (!parseInt(v, n)) { return false; }
     }
 
     bool have_time = false, have_level = false, have_target = false;

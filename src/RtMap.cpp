@@ -6,6 +6,7 @@
 #include <OpenMS/FORMAT/TransformationXMLFile.h>
 
 #include <charconv>
+#include "Parse.h"
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
@@ -76,8 +77,7 @@ namespace ODIA
       if (sep == std::string::npos) { continue; }
       double x = 0, y = 0;
       const std::string_view a(line.data(), sep), b(line.data() + sep + 1, line.size() - sep - 1);
-      if (std::from_chars(a.data(), a.data() + a.size(), x).ec != std::errc() ||
-          std::from_chars(b.data(), b.data() + b.size(), y).ec != std::errc())
+      if (!parseDoublePrefix(a, x) || !parseDoublePrefix(b, y))
       {
         continue; // header or malformed line
       }

@@ -107,13 +107,16 @@ jobs:
         run: choco install -y --no-progress cmake ninja
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - name: Python packages for the tests
+      - name: "Python packages for the tests (no pyarrow wheel: the two comparison tests are skipped)"
         shell: bash
-        run: python -m pip install --quiet pyarrow pandas numpy
+        run: |
+          if python -m pip install --quiet --only-binary=:all: pyarrow pandas numpy; then echo "ctest_args=" >> "$GITHUB_ENV"
+          else echo "::warning::no pyarrow wheel for this platform; skipping parity_with_openswath and determinism_compare"; echo "ctest_args=-E parity_with_openswath|determinism_compare" >> "$GITHUB_ENV"; fi
 
       # ---- caches: vcpkg's binary archives and ccache ----
-      - name: vcpkg binary cache
-        uses: actions/cache@v4
+      - name: vcpkg binary cache (restore)
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/vcpkg/archives
@@ -135,10 +138,19 @@ jobs:
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt")
           [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets")
           cd "$OPENMS_SRC"
           cmake --preset ${{ matrix.preset }} -DWITH_GUI=OFF -DWITH_THERMO_RAW=OFF -DWITH_OPENTIMS=OFF \
                 -DENABLE_UPDATE_CHECK=OFF -DENABLE_DOCS=OFF -DOPENMS_BUILD_TESTS=OFF "${EXTRA[@]}"
+      - name: vcpkg binary cache (save; also when a later step fails)
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/vcpkg/archives
+            ~/AppData/Local/vcpkg/archives
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('OpenMS/vcpkg.json', 'OpenMS/vcpkg-configuration.json') }}-${{ env.openms }}
       - name: Build OpenMS
         shell: bash
         run: cmake --build "$OPENMS_BUILD" --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter
@@ -160,7 +172,7 @@ jobs:
         run: cmake --build tool/build --target DIATraceExtractor OpenSwathXicToTraces MzMLToMzPeak
       - name: Tests
         shell: bash
-        run: ctest --test-dir tool/build --output-on-failure --no-tests=error
+        run: ctest --test-dir tool/build --output-on-failure --no-tests=error ${ctest_args}
 
       # ---- install, smoke test from a clean environment, package ----
       - name: Install the self-contained tree
@@ -206,7 +218,7 @@ jobs:
         run: |
           V=$(sed -n 's/^project(DIATraceExtractor VERSION \([0-9.]*\).*/\1/p' tool/CMakeLists.txt)
           TAG="${{ github.event.inputs.ref || github.ref_name }}"
-          MAC=$(ls packages/DIATraceExtractor-*-macos-arm64.tar.gz 2>/dev/null | head -1) || true
+          shopt -s nullglob; MAC=""; for f in packages/DIATraceExtractor-*-macos-arm64.tar.gz; do MAC=$f; done
           if [ -n "$MAC" ]; then
             python3 tool/ci/formula.py "$V" "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$MAC")" "$MAC" packages/diatraceextractor.rb
           fi

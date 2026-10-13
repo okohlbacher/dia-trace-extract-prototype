@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <omp.h>
 #include <charconv>
+#include "Parse.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -423,8 +424,7 @@ namespace ODIA
     double toDouble(std::string_view s)
     {
       double v = 0;
-      auto r = std::from_chars(s.data(), s.data() + s.size(), v);
-      if (r.ec != std::errc()) { throw std::runtime_error("library: not a number: '" + std::string(s) + "'"); }
+      if (!parseDoublePrefix(s, v)) { throw std::runtime_error("library: not a number: '" + std::string(s) + "'"); }
       return v;
     }
 

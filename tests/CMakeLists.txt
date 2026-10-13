@@ -1,8 +1,11 @@
 # Integration tests on OpenMS's own OpenSWATH test data (testdata/openms).
 set(TD ${PROJECT_SOURCE_DIR}/testdata/openms)
-set(PY ${PROJECT_SOURCE_DIR}/tools/pyenv/bin/python)
-if(NOT EXISTS ${PY})
-  find_program(PY python3 REQUIRED)
+# The comparison scripts need pyarrow: the project's tools/pyenv when it exists, else the python3 on PATH.
+if(EXISTS ${PROJECT_SOURCE_DIR}/tools/pyenv/bin/python)
+  set(PY ${PROJECT_SOURCE_DIR}/tools/pyenv/bin/python)
+else()
+  find_program(ODIA_PYTHON NAMES python3 python REQUIRED)
+  set(PY ${ODIA_PYTHON})
 endif()
 set(OPENMS_BIN ${OpenMS_DIR}/bin)
 

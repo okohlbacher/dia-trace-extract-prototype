@@ -21,9 +21,7 @@ the OpenMS and vcpkg libraries it links and OpenMS's shared data. Unpack and run
 - **Linux**: `DIATraceExtractor-<version>-linux-x86_64.tar.gz` (built on Ubuntu 24.04; needs glibc >= 2.39), `-linux-aarch64`.
 - **macOS**: `DIATraceExtractor-<version>-macos-arm64.tar.gz` or the same folder as a `.dmg`; Homebrew:
   `brew install --formula diatraceextractor.rb` with the formula attached to the release, or
-  `brew tap okohlbacher/odia && brew install diatraceextractor` (the tap tracks the latest release). The release
-  assets of a private repository need a GitHub token to download; the formula works unchanged once the
-  repository or its releases are public.
+  `brew tap okohlbacher/odia && brew install diatraceextractor` (the tap tracks the latest release).
 - **Windows**: `DIATraceExtractor-<version>-windows-x86_64.zip`, `-windows-arm64.zip`.
 
 The OpenMS commit the releases are built against is pinned in `ci/openms.lock`; `ci/package.sh` and the install

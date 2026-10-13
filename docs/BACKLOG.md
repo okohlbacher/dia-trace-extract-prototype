@@ -83,9 +83,13 @@
   Homebrew tap only works while the release assets are downloadable without a token.
 - **Laptop benchmark (2026-10-13, MacBook Pro M4 Max, on battery; `docs/12-macos-benchmark-note.md`, report §6):** done and
   merged (V0.2.4). Three defects fixed: `--help` abort (unregistered subsection), exit-time abort under libc++ (pool never
-  destroyed), `-threads 1` on the serial parser (70 → 14 s on the node). Open: re-run the laptop's 1-thread point; the macOS
-  ingest spends 19–23 s of system time at 16 threads (page faults of the ingest buffers; `MAP_POPULATE` has no macOS
-  equivalent) -- worth a look if laptop speed matters.
+  destroyed), `-threads 1` on the serial parser (70 → 14 s on the node). Open: re-run the laptop's 1-thread point. **Resolved 2026-10-13 (laptop analysis, commit df71463 on branch `ingest-perf` (rebased on V0.2.6; FileReader in the platform layer),
+  note §"Parallel-efficiency analysis"):** the 19–23 s of system time were libc++ `ifstream::read` issuing one 4 KiB `read()`
+  per 4 KiB (~2.9 M syscalls on one descriptor, serialised by the macOS kernel; libstdc++ unaffected) → `pread`; and
+  `orderedParallel`'s look-ahead of 32 kept the 16 workers waiting 85 % of the ingest → unbounded for the fast path (parked
+  chunks hold metadata only). M4 Max 16 threads 3.3 → 0.70 s, 1 thread 41 → 6.5 s, byte-identical output. Open: re-measure
+  the cluster (the look-ahead gate applies to Linux too: counter `ingest.3_chunks.ahead_wait`); full-library extraction at
+  11.6/16 cores and ~3.9 s outside ingest/extraction.
 - **Full trace export for the group (2026-10-12):** extract all mass traces for every arm (ours A-V0.2, ours B, P; DIA-NN 1.7.12
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
   put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Running: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (2026-10-13).
