@@ -147,6 +147,22 @@ install(RUNTIME_DEPENDENCY_SET odia_deps
                        "(^|/)(ld-linux[^/]*|libc\\.so[^/]*|libm\\.so[^/]*|libpthread[^/]*|libdl\\.so[^/]*|librt\\.so[^/]*|libresolv[^/]*|libutil\\.so[^/]*|libnsl[^/]*)$"
                        "^/System/" "^/usr/lib/.*\\.dylib"
   DIRECTORIES ${ODIA_DEP_DIRS})
+if(MSVC)
+  # App-local Visual C++ runtime: the C++ runtime, MSVC's OpenMP (vcomp140) and the LLVM OpenMP runtime that
+  # /openmp:llvm links (libomp140.<arch>.dll, not part of the standard redistributable package). The dependency
+  # collector above skips them because they resolve to System32 on the build machine.
+  set(CMAKE_INSTALL_OPENMP_LIBRARIES ON)
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
+  set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)
+  include(InstallRequiredSystemLibraries)
+  string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" _arch)
+  file(GLOB ODIA_LLVM_OPENMP_DLLS "$ENV{VCToolsRedistDir}/${_arch}/Microsoft.VC*.OpenMP.LLVM/libomp140*.dll")
+  if(ODIA_LLVM_OPENMP_DLLS)
+    install(FILES ${ODIA_LLVM_OPENMP_DLLS} DESTINATION bin)
+  else()
+    message(WARNING "LLVM OpenMP runtime (libomp140) not found under $ENV{VCToolsRedistDir}/${_arch}: the package will need it on PATH")
+  endif()
+endif()
 if(ODIA_OPENMS_SHARE)
   install(DIRECTORY "${ODIA_OPENMS_SHARE}/" DESTINATION share/OpenMS)
 else()

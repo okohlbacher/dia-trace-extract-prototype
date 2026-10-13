@@ -219,6 +219,9 @@ jobs:
         run: |
           cygpath -w "$OPENMS_BUILD/bin" >> "$GITHUB_PATH"
           cygpath -w "$QT_ROOT_DIR/bin" >> "$GITHUB_PATH"
+          # the LLVM OpenMP runtime (/openmp:llvm) lives only in Visual Studio's redistributable directory
+          for d in "$VCToolsRedistDir"/${{ matrix.vsarch }}/Microsoft.VC*.OpenMP.LLVM; do [ -d "$d" ] && cygpath -w "$d" >> "$GITHUB_PATH"; done
+          echo "added to PATH:"; cat "$GITHUB_PATH"
       - name: "Diagnostics (Windows): --help and one extraction under a time limit, thread stacks if it hangs"
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -239,6 +242,8 @@ jobs:
             fi
             echo "---- output of $*"; cat "$log" | tail -60
           }
+          echo "---- DLLs the tool imports, and where they resolve"
+          dumpbin -nologo -dependents "$X" | grep -i "\.dll" | while read -r dll; do echo "$dll -> $(where "$dll" 2>/dev/null | head -1 || echo NOT FOUND)"; done
           dump 60 help.log -- "$X" --help
           dump 180 traml.log -- "$X" -in $TD/OpenSwathWorkflow_1_input.mzML -lib $TD/OpenSwathWorkflow_1_input.TraML -rt_window -1 \
                -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B -out diag.parquet -threads 1 -debug 2
