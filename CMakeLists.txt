@@ -64,10 +64,17 @@ if(MZPEAK_BOOST_DIR)
   set(Boost_DIR "${MZPEAK_BOOST_DIR}" CACHE PATH "" FORCE)
 endif()
 # The submodule links Arrow::arrow_shared and Parquet::parquet_shared by name; static Arrow builds (the Windows vcpkg
-# triplets) provide only the *_static targets, so alias the shared names to them.
+# triplets) provide only the *_static targets. Provide the shared names as global interface targets forwarding to
+# the static ones (not ALIASes: Arrow's own config, re-run by the submodule, aliases arrow_shared to them, and an
+# alias of an alias is an error).
 foreach(_lib Arrow::arrow Parquet::parquet)
   if(NOT TARGET ${_lib}_shared AND TARGET ${_lib}_static)
-    add_library(${_lib}_shared ALIAS ${_lib}_static)
+    add_library(${_lib}_shared INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(${_lib}_shared INTERFACE ${_lib}_static)
+    get_target_property(_inc ${_lib}_static INTERFACE_INCLUDE_DIRECTORIES)
+    if(_inc)
+      set_target_properties(${_lib}_shared PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_inc}")
+    endif()
   endif()
 endforeach()
 add_subdirectory(external/mzpeak EXCLUDE_FROM_ALL)
