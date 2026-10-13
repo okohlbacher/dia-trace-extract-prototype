@@ -79,7 +79,7 @@
 ## Open
 - **Full trace export for the group (2026-10-12):** extract all mass traces for every arm (ours A-V0.2, ours B, P; DIA-NN 1.7.12
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
-  put them on Ceph next to the benchmark data. Rule B needs `-mass_calibration off` (scripts fixed 2026-10-12).
+  put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Running: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (2026-10-13).
 - Push the DIALibGen build fix (tools/DIALibGen, branch compact-parquet-plain-strings, 6f26790) and open its PR.
 - Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).

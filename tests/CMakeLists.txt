@@ -10,7 +10,7 @@ set(OPENMS_BIN ${OpenMS_DIR}/bin)
 # 2 MS1 isotopes at OpenSWATH's (charge-independent) spacing.
 add_test(NAME extract_traml
   COMMAND DIATraceExtractor -in ${TD}/OpenSwathWorkflow_1_input.mzML -lib ${TD}/OpenSwathWorkflow_1_input.TraML
-          -rt_window -1 -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -ms1_isotope_spacing unit -aggregation sum -mass_calibration off
+          -rt_window -1 -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B
           -out traml.parquet -out_tsv traml.tsv -threads 4)
 add_test(NAME openswath_reference
   COMMAND ${OPENMS_BIN}/OpenSwathWorkflow -in ${TD}/OpenSwathWorkflow_1_input.mzML -tr ${TD}/OpenSwathWorkflow_1_input.TraML

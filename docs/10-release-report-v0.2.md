@@ -1,4 +1,4 @@
-# DIATraceExtractor V0.2: release report (2026-10-12)
+# DIATraceExtractor V0.2: release report (2026-10-12, V0.2.1 2026-10-13)
 
 **What it is.** `DIATraceExtractor` is an OpenMS TOPP tool (C++23, OpenMS develop) that extracts DIA fragment and
 precursor-isotope traces (XICs) from a predicted spectral library and writes them as Parquet or TSV. It calibrates
@@ -78,13 +78,16 @@ follow either set, so that each comparison measures the rules and not the implem
 
 | rule | A (DIA-NN's rules; the default) | B (OpenSWATH's rules) |
 |---|---|---|
-| value per spectrum | the most intense centroid in the m/z window (`-aggregation max`) | the sum of all centroids in the window (`sum`) |
+| value per spectrum | the most intense centroid in the m/z window (`-aggregation max`) | the sum of all centroids in the window (`sum`); the whole column is one preset, `-scheme B` |
 | mass correction | offsets (and the m/z-dependent term) measured from the run (`-mass_calibration auto`) | none: the window sits at the library m/z |
 | tolerance | multiples of the measured widths (`-mz_sigma_ms2`, `-mz_sigma_ms1`), or fixed ppm | DIA-NN's optimised MS2 accuracy for both levels, as the benchmark gave OpenSWATH (`-mz_tol`, `-mz_tol_ms1`) |
 | MS1 isotopes | M+k at m/z + k · 1.00336 / z | M+k at m/z + k · 1.00336 regardless of charge (`-ms1_isotope_spacing unit`) |
 | RT window, MS1 axis | ±60 s around the mapped library RT; MS1 at its own scans | the same |
 
-Three configurations of A appear below and are named throughout: **A-V0.2**, the defaults of this release
+Scheme B is a single preset (`-scheme B`, V0.2.1) because its three rules were easy to half-apply: once the
+measured mass correction became the default, a B command without `-mass_calibration off` extracted at the
+corrected m/z, and its parity with OpenSWATH fell from 95% to 64% of MS2 traces at r > 0.9 before this was caught
+(Appendix C). Three configurations of A appear below and are named throughout: **A-V0.2**, the defaults of this release
 (MS2 9σ, MS1 4σ on Astral); **A-V0.1**, the previous release's fixed rule (MS2 ±6 ppm, MS1 ±2.1 ppm around the
 measured offsets), on which the three-way comparison and the shape metrics of §3–§4 were run; and **P** (parity),
 A with both tolerances set to DIA-NN's optimised accuracy. Scheme B exists to show that the tool reproduces
@@ -299,7 +302,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.1` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/compare_traces.py` (pairwise metrics),
@@ -311,8 +314,8 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype (tag `V0.2`, commit 663dc39 and the
-report commits after it). The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype (tag `V0.2.1`; `V0.2` is 663dc39 without the
+`-scheme` preset and this report's later corrections). The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -324,7 +327,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2
+git checkout V0.2.1
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build
@@ -410,7 +413,7 @@ $DIANN --f $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML --lib lib_diann17.ts
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/refined/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
    -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 0 -aggregation max -mass_calibration auto -threads 64 -out odiaA.parquet -out_stats odiaA.json
 $X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation max -mass_calibration auto -threads 64 -out odiaP.parquet
-$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads 64 -out odiaB.parquet
+$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads 64 -out odiaB.parquet        # V0.2.1; before: -mass_calibration off -aggregation sum -ms1_isotope_spacing unit
 # OpenSwathWorkflow (full window = 2 x DIA-NN's accuracy)
 $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -tr lib_openswath.tsv -out_chrom osw.xic -out_features osw.featureXML \
      -rt_extraction_window 120 -mz_extraction_window 11.8102 -mz_extraction_window_unit ppm -mz_extraction_window_ms1 11.8102 -mz_extraction_window_ms1_unit ppm \
@@ -426,7 +429,7 @@ binary cb466f0).** `$t` = 4, 8, 16, 32, 64; DIA-NN and OpenSWATH as above with `
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
    -rt_mode minutes -rt_window 60 -top_fragments 0 -threads $t -out $S/out/t$t/odiaA.parquet
 # ours B
-$X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads $t -out $S/out/t$t/odiaB.parquet
+$X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads $t -out $S/out/t$t/odiaB.parquet
 ```
 
 **Astral, full libraries (§6; `results/full_cb466f0/`, binary cb466f0, top 6 fragments, 2 runs each).**
@@ -436,14 +439,15 @@ $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/human_UP000
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_entrap.parquet
 ```
 
-**Astral, trace galleries and the V0.2 pair table (§3; `results/gallery_v02/`, binary cb466f0).** Rule B needs
-`-mass_calibration off` now that calibration is the default; without it B extracts at the corrected m/z and its
-parity with OpenSWATH drops from 95% to 64% of MS2 traces at r > 0.9 (caught while regenerating the galleries).
+**Astral, trace galleries and the V0.2 pair table (§3; `results/gallery_v02/`, binary cb466f0).** Rule B is the
+`-scheme B` preset since V0.2.1 (before: `-mass_calibration off -aggregation sum -ms1_isotope_spacing unit`, and
+without the first flag B extracted at the corrected m/z: parity with OpenSWATH 64% instead of 95% of MS2 traces at
+r > 0.9, caught while regenerating the galleries).
 
 ```bash
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
    -rt_mode minutes -rt_window 60 -top_fragments 0 -threads 32 -out results/gallery_v02/odiaA.parquet -out_stats results/gallery_v02/odiaA.json
-$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -mass_calibration off -aggregation sum -ms1_isotope_spacing unit -threads 32 -out results/gallery_v02/odiaB.parquet
+$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads 32 -out results/gallery_v02/odiaB.parquet
 tools/pyenv/bin/python scripts/compare_traces.py --odia results/gallery_v02/odiaA.parquet --axes results/gallery_v02/odiaA.axes.parquet \
     --diann results/gallery_v02/diann/diann_xic.parquet --openswath results/gallery_v02/osw_traces.parquet --out results/gallery_v02/cmpA.tsv
 tools/pyenv/bin/python scripts/trace_gallery_features.py results/gallery_v02 results/analysis/gallery_v02/features_run01.parquet

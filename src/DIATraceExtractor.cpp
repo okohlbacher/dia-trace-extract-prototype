@@ -305,6 +305,11 @@ protected:
     setMinInt_("calibration:rejection_rounds", 0); setMinFloat_("calibration:min_reject", 0.0);
     registerDoubleOption_("mz_offset", "<ppm>", 0.0, "Fragment mass correction (ppm added to the target).", false);
     registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 mass correction (ppm added to the target).", false);
+    registerStringOption_("scheme", "<name>", "A", "Extraction scheme. A (default): the options as given (DIA-NN's rules with the "
+                          "measured mass correction). B: OpenSWATH's rules as one preset, so that they cannot be half-applied: "
+                          "sum of the centroids in the window, MS1 isotopes at unit spacing, no mass correction (mass_calibration "
+                          "off; -mz_tol and -mz_tol_ms1 must be given).", false);
+    setValidStrings_("scheme", {"A", "B"});
     registerStringOption_("aggregation", "<mode>", "max", "Combine centroids within tolerance: max (default, as DIA-NN) "
                           "or sum (as OpenSWATH).", false);
     setValidStrings_("aggregation", {"sum", "max"});
@@ -411,7 +416,14 @@ protected:
 
     // --- calibration panel (needs only the library), loaded on its own thread while the run is ingested
     const std::string mode = getStringOption_("rt_mode");
-    const bool mass_auto = getStringOption_("mass_calibration") == "auto";
+    const bool scheme_b = getStringOption_("scheme") == "B";
+    if (scheme_b && (getDoubleOption_("mz_tol") <= 0 || getDoubleOption_("mz_tol_ms1") <= 0))
+    {
+      OPENMS_LOG_ERROR << "-scheme B (OpenSWATH's rules) extracts without mass correction and needs fixed tolerances: give -mz_tol and -mz_tol_ms1 (ppm)." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    const bool mass_auto = !scheme_b && getStringOption_("mass_calibration") == "auto";
+    if (scheme_b) { OPENMS_LOG_INFO << "Scheme B: sum of the centroids in the window, MS1 isotopes at unit spacing, no mass correction." << std::endl; }
     const int ingest_threads = getIntOption_("ingest_threads") > 0 ? getIntOption_("ingest_threads") : std::min(threads, 32);
     struct Panel { ODIA::Library lib; std::size_t keep_every = 1; ODIA::StageTime time; };
     std::future<Panel> panel_future;
@@ -588,12 +600,12 @@ protected:
       eopt.rt_half_window = cal->rt_residual_p99 + cal->peak_fwhm_s;
       OPENMS_LOG_INFO << "RT window: +-" << eopt.rt_half_window << " s (measured)" << std::endl;
     }
-    eopt.aggregate_sum = getStringOption_("aggregation") == "sum";
+    eopt.aggregate_sum = scheme_b || getStringOption_("aggregation") == "sum";
     eopt.extract_ms1 = getIntOption_("ms1_isotopes") >= 0;
     eopt.ms1_isotopes = std::max(0, getIntOption_("ms1_isotopes"));
     eopt.assign_all_windows = getStringOption_("window_assignment") == "all";
     eopt.threads = threads;
-    eopt.isotope_unit_spacing = getStringOption_("ms1_isotope_spacing") == "unit";
+    eopt.isotope_unit_spacing = scheme_b || getStringOption_("ms1_isotope_spacing") == "unit";
     eopt.ms1_scan_axis = getStringOption_("ms1_axis") == "scans";
     eopt.unit_precursors = static_cast<std::size_t>(std::max(1, getIntOption_("unit_precursors")));
     // Trace buffer pool: 256 KiB blocks, pre-faulted once and recycled (no page faults or allocator churn
@@ -622,7 +634,7 @@ protected:
                      {"mz_offset_ppm", std::to_string(eopt.ms2_ppm_offset)}, {"mz_offset_ms1_ppm", std::to_string(eopt.ms1_ppm_offset)},
                      {"mz_offset_slope_ppm_per_th", std::to_string(eopt.ms2_ppm_slope)}, {"mz_offset_mz_ref", std::to_string(eopt.ms2_mz_ref)},
                      {"mz_offset_ms1_slope_ppm_per_th", std::to_string(eopt.ms1_ppm_slope)}, {"mz_offset_ms1_mz_ref", std::to_string(eopt.ms1_mz_ref)},
-                     {"aggregation", getStringOption_("aggregation")},
+                     {"scheme", getStringOption_("scheme")}, {"aggregation", eopt.aggregate_sum ? "sum" : "max"},
                      {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
                      {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};
     ODIA::TraceWriter writer(grid, wcfg);

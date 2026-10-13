@@ -193,6 +193,7 @@ Four kinds of work, one pool of threads:
 | `-mz_sigma_ms2`, `-mz_sigma_ms1` | by instrument (9 / 4 / 6), 4 | tolerances as multiples of the measured error widths |
 | `-mz_tol`, `-mz_tol_ms1` | 0 | fixed ± ppm half widths, overriding the multiples |
 | `-aggregation` | `max` | most intense centroid in the window (`sum`: their sum) |
+| `-scheme` | `A` | `B`: OpenSWATH's rules as one preset (sum, MS1 isotopes at unit spacing, no mass correction; needs `-mz_tol`/`-mz_tol_ms1`) |
 | `-top_fragments` | 6 | fragments per precursor by library intensity (0: all) |
 | `-ms1_isotopes` | 2 | isotopes after the monoisotope (−1: no MS1) |
 | `-ms1_axis` | `scans` | MS1 at its own scans (`cycles`: interpolated onto the cycle axis) |
