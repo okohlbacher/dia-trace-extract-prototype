@@ -32,21 +32,38 @@ permissions:
   contents: write
 
 jobs:
+  plan:
+    name: platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        shell: bash
+        run: |
+          python3 - "${{ github.event.inputs.platforms }}" >> "$GITHUB_OUTPUT" <<'EOF'
+          import json, sys
+          want = [p.strip() for p in sys.argv[1].split(",") if p.strip()]
+          rows = [
+            {"name": "linux-x86_64",   "os": "ubuntu-24.04",     "preset": "linux-x64-release",   "triplet": "x64-linux-dynamic",               "experimental": False},
+            {"name": "linux-aarch64",  "os": "ubuntu-24.04-arm", "preset": "linux-arm64-release", "triplet": "arm64-linux-dynamic",             "experimental": True},
+            {"name": "macos-arm64",    "os": "macos-15",         "preset": "macos-arm64-release", "triplet": "arm64-osx-dynamic-sysroot",       "experimental": False},
+            {"name": "windows-x86_64", "os": "windows-2025",     "preset": "windows-x64-release", "triplet": "x64-windows-static-md-release",   "experimental": False, "vsarch": "x64",   "qtarch": "win64_msvc2022_64"},
+            {"name": "windows-arm64",  "os": "windows-11-arm",   "preset": "windows-x64-release", "triplet": "arm64-windows-static-md-release", "experimental": True,  "vsarch": "arm64", "qtarch": "win64_msvc2022_arm64"},
+          ]
+          rows = [r for r in rows if not want or r["name"] in want]
+          print("matrix=" + json.dumps({"include": rows}))
+          EOF
+
   build:
     name: ${{ matrix.name }}
+    needs: plan
     runs-on: ${{ matrix.os }}
-    if: ${{ github.event.inputs.platforms == '' || contains(github.event.inputs.platforms, matrix.name) }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { name: linux-x86_64,   os: ubuntu-24.04,     preset: linux-x64-release,   triplet: x64-linux-dynamic,              experimental: false }
-          - { name: linux-aarch64,  os: ubuntu-24.04-arm, preset: linux-arm64-release, triplet: arm64-linux-dynamic,            experimental: true }
-          - { name: macos-arm64,    os: macos-15,         preset: macos-arm64-release, triplet: arm64-osx-dynamic-sysroot,      experimental: false }
-          - { name: windows-x86_64, os: windows-2025,     preset: windows-x64-release, triplet: x64-windows-static-md-release,  experimental: false, vsarch: x64,   qtarch: win64_msvc2022_64 }
-          - { name: windows-arm64,  os: windows-11-arm,   preset: windows-x64-release, triplet: arm64-windows-static-md-release, experimental: true,  vsarch: arm64, qtarch: win64_msvc2022_arm64 }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       OPENMS_SRC: ${{ github.workspace }}/OpenMS
       OPENMS_BUILD: ${{ github.workspace }}/OpenMS/build/${{ matrix.preset }}
