@@ -16,6 +16,14 @@ OPENMS_COMMIT=${OPENMS_COMMIT:-10b0a7af09}   # the OpenMS develop commit the clu
 REMOTE_INPUTS=/ceph/ibmi/abi/oliver/Claude/ODIA-V3/benchmark-data/laptop-inputs/
 mkdir -p $WORK; cd $WORK
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+# Homebrew's bin directory is not on PATH in a plain bash shell (Apple silicon: /opt/homebrew/bin); CMake then finds
+# neither Ninja nor a compiler. Put it there and name the compiler and the build program explicitly.
+for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x $b ] && eval "$($b shellenv)" && break; done
+toolchain() {
+  CC_=$(xcrun -f clang) CXX_=$(xcrun -f clang++) NINJA_=$(command -v ninja || true)
+  [ -n "$NINJA_" ] || { log "ninja not found; run: bash $0 deps"; exit 1; }
+  echo "-DCMAKE_C_COMPILER=$CC_ -DCMAKE_CXX_COMPILER=$CXX_ -DCMAKE_MAKE_PROGRAM=$NINJA_"
+}
 
 deps() {
   xcode-select -p > /dev/null 2>&1 || { log "installing the Xcode command line tools; re-run when done"; xcode-select --install; exit 1; }
@@ -38,7 +46,7 @@ deps = m["dependencies"]; deps += [d for d in ("boost-json", "boost-program-opti
 json.dump(m, open("vcpkg.json", "w"), indent=2)
 EOF
   bash tools/ci/deps-macos.sh --skip-doc-deps --skip-gui-deps || true
-  cmake --preset macos-arm64-release -DOpenMP_ROOT=$(brew --prefix libomp) -DWITH_GUI=OFF -DOPENMS_BUILD_TESTS=OFF 2>&1 | tail -3
+  cmake --preset macos-arm64-release $(toolchain) -DOpenMP_ROOT=$(brew --prefix libomp) -DWITH_GUI=OFF -DOPENMS_BUILD_TESTS=OFF 2>&1 | tail -3
   cmake --build build/macos-arm64-release -j $(sysctl -n hw.physicalcpu) --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter FileConverter 2>&1 | tail -2
   cd ..; log "OpenMS built: $(ls OpenMS/build/macos-arm64-release/bin | head -3 | tr '\n' ' ')"
 }
@@ -47,7 +55,7 @@ tool() {
   if [ ! -d dia-trace-extract-prototype ]; then git clone $REPO; fi
   cd dia-trace-extract-prototype; git fetch -q --tags; git checkout -q $TAG; git submodule update --init
   O=$WORK/OpenMS/build/macos-arm64-release; V=$O/vcpkg_installed/arm64-osx-dynamic-sysroot
-  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOpenMP_ROOT=$(brew --prefix libomp) -DOPENMS_BIN=$O/bin \
+  cmake -S . -B build -G Ninja $(toolchain) -DCMAKE_BUILD_TYPE=Release -DOpenMP_ROOT=$(brew --prefix libomp) -DOPENMS_BIN=$O/bin \
         -DCMAKE_PREFIX_PATH="$O;$V" 2>&1 | tail -2
   cmake --build build -j $(sysctl -n hw.physicalcpu) --target DIATraceExtractor 2>&1 | tail -2
   ./build/DIATraceExtractor --help > /dev/null && log "DIATraceExtractor built"
