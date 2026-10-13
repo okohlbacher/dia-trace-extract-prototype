@@ -28,8 +28,7 @@ toolchain() {
 deps() {
   xcode-select -p > /dev/null 2>&1 || { log "installing the Xcode command line tools; re-run when done"; xcode-select --install; exit 1; }
   command -v brew > /dev/null || { log "Homebrew is needed: https://brew.sh"; exit 1; }
-  brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool libomp python@3.12 rsync
-  python3 -m pip install --user --quiet pyarrow pandas numpy matplotlib 2> /dev/null || true
+  brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool libomp python@3.12 rsync uv
   log "deps ok: $(cmake --version | head -1), libomp at $(brew --prefix libomp)"
 }
 
@@ -61,6 +60,8 @@ tool() {
   cmake --build build -j $(sysctl -n hw.physicalcpu) --target DIATraceExtractor > build/build.log 2>&1 \
     || { grep -E -B3 -A12 "error:|Error " build/build.log | head -120; log "tool build failed (full log: $PWD/build/build.log)"; exit 1; }
   ./build/DIATraceExtractor --help > /dev/null && log "DIATraceExtractor built"
+  # the comparison tests run scripts/*.py through tools/pyenv (Homebrew python refuses pip --user, PEP 668)
+  [ -x tools/pyenv/bin/python ] || { uv venv -q tools/pyenv && uv pip install -q --python tools/pyenv/bin/python pyarrow pandas numpy; }
   ctest --test-dir build 2>&1 | tail -2 || log "ctest did not pass fully (see build/Testing); the benchmark can still run"
   cd ..
 }
@@ -86,7 +87,7 @@ bench() {
   PHYS=$(sysctl -n hw.physicalcpu); PERF=$(sysctl -n hw.perflevel0.physicalcpu 2> /dev/null || echo $PHYS)
   if [ -z "${THREADS:-}" ]; then THREADS=""; t=1; while [ $t -lt $PHYS ]; do THREADS="$THREADS $t"; t=$((t * 2)); done
     THREADS="$THREADS $PHYS"; [ $PERF -ne $PHYS ] && THREADS="$THREADS $PERF"; THREADS=$(echo $THREADS | tr ' ' '\n' | sort -nu | tr '\n' ' '); fi
-  { echo "date $(date -Is)"; sw_vers; sysctl -n machdep.cpu.brand_string; sysctl hw.physicalcpu hw.logicalcpu hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu hw.memsize 2> /dev/null
+  { echo "date $(date "+%Y-%m-%dT%H:%M:%S%z")"; pmset -g batt | tail -1; sw_vers; sysctl -n machdep.cpu.brand_string; sysctl hw.physicalcpu hw.logicalcpu hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu hw.memsize 2> /dev/null
     echo "tool $(git -C $WORK/dia-trace-extract-prototype describe --tags) openms $(git -C $WORK/OpenMS rev-parse --short HEAD)"; echo "threads: $THREADS"; } | tee machine.txt
   export OMP_WAIT_POLICY=PASSIVE
   for rep in 1 2; do for t in $THREADS; do

@@ -229,7 +229,11 @@ namespace ODIA
 
   RecyclingPool* arrowPool()
   {
-    static RecyclingPool pool;
-    return &pool;
+    // Never destroyed: OpenMP workers end after main() returns, and their thread_local Local caches hand their
+    // blocks back through the pool's mutex. With a function-static pool that mutex is already destroyed by then;
+    // glibc tolerates the lock, libc++ throws std::system_error ("mutex lock failed: Invalid argument") from
+    // ~Local and the process aborts after all output is written. The process end reclaims the memory.
+    static RecyclingPool* pool = new RecyclingPool;
+    return pool;
   }
 }
