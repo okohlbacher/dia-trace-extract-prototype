@@ -77,6 +77,9 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
+- **Laptop benchmark (MacBook Pro, Apple silicon):** `scripts/bench_macos.sh` (V0.2.2: macOS portability guards; builds OpenMS
+  develop + the tool, fetches `benchmark-data/laptop-inputs/`, runs the thread series and the full library). Untested on
+  macOS so far; results to be added to the report's performance section.
 - **Full trace export for the group (2026-10-12):** extract all mass traces for every arm (ours A-V0.2, ours B, P; DIA-NN 1.7.12
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
   put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Running: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (2026-10-13).

@@ -65,6 +65,7 @@ namespace ODIA
             int running = 0;
             double mhz_sum = 0, mhz_min = 1e12;
             int mhz_n = 0;
+#ifdef __linux__
             if (DIR* d = ::opendir("/proc/self/task"))
             {
               while (dirent* e = ::readdir(d))
@@ -97,6 +98,7 @@ namespace ODIA
               }
               ::closedir(d);
             }
+#endif
             std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\t%d\t%.0f\t%.0f\n", t, active_[0], active_[1],
                          active_[2], active_[3], waiting_, outstanding_, unissued_, loaded_.size(), unwritten_,
                          encode_queue_.size(), pool_.available(), commit_part_, (cpu - cpu_last) / std::max(1e-9, t - t_last),

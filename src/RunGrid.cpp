@@ -767,7 +767,11 @@ namespace ODIA
   PeakPool::PeakPool(std::uint64_t capacity_peaks) : cap_(std::max<std::uint64_t>(capacity_peaks, 1))
   {
     // Virtual reservations only: pages are backed when first written (by the thread that decodes into them).
+#ifdef MAP_NORESERVE
     const int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+#else
+    const int flags = MAP_PRIVATE | MAP_ANONYMOUS;   // macOS over-commits anonymous memory by default
+#endif
     void* m = ::mmap(nullptr, cap_ * sizeof(MzFixed), PROT_READ | PROT_WRITE, flags, -1, 0);
     void* i = ::mmap(nullptr, cap_ * sizeof(float), PROT_READ | PROT_WRITE, flags, -1, 0);
     if (m == MAP_FAILED || i == MAP_FAILED)

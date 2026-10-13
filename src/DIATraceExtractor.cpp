@@ -21,7 +21,9 @@
 #include <cstdlib>
 #include <arrow/memory_pool.h>
 #include <filesystem>
+#ifdef __linux__
 #include <malloc.h>
+#endif
 #include <unistd.h>
 #include <vector>
 #include <cctype>
@@ -31,8 +33,14 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <sys/prctl.h>
 #include <sys/resource.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach-o/dyld.h>
+#endif
 
 using namespace OpenMS;
 
@@ -49,12 +57,26 @@ namespace
   {
     rusage u{};
     getrusage(RUSAGE_SELF, &u);
+#ifdef __APPLE__
+    return static_cast<double>(u.ru_maxrss) / (1024.0 * 1024.0 * 1024.0); // bytes on macOS
+#else
     return static_cast<double>(u.ru_maxrss) / (1024.0 * 1024.0); // KiB on Linux
+#endif
   }
 
   /// Current and peak resident memory (VmRSS, VmHWM) in GiB.
   std::pair<double, double> rssGiB()
   {
+#ifdef __APPLE__
+    mach_task_basic_info info{};
+    mach_msg_type_number_t n = MACH_TASK_BASIC_INFO_COUNT;
+    double rss = 0;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &n) == KERN_SUCCESS)
+    {
+      rss = static_cast<double>(info.resident_size) / (1024.0 * 1024.0 * 1024.0);
+    }
+    return {rss, peakRssGiB()};
+#else
     std::ifstream st("/proc/self/status");
     std::string line;
     double rss = 0, hwm = 0;
@@ -64,6 +86,7 @@ namespace
       if (line.rfind("VmHWM:", 0) == 0) { hwm = std::stod(line.substr(6)) / (1024.0 * 1024.0); }
     }
     return {rss, hwm};
+#endif
   }
 
   std::string mem()
@@ -86,7 +109,9 @@ namespace
   {
     arrow::default_memory_pool()->ReleaseUnused();
     ODIA::arrowPool()->ReleaseUnused();
+#ifdef __linux__
     ::malloc_trim(0);
+#endif
   }
 
   std::string fmt(const ODIA::StageTime& t)
@@ -760,7 +785,9 @@ int main(int argc, const char** argv)
 {
   // ODIA_ALLOW_PTRACE=1: let a debugger or stack sampler that is not our parent attach (Yama ptrace_scope 1),
   // for profiling (gdb stack samples); off by default.
+#ifdef __linux__
   if (std::getenv("ODIA_ALLOW_PTRACE") != nullptr) { ::prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0); }
+#endif
   // Idle OpenMP threads should sleep, not spin (spinning burned ~70% extra CPU while workers waited on
   // I/O). libgomp reads OMP_WAIT_POLICY only when it is loaded, so set it and re-execute once; an
   // explicit user setting is respected.
@@ -770,7 +797,13 @@ int main(int argc, const char** argv)
     std::vector<char*> args;
     for (int i = 0; i < argc; ++i) { args.push_back(const_cast<char*>(argv[i])); }
     args.push_back(nullptr);
+#ifdef __APPLE__
+    char exe[4096];
+    std::uint32_t exe_len = sizeof exe;
+    if (_NSGetExecutablePath(exe, &exe_len) == 0) { ::execv(exe, args.data()); }
+#else
     ::execv("/proc/self/exe", args.data());
+#endif
     // execv only returns on failure: continue with the inherited policy
   }
   TOPPDIATraceExtractor tool;

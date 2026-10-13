@@ -15,9 +15,16 @@ namespace ODIA
   {
     bytes_ = block_floats_ * sizeof(float) * blocks;
     if (bytes_ == 0) { return; }
-    base_ = ::mmap(nullptr, bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+#ifdef MAP_POPULATE
+    constexpr int populate = MAP_POPULATE;   // Linux: pre-fault the mapping once
+#else
+    constexpr int populate = 0;              // macOS: pages fault in on first use
+#endif
+    base_ = ::mmap(nullptr, bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | populate, -1, 0);
     if (base_ == MAP_FAILED) { base_ = nullptr; throw std::bad_alloc(); }
+#ifdef MADV_HUGEPAGE
     ::madvise(base_, bytes_, MADV_HUGEPAGE);   // fewer TLB misses; a hint, failure is harmless
+#endif
     free_.reserve(blocks);
     // LIFO: block 0 is handed out first, so a small working set stays at the start of the mapping.
     for (std::size_t b = blocks; b-- > 0;)
