@@ -17,19 +17,8 @@ run() {  # run <dir> <args...>: extractor with Parquet + TSV + stats; skip if do
     && printf '  %-7s %s  %s KiB\n' $(basename $d) "$(grep -E Elapsed $d.log | grep -oE '[0-9:.]+$')" "$(grep 'Maximum resident' $d.log | grep -oE '[0-9]+$')" \
     || echo "  FAILED $(basename $d): see $d.log"
 }
-ref_tsv() {  # ref_tsv <parquet> <tsv>: reference traces (list columns rt/intensity) as long TSV
-  [ -s $2 ] && return; $PY - "$1" "$2" <<'EOF'
-import sys, pyarrow.parquet as pq, pyarrow as pa, pyarrow.csv as pc, numpy as np
-src, dst = sys.argv[1], sys.argv[2]
-t = pq.read_table(src)
-cols = {c: t[c] for c in ("precursor_id", "ms_level", "annotation") if c in t.column_names}
-rt, it = t["rt"], t["intensity"]
-n = pa.compute.list_value_length(rt).to_numpy()
-idx = np.repeat(np.arange(len(t)), n)
-out = {k: pa.compute.take(v, idx) for k, v in cols.items()}
-out["rt"] = pa.compute.list_flatten(rt); out["intensity"] = pa.compute.list_flatten(it)
-with pc.CSVWriter(dst, pa.table(out).schema, write_options=pc.WriteOptions(delimiter="\t")) as w: w.write_table(pa.table(out))
-EOF
+ref_tsv() {  # ref_tsv <parquet> <tsv>: reference traces (rt/intensity as lists, or as float32 blobs) as long TSV
+  [ -s $2 ] && return; $PY $P/scripts/traces_to_long_tsv.py "$1" "$2"
 }
 for RUN in 01 02 03; do
   D=$OUT/astral_run$RUN; mkdir -p $D; echo "== Astral run $RUN $(date -Is)" | tee -a $OUT/export.log
@@ -40,8 +29,8 @@ for RUN in 01 02 03; do
   run $D/odiaA -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -threads $T
   run $D/odiaP -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC -threads $T
   run $D/odiaB -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
-  cp -n $R/diann/diann_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
-  [ -s $R/osw_traces.parquet ] && { cp -n $R/osw_traces.parquet $D/osw.parquet; ref_tsv $D/osw.parquet $D/osw.tsv; }
+  cp --update=none $R/diann/diann_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
+  [ -s $R/osw_traces.parquet ] && { cp --update=none $R/osw_traces.parquet $D/osw.parquet; ref_tsv $D/osw.parquet $D/osw.tsv; }
   echo "DIA-NN accuracy $ACC ppm; files:" >> $D/README.txt; ls -la $D >> $D/README.txt
 done 2>&1 | tee -a $OUT/export.log
 for RUN in A01 B01; do
@@ -51,7 +40,7 @@ for RUN in A01 B01; do
   run $D/odiaA -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -threads $T
   run $D/odiaP -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol $ACC -mz_tol_ms1 $ACC -threads $T
   run $D/odiaB -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
-  cp -n $P/results/diapasef/diann_${RUN}_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
+  cp --update=none $P/results/diapasef/diann_${RUN}_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
   echo "DIA-NN accuracy $ACC ppm; files:" >> $D/README.txt; ls -la $D >> $D/README.txt
 done 2>&1 | tee -a $OUT/export.log
 echo "finished $(date -Is)" | tee -a $OUT/export.log; du -sh $OUT | tee -a $OUT/export.log
