@@ -46,10 +46,10 @@ jobs:
           want = [p.strip() for p in sys.argv[1].split(",") if p.strip()]
           rows = [
             {"name": "linux-x86_64",   "os": "ubuntu-24.04",     "preset": "linux-x64-release",   "triplet": "x64-linux-dynamic",               "experimental": False},
-            {"name": "linux-aarch64",  "os": "ubuntu-24.04-arm", "preset": "linux-arm64-release", "triplet": "arm64-linux-dynamic",             "experimental": True},
+            {"name": "linux-aarch64",  "os": "ubuntu-24.04-arm", "preset": "linux-arm64-release", "triplet": "arm64-linux-dynamic",             "experimental": False},
             {"name": "macos-arm64",    "os": "macos-15",         "preset": "macos-arm64-release", "triplet": "arm64-osx-dynamic-sysroot",       "experimental": False},
             {"name": "windows-x86_64", "os": "windows-2025",     "preset": "windows-x64-release", "triplet": "x64-windows-static-md-release",   "experimental": False, "vsarch": "x64",   "qtarch": "win64_msvc2022_64"},
-            {"name": "windows-arm64",  "os": "windows-11-arm",   "preset": "windows-x64-release", "triplet": "arm64-windows-static-md-release", "experimental": True,  "vsarch": "arm64", "qtarch": "win64_msvc2022_arm64"},
+            {"name": "windows-arm64",  "os": "windows-11-arm",   "preset": "windows-x64-release", "triplet": "arm64-windows-static-md-release", "experimental": False, "vsarch": "arm64", "qtarch": "win64_msvc2022_arm64", "pyarch": "x64"},
           ]
           rows = [r for r in rows if not want or r["name"] in want]
           print("matrix=" + json.dumps({"include": rows}))
@@ -141,7 +141,10 @@ jobs:
         shell: bash
         run: choco install -y --no-progress cmake ninja
       - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
+        with:
+          python-version: '3.12'
+          # Windows arm64: x64 Python under emulation, for which pyarrow has wheels (the comparison tests need it)
+          architecture: ${{ matrix.pyarch || '' }}
       - name: "Python packages for the tests (no pyarrow wheel: the two comparison tests are skipped)"
         shell: bash
         run: |
@@ -204,8 +207,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             EXTRA+=("-DCMAKE_TOOLCHAIN_FILE=$OPENMS_SRC/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DVCPKG_MANIFEST_MODE=OFF"
                     "-DVCPKG_INSTALLED_DIR=C:/vi" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"
-                    "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_APPLOCAL_DEPS=OFF"
-                    "-DCMAKE_CXX_FLAGS=-Z7" "-DCMAKE_EXE_LINKER_FLAGS=-DEBUG")   # symbols for the diagnostic stack dumps (dash form: Git Bash rewrites /Z7 into a path)
+                    "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_APPLOCAL_DEPS=OFF")
           fi
           cmake -S tool -B tool/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_PREFIX_PATH="$OPENMS_BUILD;$VCPKG_INSTALLED" \
@@ -220,8 +222,13 @@ jobs:
           cygpath -w "$OPENMS_BUILD/bin" >> "$GITHUB_PATH"
           cygpath -w "$QT_ROOT_DIR/bin" >> "$GITHUB_PATH"
           echo "added to PATH:"; cat "$GITHUB_PATH"
-      - name: "Diagnostics (Windows): --help and one extraction under a time limit, thread stacks if it hangs"
-        if: runner.os == 'Windows'
+      - name: Tests
+        shell: bash
+        run: ctest --test-dir tool/build --output-on-failure --no-tests=error --timeout 300 ${ctest_args}
+
+      # ---- install, smoke test from a clean environment, package ----
+      - name: "Diagnostics after a failure (Windows): DLL imports, --help and one extraction under a time limit, thread stacks if it hangs"
+        if: failure() && runner.os == 'Windows'
         continue-on-error: true
         shell: bash
         run: |
@@ -245,11 +252,54 @@ jobs:
           dump 60 help.log -- "$X" --help
           dump 180 traml.log -- "$X" -in $TD/OpenSwathWorkflow_1_input.mzML -lib $TD/OpenSwathWorkflow_1_input.TraML -rt_window -1 \
                -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B -out diag.parquet -threads 1 -debug 2
-      - name: Tests
+      # ---- macOS: Developer ID signing and notarization (optional: without the MACOS_* secrets the tree is
+      # relocated and ad-hoc signed). Secrets reach steps only through env; `if:` cannot test them.
+      - name: macOS signing configuration
+        id: sign
+        if: runner.os == 'macOS'
         shell: bash
-        run: ctest --test-dir tool/build --output-on-failure --no-tests=error --timeout 300 ${ctest_args}
-
-      # ---- install, smoke test from a clean environment, package ----
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          NOTARY_ID: ${{ secrets.MACOS_APPLE_ID }}
+          NOTARY_TEAM: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          if [ -z "$CERT" ]; then
+            echo "::notice::no MACOS_CERTIFICATE_BASE64 -- the macOS package is ad-hoc signed"
+            echo "sign=false" >> "$GITHUB_OUTPUT"; echo "notarize=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "sign=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$NOTARY" ] && [ -n "$NOTARY_ID" ] && [ -n "$NOTARY_TEAM" ]; then echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::signing without notarizing -- Gatekeeper still refuses the package"; echo "notarize=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Import the Developer ID certificate
+        id: signing
+        if: steps.sign.outputs.sign == 'true'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          KCPW="${MACOS_KEYCHAIN_PASSWORD:-$(uuidgen)}"; echo "::add-mask::$KCPW"
+          KC="$RUNNER_TEMP/odia-signing.keychain-db"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+          keychains=(); while IFS= read -r k; do keychains+=("$k"); done < <(security list-keychains -d user | sed 's/^ *"//; s/"$//')
+          security list-keychain -d user -s "$KC" "${keychains[@]}"
+          security default-keychain -d user -s "$KC"
+          IDENT=$(security find-identity -p codesigning -v "$KC" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+          [ -n "$IDENT" ] || { security find-identity -p codesigning -v "$KC"; echo "::error::no Developer ID Application identity in the certificate"; exit 1; }
+          if [ -n "$MACOS_SIGNING_IDENTITY" ] && [ "$MACOS_SIGNING_IDENTITY" != "$IDENT" ]; then
+            echo "::error::MACOS_SIGNING_IDENTITY does not match the imported certificate ($IDENT)"; exit 1; fi
+          echo "identity=$IDENT" >> "$GITHUB_OUTPUT"; echo "keychain=$KC" >> "$GITHUB_OUTPUT"
+          echo "signing as: $IDENT"
       - name: Install the self-contained tree
         shell: bash
         run: |
@@ -257,6 +307,13 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_ENV"
           cmake --install tool/build --prefix "$RUNNER_TEMP/stage/$NAME"
           du -sh "$RUNNER_TEMP/stage/$NAME"; ls "$RUNNER_TEMP/stage/$NAME"
+      - name: "macOS: make the tree relocatable and sign it (Developer ID with hardened runtime, else ad hoc)"
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          MACOS_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: bash tool/ci/macos_relocate_sign.sh "$RUNNER_TEMP/stage/$name"
       - name: The installed tool runs from a clean environment and reports its version
         shell: bash
         run: |
@@ -269,9 +326,61 @@ jobs:
           fi
           grep -q "^Version: ${version//./\\.} (OpenMS " help.txt || { echo "::error::version line wrong"; cat help.txt; exit 1; }
           head -4 help.txt
+      - name: The installed tool extracts traces from a clean environment
+        shell: bash
+        run: |
+          set -o pipefail
+          T="$RUNNER_TEMP/stage/$name"; TD="$GITHUB_WORKSPACE/tool/testdata/openms"; O="$RUNNER_TEMP/smoke"; mkdir -p "$O"
+          ARGS=(-in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol 50 -mz_tol_ms1 50
+                -top_fragments 0 -scheme B -threads 2 -out "$O/smoke.parquet" -out_tsv "$O/smoke.tsv")
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            env -i SYSTEMROOT="$SYSTEMROOT" PATH="$SYSTEMROOT/System32" "$T/bin/DIATraceExtractor.exe" "${ARGS[@]}" > smoke.log 2>&1 || { cat smoke.log; exit 1; }
+          else
+            # macOS: Homebrew's libomp out of reach, so only the bundled one can satisfy the tool
+            HB=$( [ "$RUNNER_OS" = macOS ] && brew --prefix libomp 2>/dev/null || true )
+            [ -n "$HB" ] && sudo mv "$HB" "$HB.hidden"
+            env -i HOME="$HOME" "$T/bin/DIATraceExtractor" "${ARGS[@]}" > smoke.log 2>&1; rc=$?
+            [ -n "$HB" ] && sudo mv "$HB.hidden" "$HB"
+            [ $rc -eq 0 ] || { cat smoke.log; exit 1; }
+          fi
+          grep -E "^Written:" smoke.log
+          [ $(wc -l < "$O/smoke.tsv") -gt 100 ] || { echo "::error::smoke extraction wrote no traces"; cat smoke.log; exit 1; }
+      - name: "macOS: notarize the signed tree"
+        if: steps.sign.outputs.notarize == 'true'
+        timeout-minutes: 60
+        shell: bash
+        env:
+          MACOS_APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent "$RUNNER_TEMP/stage/$name" "$RUNNER_TEMP/tree.zip"
+          bash tool/ci/notarize.sh "$RUNNER_TEMP/tree.zip"
       - name: Package
         shell: bash
         run: bash tool/ci/package.sh "$RUNNER_TEMP/stage" "$name" "$RUNNER_TEMP/out"
+      - name: "macOS: sign, notarize and staple the disk image"
+        if: steps.sign.outputs.notarize == 'true'
+        timeout-minutes: 60
+        shell: bash
+        env:
+          MACOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          MACOS_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+          MACOS_APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          DMG="$RUNNER_TEMP/out/$name.dmg"
+          codesign --force --timestamp --keychain "$MACOS_KEYCHAIN" --sign "$MACOS_SIGN_IDENTITY" "$DMG"
+          bash tool/ci/notarize.sh "$DMG"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl -a -vv -t open --context context:primary-signature "$DMG"
+      - name: "macOS: remove the signing keychain"
+        if: always() && steps.signing.outputs.keychain != ''
+        shell: bash
+        run: security delete-keychain "${{ steps.signing.outputs.keychain }}" || true
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.name }}
