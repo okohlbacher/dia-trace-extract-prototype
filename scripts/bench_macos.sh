@@ -54,7 +54,7 @@ EOF
 
 tool() {
   if [ ! -d dia-trace-extract-prototype ]; then git clone $REPO; fi
-  cd dia-trace-extract-prototype; git fetch -q --tags; git checkout -q $TAG; git submodule update --init
+  cd dia-trace-extract-prototype; git fetch -q --tags --force; git checkout -q $TAG; git submodule update --init
   O=$WORK/OpenMS/build/macos-arm64-release; V=$O/vcpkg_installed/arm64-osx-dynamic-sysroot
   cmake -S . -B build -G Ninja $(toolchain) -DCMAKE_BUILD_TYPE=Release -DOpenMP_ROOT=$(brew --prefix libomp) -DOPENMS_BIN=$O/bin \
         -DCMAKE_PREFIX_PATH="$O;$V" 2>&1 | tail -2
