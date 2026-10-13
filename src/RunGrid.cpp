@@ -31,7 +31,9 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <sys/resource.h>
 #include <thread>
 
@@ -568,6 +570,22 @@ namespace ODIA
         return false;
       }
 
+      // One descriptor, pread() straight into the callers' buffers. libc++'s ifstream::read refills a 4 KiB
+      // buffer with one read() per 4 KiB (libstdc++ reads large requests directly), and macOS serialises small
+      // concurrent reads of one file in the kernel: two passes over a 5.8 GB run cost 21 s of system time and
+      // kept the ingest at ~3 s wall from 2 to 16 threads on an M4 Max; 1 MiB reads of the same file take 0.05 s.
+      struct Fd { int fd; ~Fd() { if (fd >= 0) { ::close(fd); } } } fdh{::open(filename.c_str(), O_RDONLY)};
+      if (fdh.fd < 0) { return false; }
+      const auto readAt = [fd = fdh.fd](char* dst, Size n, Size offset) {
+        while (n > 0)
+        {
+          const ssize_t got = ::pread(fd, dst, n, static_cast<off_t>(offset));
+          if (got <= 0) { return false; }
+          dst += got; n -= static_cast<Size>(got); offset += static_cast<Size>(got);
+        }
+        return true;
+      };
+
       const std::uint64_t t_marks = prof::nowNs();
       // 1. Markup positions, found in parallel over 1 MiB blocks.
       enum class Mark : unsigned char { spectrum, list_start, list_end, run_end, declaration };
@@ -581,7 +599,6 @@ namespace ODIA
       std::atomic<bool> ok{true};
 #pragma omp parallel num_threads(threads)
       {
-        std::ifstream file;
         std::string buffer;
 #pragma omp for schedule(dynamic, 1)
         for (std::ptrdiff_t sb = 0; sb < static_cast<std::ptrdiff_t>(n_blocks); ++sb)
@@ -589,12 +606,9 @@ namespace ODIA
           bool read = false;
           try
           {
-            if (!file.is_open()) { file.open(filename, std::ios::binary); }
             const Size b = static_cast<Size>(sb), from = b * block, end = std::min(block, size - from);
             buffer.resize(std::min(block + lookahead, size - from));
-            file.seekg(static_cast<std::streamoff>(from));
-            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-            read = static_cast<bool>(file);
+            read = readAt(buffer.data(), buffer.size(), from);
             for (Size i = 0; read && i < end; ++i)
             {
               const char* q = static_cast<const char*>(std::memchr(buffer.data() + i, '<', end - i));
@@ -609,7 +623,7 @@ namespace ODIA
             }
           }
           catch (...) { read = false; }
-          if (!read) { ok = false; file.clear(); }
+          if (!read) { ok = false; }
         }
       }
       constexpr Size none = std::numeric_limits<Size>::max();
@@ -676,16 +690,16 @@ namespace ODIA
       const Size used = first.size() - 1;
 
       // 4. Parse chunks in parallel, route them in file order. ODIA_MZML_PARSER=openms forces the OpenMS parser.
-      std::vector<std::ifstream> files(static_cast<Size>(std::max(1, threads)));
       const char* parser_env = std::getenv("ODIA_MZML_PARSER");
       const bool fast = parser_env == nullptr || std::string_view(parser_env) != "openms";
       std::atomic<Size> fast_chunks{0};
       orderedParallel(
-        // Look-ahead bounded in chunks, not threads: each parked chunk holds its decoded spectra.
-        used, threads, std::min<Size>(2 * static_cast<Size>(threads), 32),
+        // Look-ahead: with the fast parser a parked chunk holds only metadata (its peaks are already in the pool),
+        // so no bound is needed; a bound of 32 kept 16 workers waiting on the in-order commit 85% of the time
+        // (ingest 1.06 s -> 0.28 s wall at 16 threads without it, +40 MB peak RSS). The OpenMS fallback parks
+        // decoded spectra, so it keeps the bound in chunks, not threads.
+        used, threads, fast ? used : std::min<Size>(2 * static_cast<Size>(threads), 32),
         [&](Size c) {
-          auto& file = files[static_cast<Size>(omp_get_thread_num())];
-          if (!file.is_open()) { file.open(filename, std::ios::binary); }
           const bool last = c + 1 == used;
           const Size from = starts[first[c]], to = last ? list_end : starts[first[c + 1]];
           // Fast path: the spectra parsed straight from the file bytes (MzMLFast), into reused buffers.
@@ -695,10 +709,8 @@ namespace ODIA
             static prof::Counter& c_read = prof::counter("ingest.chunk_read");
             prof::Scope sc(c_read);
             raw.resize(to - from);
-            file.seekg(static_cast<std::streamoff>(from));
-            file.read(raw.data(), static_cast<std::streamsize>(to - from));
+            if (!readAt(raw.data(), to - from, from)) { throw std::runtime_error("mzML chunk read failed"); }
           }
-          if (!file) { throw std::runtime_error("mzML chunk read failed"); }
           static prof::Counter& c_parse = prof::counter("ingest.chunk_parse_fast");
           prof::Scope sc_parse(c_parse);
           if (fast)
@@ -887,7 +899,7 @@ namespace ODIA
     {
       loadMzPeak(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); });
     }
-    else if (decode_threads > 1 && loadChunked(filename, decode_threads, *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); }))
+    else if (loadChunked(filename, std::max(1, decode_threads), *g.pool, g.instrument, [&](Decoded&& d) { router.route(std::move(d)); }))
     {
       // parsed in parallel chunks (see loadChunked)
     }
