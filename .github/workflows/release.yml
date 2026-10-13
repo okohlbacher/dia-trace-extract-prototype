@@ -64,11 +64,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
-      OPENMS_SRC: ${{ github.workspace }}/OpenMS
-      OPENMS_BUILD: ${{ github.workspace }}/OpenMS/build/${{ matrix.preset }}
-      VCPKG_INSTALLED: ${{ github.workspace }}/OpenMS/build/${{ matrix.preset }}/vcpkg_installed/${{ matrix.triplet }}
     steps:
+      # Paths. On Windows everything vcpkg touches lives in short directories (C:/o, C:/vi, C:/bt, C:/pk): the
+      # autotools ports (libiconv) stage into <packages>/<full install prefix>, and with the workspace path that
+      # exceeds MAX_PATH; the \\?\ paths MSYS then produces are passed to cl.exe as unknown options.
+      - name: Paths
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "OPENMS_SRC=C:/o" >> "$GITHUB_ENV"
+            echo "OPENMS_BUILD=C:/o/build/${{ matrix.preset }}" >> "$GITHUB_ENV"
+            echo "VCPKG_INSTALLED=C:/vi/${{ matrix.triplet }}" >> "$GITHUB_ENV"
+          else
+            echo "OPENMS_SRC=$GITHUB_WORKSPACE/OpenMS" >> "$GITHUB_ENV"
+            echo "OPENMS_BUILD=$GITHUB_WORKSPACE/OpenMS/build/${{ matrix.preset }}" >> "$GITHUB_ENV"
+            echo "VCPKG_INSTALLED=$GITHUB_WORKSPACE/OpenMS/build/${{ matrix.preset }}/vcpkg_installed/${{ matrix.triplet }}" >> "$GITHUB_ENV"
+          fi
       - name: Check out the tool
         uses: actions/checkout@v4
         with:
@@ -144,7 +155,7 @@ jobs:
           path: |
             ~/.cache/vcpkg/archives
             ~/AppData/Local/vcpkg/archives
-          key: vcpkg-${{ matrix.name }}-${{ hashFiles('OpenMS/vcpkg.json', 'OpenMS/vcpkg-configuration.json') }}-${{ env.openms }}
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('tool/ci/openms.lock', 'tool/ci/patch_openms_manifest.py', 'tool/ci/overlay-ports/**', 'tool/ci/triplets/**') }}
           restore-keys: |
             vcpkg-${{ matrix.name }}-
       - name: ccache
@@ -161,7 +172,7 @@ jobs:
           EXTRA=()
           [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           [ "$RUNNER_OS" != "Windows" ] && EXTRA+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
-          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_PORTS=$GITHUB_WORKSPACE/tool/ci/overlay-ports")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=("-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/bt;--x-packages-root=C:/pk" "-DVCPKG_INSTALLED_DIR=C:/vi" "-DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/tool/ci/triplets" "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_OVERLAY_PORTS=$GITHUB_WORKSPACE/tool/ci/overlay-ports")
           [ "${{ matrix.name }}" = "windows-arm64" ] && EXTRA+=("-DVCPKG_MANIFEST_FEATURES=lp-glpk" "-DLP_SOLVER=GLPK")
           cd "$OPENMS_SRC"
           cmake --preset ${{ matrix.preset }} -DWITH_GUI=OFF -DWITH_THERMO_RAW=OFF -DWITH_OPENTIMS=OFF \
@@ -173,7 +184,7 @@ jobs:
           path: |
             ~/.cache/vcpkg/archives
             ~/AppData/Local/vcpkg/archives
-          key: vcpkg-${{ matrix.name }}-${{ hashFiles('OpenMS/vcpkg.json', 'OpenMS/vcpkg-configuration.json') }}-${{ env.openms }}
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('tool/ci/openms.lock', 'tool/ci/patch_openms_manifest.py', 'tool/ci/overlay-ports/**', 'tool/ci/triplets/**') }}
       - name: Build OpenMS
         shell: bash
         run: cmake --build "$OPENMS_BUILD" --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter
