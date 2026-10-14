@@ -5,13 +5,14 @@ The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report
 `-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
 and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.11 changed no
 source file, only the Windows build and the install rules, and added binary packages for five platforms (Appendix A).
-The V0.2.7 measurements therefore hold for V0.2.11 on Linux and macOS, and every number here was re-checked against
-archived runs. Which binary produced which measurement is stated at
-each table and in Appendix C: the Astral and diaPASEF quality tables come from cb466f0 (V0.2); the §6 speed
-tables (cluster thread series, full libraries, laptop) were re-measured with the V0.2.7 binary (d963cb5 on the
-cluster, 318e5aa on the laptop; the two differ only in the floating-point parser used on Apple's libc++, whose
-output is value-identical); the earlier rule comparisons (A-V0.1, P) from the pre-release binaries named in
-Appendix C.
+**Every cluster measurement was re-run with the V0.2.11 binary** (`results/v0.2.11/`,
+`scripts/cluster_bench_v0211.sh`, on `dax` on 2026-10-14): the thread series, the full libraries, the Astral pair
+table with all four configurations of ours, the diaPASEF comparisons and costs, and the tolerance screens. Its
+Astral traces (A-V0.2 and B) are bit-identical to those of cb466f0 (V0.2), on which the galleries and the §4 rule
+emulation were computed, and its calibration reproduces the offsets and widths used there, so those carry over
+unchanged. Two results moved: the A-V0.1 and P rows of §3, whose archived runs came from a pre-release binary with
+an older calibration (now ±0.6 points), and the diaPASEF defaults, which now use the m/z-dependent MS1 model
+(§3). The laptop series (§6) is V0.2.7's, the same source as V0.2.11 on macOS.
 
 **What it is.** `DIATraceExtractor` is an OpenMS TOPP tool (C++23, OpenMS develop) that extracts DIA fragment and
 precursor-isotope traces (XICs) from a predicted spectral library and writes them as Parquet or TSV. It calibrates
@@ -103,7 +104,7 @@ measured mass correction became the default, a B command without `-mass_calibrat
 corrected m/z, and its parity with OpenSWATH fell from 95% to 64% of MS2 traces at r > 0.9 before this was caught
 (Appendix C). Three configurations of A appear below and are named throughout: **A-V0.2**, the defaults of this release
 (MS2 9σ, MS1 4σ on Astral); **A-V0.1**, the previous release's fixed rule (MS2 ±6 ppm, MS1 ±2.1 ppm around the
-measured offsets), on which the three-way comparison and the shape metrics of §3–§4 were run; and **P** (parity),
+measured constant offsets), on which the three-way comparison and the shape metrics of §3–§4 were run; and **P** (parity),
 A with both tolerances set to DIA-NN's optimised accuracy. Scheme B exists to show that the tool reproduces
 OpenSWATH's traces; its rules are not recommended (§4). Everything else is shared: the run grid, the RT map, the
 merge join, the output.
@@ -111,14 +112,13 @@ merge join, the output.
 ## 3. Are the traces the same? (both instruments, DIA-NN's IDs)
 
 **Astral**, run 01, shared tuned library, all 79,953 DIA-NN IDs, every library fragment
-(`results/gallery_v02/cmpA.tsv`, `cmpB.tsv` for the V0.2 binary; `results/refined/.../run01/cmpA.tsv`, `cmpP.tsv`
-for the earlier rules):
+(`results/v0.2.11/astral/cmpA.tsv`, `cmpB.tsv`, `cmpAV01.tsv`, `cmpP.tsv`; V0.2.11):
 
 | pair | MS2 median r | MS2 r > 0.9 | MS1 M+0 median r |
 |---|---|---|---|
 | ours B vs OpenSWATH | 0.9999 | 95.3% | 0.9995 |
-| ours P (DIA-NN's tolerances) vs DIA-NN | 1.0000 | 92.0% | 0.954 |
-| ours A-V0.1 vs DIA-NN | 1.0000 | 92.0% | 0.978 |
+| ours P (DIA-NN's tolerances) vs DIA-NN | 1.0000 | 91.4% | 0.954 |
+| ours A-V0.1 vs DIA-NN | 1.0000 | 91.6% | 0.979 |
 | ours A-V0.2 (defaults) vs DIA-NN | 0.9997 | 83.1% | 0.977 |
 | DIA-NN vs OpenSWATH | 0.971 | 62.7% | 0.953 |
 
@@ -127,7 +127,7 @@ for the earlier rules):
 (The figure pools runs 01–03 with an earlier configuration, both tolerances at DIA-NN's accuracy and MS1 on the
 cycle axis, dossier §2; the shape of the distributions is the point.) Ours B reproduces OpenSWATH nearly exactly;
 ours A reproduces DIA-NN at MS2. The two reference engines disagree with each other more than either disagrees
-with its matching configuration of ours. The remaining MS2 tail of P against DIA-NN (8% of traces below r = 0.9 in the
+with its matching configuration of ours. The remaining MS2 tail of P against DIA-NN (9% of traces below r = 0.9 in the
 table; 3.5% of the traces non-zero in both engines, dossier §3.2) is entirely its float32 quadratic window centre, shifted by about 0.5 ppm from ours: emulating that arithmetic
 reproduces DIA-NN's traces in a 3,000-precursor sample with none of 34,923 traces differing at r < 0.99 or
 L1 > 0.01 (dossier §3.2). It is a DIA-NN rule choice, and its quadratic describes the true mass error worse than a
@@ -164,25 +164,28 @@ uncorrected m/z against our corrected, narrow window (§4), visible in the figur
 extra peaks ours does not. The galleries were regenerated for this release (the 2026-10-10 versions in
 `figures/` show the earlier configuration of the correlation figure).
 
-**timsTOF diaPASEF**, runs A01 and B01, DIA-NN 1.7.12 on our mzML export, top 6 fragments
-(`results/diapasef/cmpdef_*.tsv`, `cmpP_*.tsv`; constant mass model, so the MS1 window of the default rows is
-4σ of the constant width, ±12.9 / ±12.3 ppm). Calibration finds 775 anchors in this 25 ng sample, MS2 width
-2.6–2.7 ppm, MS1 3.2–3.4 ppm (2.2 ppm with the m/z-dependent model, `odia_A01_lin.log`):
+**timsTOF diaPASEF**, runs A01 and B01, DIA-NN 1.7.12 on our mzML export, DIA-NN's IDs, every library fragment
+(`results/v0.2.11/diapasef/cmp_*.tsv`; V0.2.11). Calibration finds 775 / 710 anchors in these 25 ng samples (342–374
+used for the mass model), MS2 width 2.7 ppm; the MS1 error carries an m/z slope of +13–15 ppm per 1000 Th, so the
+defaults use the m/z-dependent model, MS1 width 2.2 ppm (3.2 ppm constant):
 
 | ours vs DIA-NN | MS2 median r | MS2 r > 0.9 | MS1 r > 0.9 |
 |---|---|---|---|
-| A01, defaults (4σ = ±10.8 ppm) | 0.992 | 86.0% | 63% |
-| A01, at DIA-NN's ±11.8 ppm | 0.9993 | 91.7% | 60% |
-| B01, defaults (4σ = ±10.6 ppm) | 0.974 | 76.0% | 67% |
-| B01, at ±11.8 ppm (DIA-NN: ±12.6) | 0.996 | 89.4% | 66% |
+| A01, defaults (4σ: MS2 ±10.8, MS1 ±8.9 ppm, m/z-dependent) | 0.992 | 86.0% | 57% |
+| A01, defaults with the constant MS1 model (MS1 ±12.9 ppm) | 0.992 | 86.0% | 63% |
+| A01, at DIA-NN's ±11.8 ppm | 0.9994 | 91.9% | 61% |
+| B01, defaults (4σ: MS2 ±10.6, MS1 ±8.7 ppm) | 0.974 | 76.0% | 59% |
+| B01, at ±11.8 ppm (DIA-NN: ±12.6) | 0.995 | 89.2% | 64% |
 
 At equal tolerance the engines agree on diaPASEF as on Astral; at the defaults the slightly narrower window costs a
-few points, again by construction. The MS1 agreement of 60–67% looked like a defect and is not: where both engines
+few points, again by construction. The MS1 agreement of 57–64% looked like a defect and is not: where both engines
 have signal the values are identical, and each has zeros where the other has signal, so the two windows sit at
 different centres. Placing our MS1 window at the uncorrected library m/z with DIA-NN's MS2 accuracy raises the
-agreement to 79%, and widening that uncorrected window to ±20 ppm drops it to 43% (`cmp_ms1raw11.8.tsv`,
-`cmp_ms1raw20.tsv`): DIA-NN's export rule of §4, visible here because the MS1 offset is 3.4 ppm plus the m/z
-slope instead of Astral's 1.3 ppm. Our MS1 traces are the mass-corrected ones.
+agreement to 79%, and widening that uncorrected window to ±20 ppm drops it to 43% (`cmp_A01_ms1raw11.8.tsv`,
+`cmp_A01_ms1raw20.tsv`, top 6 fragments): DIA-NN's export rule of §4, visible here because the MS1 offset is
+3.5 ppm plus the m/z slope instead of Astral's 1.3 ppm. The m/z-dependent model moves our MS1 centre further from
+the uncorrected one, which is why it lowers the agreement from 63% to 57%. Our MS1 traces are the mass-corrected
+ones.
 
 ## 4. Which rules are right? (re-extraction from the raw centroids, 3,000 IDs)
 
@@ -241,8 +244,10 @@ dividing by the charge, so its M+1 and M+2 traces of charge ≥ 2 precursors are
 ![Tolerance screen](figures/tolerance_screen.png)
 
 The DIA-NN-identified precursors of each run extracted at k × σ, k = 1 … 12, and scored on the traces
-(`scripts/tolerance_screen.py`; σ as measured by the calibration of the time, with the constant mass model: Astral
-0.92 / 0.40 ppm, timsTOF 2.66 / 3.38 ppm for MS2 / MS1):
+(`scripts/tolerance_screen.py`, V0.2.11, `results/v0.2.11/tolscreen/`; σ as measured by the calibration of the
+time, with the constant mass model: Astral 0.92 / 0.40 ppm, timsTOF 2.66 / 3.38 ppm for MS2 / MS1; window centres
+from the V0.2.11 calibration). The optima are those of the original screen (binary 4934ea5, `results/tolscreen/`);
+the V0.2 calibration raises Astral's co-elution at every k (0.23 against 0.19 at the optimum):
 
 | | MS2 co-elution optimum | MS1 co-elution optimum | DIA-NN's own accuracy |
 |---|---|---|---|
@@ -268,50 +273,51 @@ containing absent peptides, i.e. peptide decoys from the library generator (back
 
 ## 6. Performance
 
-Machine: 2 × AMD EPYC 9654 (`dax`: 192 cores, SMT, 2.3 TB), shared node at a load of 45–96 (0.12–0.25 per
-hardware thread) during the series; inputs on local `/scratch`; one run per point unless stated; peak RSS from
+Machine: 2 × AMD EPYC 9654 (`dax`: 192 cores, SMT, 2.3 TB), shared node at a load of 3–11 (≤ 0.03 per
+hardware thread) during the V0.2.11 runs; inputs on local `/scratch`; one run per point unless stated; peak RSS from
 `/usr/bin/time`.
 
-**Runtime vs threads**, Astral run 01, shared tuned library (82,333 precursors, all fragments); ours V0.2.7 (commit
-d963cb5, `results/threads_v0.2.7_d963cb5/`), DIA-NN and OpenSWATH from the cb466f0 series with unchanged binaries
+**Runtime vs threads**, Astral run 01, shared tuned library (82,333 precursors, all fragments); ours V0.2.11
+(`results/v0.2.11/threads/`), DIA-NN and OpenSWATH from the cb466f0 series with unchanged binaries
 (`results/threads_cb466f0/`):
 
 ![Thread scaling](figures/thread_scaling.png)
 
 | threads | ours A (defaults) | ours B (OpenSWATH rules) | DIA-NN 1.7.12 | OpenSwathWorkflow |
 |---|---|---|---|---|
-| 1 | 14.6 s / 2.3 GiB | 12.0 s / 2.4 GiB | – | – |
-| 2 | 6.8 s | 6.5 s | – | – |
-| 4 | 4.2 s / 2.3 GiB | 4.0 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
-| 8 | 2.3 s | 2.4 s | 59 s | 189 s |
-| 16 | 1.7 s | 1.6 s | 34 s | 183 s |
-| 32 | 1.3 s | 1.2 s | 26 s | 183 s |
-| 64 | 1.3 s / 2.6 GiB | 1.2 s / 2.6 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
+| 1 | 12.5 s / 2.3 GiB | 12.0 s / 2.4 GiB | – | – |
+| 2 | 6.8 s | 6.6 s | – | – |
+| 4 | 4.0 s / 2.4 GiB | 4.0 s / 2.4 GiB | 115 s / 1.7 GiB | 227 s / 10.5 GiB |
+| 8 | 2.6 s | 2.3 s | 59 s | 189 s |
+| 16 | 1.6 s | 1.6 s | 34 s | 183 s |
+| 32 | 1.3 s | 1.3 s | 26 s | 183 s |
+| 64 | 1.4 s / 2.6 GiB | 1.2 s / 2.7 GiB | 27 s / 3.3 GiB | 182 s / 14.1 GiB |
 
-Ours is 28× faster than DIA-NN at 4 threads and 20–21× from 16 threads up, and 55–149× faster than OpenSWATH.
-Ours flattens beyond 32 threads at this library size: the tool's own stages take 0.6 s at 64 threads (ingest
-0.24 s, calibration 0.04 s, extraction 0.34 s; tool total 0.93 s), the remaining 0.3–0.4 s is process start-up and
+Ours is 29× faster than DIA-NN at 4 threads and 19–22× from 16 threads up, and 57–147× faster than OpenSWATH.
+Ours flattens beyond 32 threads at this library size: the tool's own stages take 0.7 s at 64 threads (ingest
+0.25 s, calibration 0.05 s, extraction 0.36 s; tool total 0.98 s), the remaining 0.4 s is process start-up and
 teardown; B, which skips the calibration, is 0.1 s faster. OpenSWATH stops scaling at 8 threads while its memory
 grows to 14 GiB. Ours read the inputs from local disk, the references from the network file system (Appendix C);
 the references were not run below 4 threads. Against the cb466f0 series the V0.2.7 ingest changes are within the
-run-to-run spread on Linux (64 threads: 1.44 → 1.28 s; 1 thread: 13.8 → 14.6 s at a higher node load), as expected:
-libstdc++ never had the small-read problem described for the laptop below.
+run-to-run spread on Linux (64 threads: 1.44 s for cb466f0, 1.28 s for V0.2.7 at a load of about 50, 1.35 s for
+V0.2.11 on the quiet node), as expected: libstdc++ never had the small-read problem described for the laptop below.
 
-**Full libraries**, Astral run 01, 64 threads, top 6 fragments, V0.2 defaults, V0.2.7 binary
-(`results/full_v0.2.7_318e5aa/`; the directory is named after the checkout, the binary is d963cb5):
+**Full libraries**, Astral run 01, 64 threads, top 6 fragments, V0.2 defaults, V0.2.11 binary
+(`results/v0.2.11/full/`):
 
 | library | tool total (wall incl. start-up), 2 runs | ingest | calibration | extraction | peak RSS | traces |
 |---|---|---|---|---|---|---|
-| human, 3.49 M precursors | 5.7–5.8 s (6.2–6.7 s) | 0.3 s | 0.4–0.6 s | 3.3–3.8 s | 3.8 GiB | 31.3 M |
-| entrapment, 7.0 M precursors | 8.0–9.3 s (8.4–9.8 s) | 0.3 s | 0.9 s | 5.3–6.7 s | 4.8 GiB | 63.0 M |
+| human, 3.49 M precursors | 5.0–5.1 s (5.4–5.5 s) | 0.3 s | 0.4–0.5 s | 2.9–3.1 s | 3.8 GiB | 31.3 M |
+| entrapment, 7.0 M precursors | 8.1–8.4 s (8.6–8.8 s) | 0.3 s | 0.9–1.0 s | 5.4–5.7 s | 4.7 GiB | 63.0 M |
 
-Measured on `dax` at a load of 45–55 (0.12–0.14 per hardware thread); cb466f0 had measured 5.6–5.9 s and 9.1 s at a
-load of about 21, and 6d26c49 8.6–9.0 s on the entrapment library on a quieter node (dossier §4). The thread table
+Measured on `dax` at a load of 5–11; V0.2.7 had measured 5.7–5.8 s and 8.0–9.3 s at a load of 45–55, cb466f0
+5.6–5.9 s and 9.1 s at a load of about 21, and 6d26c49 8.6–9.0 s on the entrapment library on a quieter node (dossier §4). The thread table
 above uses `/usr/bin/time` wall clock, this one the tool's own total.
 
-**diaPASEF** (A01, 4.15 M-precursor library, 32 threads, `results/diapasef/odia_A01.log`): 45 s wall, 17 GB peak
-RSS (13.8 GB with the regenerated library, `odia_A01_regenlib.log`), 36.7 M traces; the mzPeak per-spectrum read
-and the mobility collapse take 26 s of it, the calibration 5 s, the extraction 13 s.
+**diaPASEF** (A01 and B01, 4.15 M-precursor library, 32 threads, V0.2.11, `results/v0.2.11/diapasef/odia_*_all.log`):
+44 s each (45 s wall incl. start-up), 15.5 GiB peak RSS, 36.7 M traces; the mzPeak per-spectrum read and the mobility
+collapse take 27 s of it, the calibration 4–5 s, the extraction 12 s. The peak falls in the ingest, while the
+calibration panel is extracted concurrently, and varies between runs (13.5–16.5 GiB over the archived runs).
 
 **On a laptop** (MacBook Pro, Apple M4 Max: 12 performance + 4 efficiency cores, no SMT, 128 GiB, macOS 26.6,
 inputs on the internal SSD, Homebrew libomp; Appendix C). Same run and shared library, V0.2.7 binary (318e5aa,
@@ -330,7 +336,7 @@ inputs on the internal SSD, Homebrew libomp; Appendix C). Same run and shared li
 
 The full 7.0 M-precursor library takes 14.2–15.3 s at 16 threads in 4.0 GiB (ingest 0.3 s, extraction about
 9.6 s at 11.6 active cores, the rest calibration panel and final drain). Per core the laptop is the faster
-machine, and in absolute terms it now matches the node: 0.70 s at 16 cores against 0.93 s at 64 threads on the
+machine, and in absolute terms it now matches the node: 0.70 s at 16 cores against 0.98 s at 64 threads on the
 node (OpenSWATH: 120 s against 183 s); ours A speeds up 8.9× from 1 to 16 threads.
 
 The laptop's V0.2.3 series (3.3 s at 16 threads, 41 s at 1 thread, 19–23 s of system time) exposed what V0.2.7
@@ -482,6 +488,12 @@ each tool's format come from `scripts/lib_to_diann17_tsv.py` (`--rt_scale 1`) an
 (`--rt_scale 60`). DIA-NN's XICs are converted with `scripts/diann17_xic_to_parquet.py`, OpenSWATH's with
 `TextExporter -xic:mode explode`; the pairwise metrics come from `scripts/compare_traces.py`.
 
+**V0.2.11 re-run (`results/v0.2.11/`).** `scripts/cluster_bench_v0211.sh` repeats every extraction of ours below with
+the V0.2.11 binary (`X=bin-releases/DIATraceExtractor-0.2.11`, sha256 85120b9d…; `STEPS` selects: 1 thread series,
+2 full libraries, 3 Astral A-V0.2/B with `scripts/same_traces.py` against the cb466f0 outputs, 4 diaPASEF, 5 Astral
+A-V0.1/P, 6 tolerance screens) and recomputes the comparisons against the archived DIA-NN and OpenSWATH traces.
+A-V0.1 is `-mz_tol 6 -mz_tol_ms1 2.114775 -calibration:mass_model constant` (the MS1 width of the archived run).
+
 **Astral, three-way comparison on the shared tuned library (§3, §4; `RECAL=tuned
 LIB=library/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet X=build-stream/DIATraceExtractor
 scripts/benchmark_refined.sh 01|02|03 64`, binary cbad9dd, A-V0.1 for ours A).** Run 01 shown; runs 02 and 03 differ only in the run and the library's
@@ -505,7 +517,7 @@ $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Hum
 ```
 
 **Astral, runtime vs threads (§6; `ODIA_ONLY=1 REF=results/threads scripts/bench_threads.sh results/threads_cb466f0 4 8 16 32 64`,
-binary d963cb5 = V0.2.7, `results/threads_v0.2.7_d963cb5/`; the cb466f0 series in `results/threads_cb466f0/`).** `$t` = 1 … 64; DIA-NN and OpenSWATH as above with `--threads $t` /
+binary V0.2.11, `results/v0.2.11/threads/`; V0.2.7 in `results/threads_v0.2.7_d963cb5/`, the cb466f0 series in `results/threads_cb466f0/`).** `$t` = 1 … 64; DIA-NN and OpenSWATH as above with `--threads $t` /
 `-threads $t` (`results/threads/`, unchanged binaries, reading the mzML from `benchmark-data/` on the network file
 system rather than `$S`).
 
@@ -517,14 +529,16 @@ $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobenc
 $X ... -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads $t -out $S/out/t$t/odiaB.parquet
 ```
 
-**Astral, full libraries (§6; `results/full_cb466f0/`, binary cb466f0, top 6 fragments, 2 runs each).**
+**Astral, full libraries (§6; `results/v0.2.11/full/`, binary V0.2.11, top 6 fragments, 2 runs each; earlier:
+`results/full_v0.2.7_318e5aa/`, `results/full_cb466f0/`).**
 
 ```bash
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/human_UP000005640_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_human.parquet
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet -rt_mode minutes -threads 64 -out $S/out/full_entrap.parquet
 ```
 
-**Astral, trace galleries and the V0.2 pair table (§3; `results/gallery_v02/`, binary cb466f0; rule B as
+**Astral, trace galleries and the V0.2 pair table (§3; `results/gallery_v02/`, binary cb466f0, traces bit-identical
+to V0.2.11's, `results/v0.2.11/astral/same_as_cb466f0.txt`; rule B as
 `-scheme B`, §2).**
 
 ```bash
@@ -552,7 +566,7 @@ $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/refined/pro
 $X ... -calibration:mass_model constant -out astral01_const.parquet
 ```
 
-**Tolerance screen (§5; `scripts/tolerance_screen.py`, binary 4934ea5).** The script runs the extractor once per k
+**Tolerance screen (§5; `scripts/tolerance_screen.py`, binary V0.2.11 via `--extractor`, `results/v0.2.11/tolscreen/`; first run with 4934ea5).** The script runs the extractor once per k
 with `-mz_tol k*sigma_ms2 -mz_tol_ms1 k*sigma_ms1 -top_fragments 0 -ids ...` and scores the traces.
 
 ```bash
@@ -564,7 +578,7 @@ tools/pyenv/bin/python scripts/tolerance_screen.py --run $S/input/diapasef/A01.m
 tools/pyenv/bin/python scripts/plot_tolerance_screen.py docs/figures/tolerance_screen "Astral run 01=results/tolscreen/astral_run01.tsv:6.4" "timsTOF A01=results/tolscreen/timstof_A01.tsv:4.4"
 ```
 
-**timsTOF diaPASEF (§3, §6; `results/diapasef/`).** `.d` to mzPeak with mzpeak-convert 0.18.0; the mzML for DIA-NN is
+**timsTOF diaPASEF (§3, §6; `results/v0.2.11/diapasef/`, earlier runs and DIA-NN in `results/diapasef/`).** `.d` to mzPeak with mzpeak-convert 0.18.0; the mzML for DIA-NN is
 this tool's export of the loaded grid; `B01` identical with the B-condition files.
 
 ```bash
@@ -573,10 +587,11 @@ $X -in $S/input/diapasef/A01.mzpeak -out_mzml $S/input/diapasef/A01.mzML -thread
 $DIANN --f $S/input/diapasef/A01.mzML --lib library/diann17/hye_timstof.tsv --out report.tsv --temp temp --threads 32 --verbose 1 --qvalue 0.01 --xic 60
 # ours, all precursors (cost figures; `-out_calibration` for the anchors), then on DIA-NN's IDs at the defaults (4 sigma) and at DIA-NN's accuracy
 $X -in $S/input/diapasef/A01.mzpeak -lib library/hye_timstof.parquet -rt_mode auto -threads 32 -out odia_A01.parquet -out_stats odia_A01.json -out_calibration odia_A01.anchors.tsv
-$X -in $S/input/diapasef/A01.mzpeak -lib library/hye_timstof.parquet -rt_mode auto -ids results/diapasef/diann_A01_ids.txt -threads 32 -out odia_A01_idsdef.parquet
-$X ... -ids results/diapasef/diann_A01_ids.txt -mz_tol 11.8 -mz_tol_ms1 11.8 -threads 32 -out odia_A01_idsP.parquet
+$X -in $S/input/diapasef/A01.mzpeak -lib library/hye_timstof.parquet -rt_mode auto -ids results/diapasef/diann_A01_ids.txt -top_fragments 0 -threads 32 -out odia_A01_idsdef.parquet
+$X ... -ids results/diapasef/diann_A01_ids.txt -top_fragments 0 -mz_tol 11.8 -mz_tol_ms1 11.8 -threads 32 -out odia_A01_idsP.parquet
+$X ... -ids results/diapasef/diann_A01_ids.txt -top_fragments 0 -calibration:mass_model constant -threads 32 -out odia_A01_idsconst.parquet
 # MS1 window probe around our offset (+-4, 7, 20, 30 ppm) and the uncorrected-centre test that explains DIA-NN's MS1 export
-$X ... -ids results/diapasef/diann_A01_ids.txt -mz_tol 11.8 -mz_tol_ms1 7 -out odia_A01_ms1_7.parquet
+$X ... -ids results/diapasef/diann_A01_ids.txt -top_fragments 0 -mz_tol 11.8 -mz_tol_ms1 7 -out odia_A01_ms1_7.parquet
 $X -in $S/input/diapasef/A01.mzpeak -lib library/hye_timstof.parquet -rt_mode auto -mass_calibration off -mz_offset -4.6 -mz_tol 10.8 -mz_offset_ms1 0 -mz_tol_ms1 11.8 \
    -ids results/diapasef/diann_A01_ids.txt -threads 24 -out timstof_A01_ms1raw11.8.parquet
 ```

@@ -9,3 +9,4 @@ results/
 *.parquet
 *.log
 build-stream/
+bin-releases/
