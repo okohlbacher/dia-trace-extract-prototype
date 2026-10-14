@@ -1,4 +1,4 @@
-name: release
+name: build and release
 
 # Builds OpenMS (develop, pinned in ci/openms.lock, vcpkg dependencies) and DIATraceExtractor on every release
 # platform, runs the tests and a clean-environment smoke test of the installed tree, packages it, and publishes
@@ -10,9 +10,17 @@ name: release
 # and ccache make later runs 10-20 min. The Linux arm64 and Windows arm64 runners are not available on every
 # plan and their toolchains are less travelled, so those two jobs do not block the release (continue-on-error);
 # their packages are published when they succeed.
+#
+# Pushes to main and pull requests run the same build, tests, install, smoke tests and packaging on Linux x86_64
+# only (all platforms through workflow_dispatch); nothing is published. A tag publishes the packages, a SHA256SUMS
+# file and a build provenance attestation for every file (`gh attestation verify FILE -R OWNER/REPO`).
 on:
   push:
     tags: ['V[0-9]*']
+    branches: [main]
+    paths-ignore: ['docs/**', 'results/**', '**.md', 'scripts/**', 'library/**']
+  pull_request:
+    paths-ignore: ['docs/**', 'results/**', '**.md', 'scripts/**', 'library/**']
   workflow_dispatch:
     inputs:
       ref:
@@ -29,7 +37,12 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
+
+# a newer push to the same branch or pull request supersedes a running build; tags always run to the end
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   plan:
@@ -41,9 +54,11 @@ jobs:
       - id: m
         shell: bash
         run: |
-          python3 - "${{ github.event.inputs.platforms }}" >> "$GITHUB_OUTPUT" <<'EOF'
+          python3 - "${{ github.event.inputs.platforms }}" "${{ github.event_name }}" "${{ github.ref_type }}" >> "$GITHUB_OUTPUT" <<'EOF'
           import json, sys
           want = [p.strip() for p in sys.argv[1].split(",") if p.strip()]
+          if not want and (sys.argv[2] == "pull_request" or (sys.argv[2] == "push" and sys.argv[3] != "tag")):
+              want = ["linux-x86_64"]   # continuous integration: one platform
           rows = [
             {"name": "linux-x86_64",   "os": "ubuntu-24.04",     "preset": "linux-x64-release",   "triplet": "x64-linux-dynamic",               "experimental": False},
             {"name": "linux-aarch64",  "os": "ubuntu-24.04-arm", "preset": "linux-arm64-release", "triplet": "arm64-linux-dynamic",             "experimental": False},
@@ -81,7 +96,7 @@ jobs:
             echo "VCPKG_INSTALLED=$GITHUB_WORKSPACE/OpenMS/build/${{ matrix.preset }}/vcpkg_installed/${{ matrix.triplet }}" >> "$GITHUB_ENV"
           fi
       - name: Check out the tool
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: tool
           ref: ${{ github.event.inputs.ref || github.ref }}
@@ -140,7 +155,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: choco install -y --no-progress cmake ninja
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           # Windows arm64: x64 Python under emulation, for which pyarrow has wheels (the comparison tests need it)
@@ -154,7 +169,7 @@ jobs:
       # ---- caches: vcpkg's binary archives and ccache ----
       - name: vcpkg binary cache (restore)
         id: vcpkg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/vcpkg/archives
@@ -182,7 +197,7 @@ jobs:
                 -DENABLE_UPDATE_CHECK=OFF -DENABLE_DOCS=OFF -DOPENMS_BUILD_TESTS=OFF "${EXTRA[@]}"
       - name: vcpkg binary cache (save; also when a later step fails)
         if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.cache/vcpkg/archives
@@ -381,21 +396,26 @@ jobs:
         if: always() && steps.signing.outputs.keychain != ''
         shell: bash
         run: security delete-keychain "${{ steps.signing.outputs.keychain }}" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.name }}
           path: ${{ runner.temp }}/out/*
           if-no-files-found: error
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
   publish:
     name: publish on the release
     needs: build
     if: ${{ always() && (startsWith(github.ref, 'refs/tags/V') || github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # the release
+      id-token: write        # the attestation's signing certificate
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { path: tool, ref: '${{ github.event.inputs.ref || github.ref }}' }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: packages, merge-multiple: true }
       - name: Homebrew formula from the macOS tarball
         shell: bash
@@ -407,8 +427,15 @@ jobs:
             python3 tool/ci/formula.py "$V" "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$MAC")" "$MAC" packages/diatraceextractor.rb
           fi
           ls -la packages
+      - name: Checksums
+        shell: bash
+        run: cd packages && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Build provenance attestation for every file
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: packages/SHA256SUMS
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.ref || github.ref_name }}
           files: packages/*
@@ -420,3 +447,5 @@ jobs:
             `bin/DIATraceExtractor` (Linux, macOS: a launcher that finds the bundled libraries; Windows: `bin\DIATraceExtractor.exe`).
             macOS: the `.dmg` holds the same folder; `diatraceextractor.rb` is the Homebrew formula for this release
             (`brew install --formula diatraceextractor.rb`, or through the tap `okohlbacher/odia`).
+            `SHA256SUMS` lists every file's checksum (`sha256sum -c SHA256SUMS --ignore-missing`); each file carries a
+            build provenance attestation (`gh attestation verify FILE -R ${{ github.repository }}`).

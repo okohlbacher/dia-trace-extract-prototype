@@ -26,6 +26,11 @@ the OpenMS and vcpkg libraries it links and OpenMS's shared data. Unpack and run
   `brew tap okohlbacher/odia && brew install diatraceextractor` (the tap tracks the latest release).
 - **Windows**: `DIATraceExtractor-<version>-windows-x86_64.zip`, `-windows-arm64.zip` (self-contained: the Visual C++
   and OpenMP runtimes are bundled; not code-signed yet, so SmartScreen warns on first start).
+- **Verify** (from V0.2.12): `sha256sum -c SHA256SUMS --ignore-missing` against the release's `SHA256SUMS`, and the
+  build provenance with `gh attestation verify <file> -R okohlbacher/dia-trace-extract-prototype`.
+
+Pushes to main and pull requests run the same workflow (build, tests, install, smoke tests, packaging) on Linux
+x86_64; nothing is published from them.
 
 The OpenMS commit the releases are built against is pinned in `ci/openms.lock`; `ci/package.sh` and the install
 rules at the end of `CMakeLists.txt` make the folder (CMake's runtime-dependency resolution collects the libraries).

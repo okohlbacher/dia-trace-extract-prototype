@@ -1,11 +1,12 @@
-# DIATraceExtractor V0.2.11: release report (2026-10-14)
+# DIATraceExtractor V0.2.12: release report (2026-10-14)
 
-**Versions.** This report accompanies release **V0.2.11** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+**Versions.** This report accompanies release **V0.2.12** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
 The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
 `-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
-and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.11 changed no
-source file, only the Windows build and the install rules, and added binary packages for five platforms (Appendix A).
-**Every cluster measurement was re-run with the V0.2.11 binary** (`results/v0.2.11/`,
+and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.12 changed no
+source file, only the Windows build, the install rules and the release workflow, and added binary packages for five
+platforms with checksums and provenance attestations (Appendix A).
+**Every cluster measurement was re-run with the V0.2.11 binary**, the same source as V0.2.12 (`results/v0.2.11/`,
 `scripts/cluster_bench_v0211.sh`, on `dax` on 2026-10-14): the thread series, the full libraries, the Astral pair
 table with all four configurations of ours, the diaPASEF comparisons and costs, and the tolerance screens. Its
 Astral traces (A-V0.2 and B) are bit-identical to those of cb466f0 (V0.2), on which the galleries and the §4 rule
@@ -368,7 +369,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.11` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.12` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -380,19 +381,22 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.11`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.12`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
-fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
 **Binary releases.** Every tag is built, tested (ctest plus an extraction from the installed folder in a clean
-environment) and packaged by `.github/workflows/release.yml` against the OpenMS commit pinned in `ci/openms.lock`.
+environment) and packaged by `.github/workflows/release.yml` against the OpenMS commit pinned in `ci/openms.lock`;
+pushes to main and pull requests run the same on Linux x86_64. Each release lists the files' checksums in
+`SHA256SUMS` and carries a build provenance attestation per file (`gh attestation verify FILE -R
+okohlbacher/dia-trace-extract-prototype`).
 The GitHub release carries self-contained folders with the tool, the libraries it links and OpenMS's shared data:
 
 | platform | package | run |
 |---|---|---|
-| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.11-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
+| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.12-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
 | macOS Apple silicon | `…-macos-arm64.tar.gz`, `.dmg` | `bin/DIATraceExtractor` |
 | Windows x86_64, arm64 | `…-windows-<arch>.zip` | `bin\DIATraceExtractor.exe` |
 
@@ -413,7 +417,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.11
+git checkout V0.2.12
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(DIATraceExtractor VERSION 0.2.11 LANGUAGES CXX)
+project(DIATraceExtractor VERSION 0.2.12 LANGUAGES CXX)
 
 # ODIA-V3 DIA trace extractor: a standalone TOPP-style tool built against an
 # OpenMS (>= 3.7, develop) build or install. Configure with

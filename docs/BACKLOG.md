@@ -77,12 +77,15 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
-- **Release CI (V0.2.6–V0.2.11, 2026-10-13/14):** `.github/workflows/release.yml` builds OpenMS (pinned, `ci/openms.lock`) and
+- **Release CI (V0.2.6–V0.2.12, 2026-10-13/14):** `.github/workflows/release.yml` builds OpenMS (pinned, `ci/openms.lock`) and
   the tool on Linux x86_64/aarch64, macOS arm64 and Windows x86_64/arm64; all five are required, run ctest and an
   extraction from the installed folder in a clean environment, and package self-contained folders (tar.gz, dmg, zip)
   plus a Homebrew formula. Done: repository and tap `okohlbacher/homebrew-odia` public (`ci/publish_formula.sh TAG`
   after each release); Windows packages self-contained (VC++ runtime, vcomp140), arm64 7/7 tests; macOS package
-  relocatable (@rpath) and, from V0.2.11, signed with the Developer ID, notarized and the `.dmg` stapled. Open:
+  relocatable (@rpath) and, from V0.2.11, signed with the Developer ID, notarized and the `.dmg` stapled. V0.2.12: the workflow also runs on pushes to
+  main and pull requests (Linux x86_64; docs/scripts/results changes skipped), `SHA256SUMS` and a build provenance
+  attestation per release file, actions on Node 24 (checkout v7, cache v6, setup-python v7, artifacts v7/v8,
+  action-gh-release v3). Open:
   - **Windows code signing**: needs a SignPath project for this repository and `SIGNPATH_API_TOKEN`/`SIGNPATH_ORG_ID`
     (wire like BALL's: zip artifact configuration, test-signing policy first).
   - Publish the tap formula from the workflow (needs a tap-scoped token as a secret) instead of by hand.
