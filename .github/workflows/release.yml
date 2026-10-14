@@ -374,6 +374,28 @@ jobs:
       - name: Package
         shell: bash
         run: bash tool/ci/package.sh "$RUNNER_TEMP/stage" "$name" "$RUNNER_TEMP/out"
+      # Homebrew rewrites the install names of the bundled dylibs and re-signs them ad hoc; the signed tool has to
+      # accept that (V0.2.13 did not: "different Team IDs"). Install the tarball exactly as the tap does and run it.
+      - name: "macOS: install the tarball with Homebrew (local tap, as okohlbacher/odia does) and run it"
+        if: runner.os == 'macOS'
+        shell: bash
+        env: { HOMEBREW_NO_AUTO_UPDATE: 1, HOMEBREW_NO_INSTALL_FROM_API: 1, HOMEBREW_NO_ANALYTICS: 1 }
+        run: |
+          set -euo pipefail
+          TGZ="$RUNNER_TEMP/out/$name.tar.gz"
+          brew tap-new --no-git odia/ci > /dev/null
+          F="$(brew --repository)/Library/Taps/odia/homebrew-ci/Formula/diatraceextractor.rb"
+          python3 tool/ci/formula.py "$version" "file://$TGZ" "$TGZ" "$F"
+          brew install --formula odia/ci/diatraceextractor
+          X="$(brew --prefix)/bin/DIATraceExtractor"
+          "$X" --help 2>&1 | grep -E "^Version: ${version//./\.} " || { "$X" --help 2>&1 | tail -20; exit 1; }
+          TD="$GITHUB_WORKSPACE/tool/testdata/openms"; O="$RUNNER_TEMP/brew-smoke"; mkdir -p "$O"
+          "$X" -in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol 50 \
+               -mz_tol_ms1 50 -top_fragments 0 -scheme B -threads 2 -out "$O/smoke.parquet" -out_tsv "$O/smoke.tsv" > brew-smoke.log 2>&1 \
+            || { cat brew-smoke.log; exit 1; }
+          [ $(wc -l < "$O/smoke.tsv") -gt 100 ] || { echo "::error::Homebrew-installed tool wrote no traces"; cat brew-smoke.log; exit 1; }
+          echo "Homebrew install runs: $(grep -E '^Written:' brew-smoke.log)"
+          brew uninstall --formula diatraceextractor && brew untap odia/ci
       - name: "macOS: sign, notarize and staple the disk image"
         if: steps.sign.outputs.notarize == 'true'
         timeout-minutes: 60

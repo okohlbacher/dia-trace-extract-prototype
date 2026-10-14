@@ -5,11 +5,14 @@
 #   - the tool gets the rpath @executable_path/../lib, every dylib @loader_path, every dylib id is @rpath/<name>;
 #   - nothing outside the tree is referenced afterwards except /usr/lib and /System (checked);
 #   - every Mach-O is signed: with MACOS_SIGN_IDENTITY (+ MACOS_KEYCHAIN) using the hardened runtime and a secure
-#     timestamp, as notarization requires; without, ad hoc (arm64 needs a valid signature after install_name_tool).
+#     timestamp, as notarization requires; without, ad hoc (arm64 needs a valid signature after install_name_tool);
+#   - the tool carries ci/entitlements.plist (library validation off): Homebrew re-signs the bundled dylibs ad hoc when
+#     it rewrites their install names, and a Developer ID process with library validation refuses to map them.
 # The hardened runtime ignores DYLD_* variables, so the tree must resolve its libraries without them.
 # usage: macos_relocate_sign.sh TREE
 set -euo pipefail
 T=${1:?tree}
+ENT="$(cd "$(dirname "$0")" && pwd)/entitlements.plist"
 LIB="$T/lib"
 EXE="$T/libexec/DIATraceExtractor"
 [ -x "$EXE" ] || { echo "::error::$EXE missing"; exit 1; }
@@ -65,7 +68,8 @@ else
 fi
 # libraries first, the executable last (its signature covers nothing else, but the order matches the dependency order)
 for f in "${machos[@]:1}"; do sign "$f"; done
-sign "$EXE"
+if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then sign --entitlements "$ENT" "$EXE"; else sign "$EXE"; fi
 for f in "${machos[@]}"; do codesign --verify --strict "$f" || { echo "::error::signature of $f does not verify"; exit 1; }; done
 codesign -dv --verbose=2 "$EXE" 2>&1 | grep -E "Authority|Timestamp|flags|TeamIdentifier" || true
+codesign -d --entitlements - "$EXE" 2>/dev/null | grep -A1 library-validation || true
 echo "relocated and signed ${#machos[@]} Mach-O files"

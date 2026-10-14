@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements of the signed tool (hardened runtime). Library validation is off because Homebrew rewrites the
+     install names of the bundled dylibs on installation and re-signs them ad hoc; with validation on, the Developer ID
+     signed tool refuses to load them ("different Team IDs"). -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
