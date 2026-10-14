@@ -20,8 +20,8 @@ the OpenMS and vcpkg libraries it links and OpenMS's shared data. Unpack and run
 
 - **Linux**: `DIATraceExtractor-<version>-linux-x86_64.tar.gz` (built on Ubuntu 24.04; needs glibc >= 2.39), `-linux-aarch64`.
 - **macOS**: `DIATraceExtractor-<version>-macos-arm64.tar.gz` or the same folder as a `.dmg` (relocatable: every
-  library is bundled and found relative to the tool; signed with the project's Developer ID and notarized when the
-  release workflow has the signing secrets, ad hoc otherwise); Homebrew:
+  library is bundled and found relative to the tool; signed with the project's Developer ID and notarized from
+  V0.2.11 on, the `.dmg` stapled); Homebrew:
   `brew install --formula diatraceextractor.rb` with the formula attached to the release, or
   `brew tap okohlbacher/odia && brew install diatraceextractor` (the tap tracks the latest release).
 - **Windows**: `DIATraceExtractor-<version>-windows-x86_64.zip`, `-windows-arm64.zip` (self-contained: the Visual C++
