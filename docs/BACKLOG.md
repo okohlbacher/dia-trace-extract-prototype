@@ -85,7 +85,10 @@
   relocatable (@rpath) and, from V0.2.11, signed with the Developer ID, notarized and the `.dmg` stapled. V0.2.12: the workflow also runs on pushes to
   main and pull requests (Linux x86_64; docs/scripts/results changes skipped), `SHA256SUMS` and a build provenance
   attestation per release file, actions on Node 24 (checkout v7, cache v6, setup-python v7, artifacts v7/v8,
-  action-gh-release v3). Open:
+  action-gh-release v3). V0.2.14: the signed tool runs after a Homebrew install (V0.2.11–0.2.13 aborted: Homebrew
+  re-signs the rewritten dylibs ad hoc, the hardened runtime refused them; entitlement disable-library-validation;
+  and OpenMS's libraries kept the build's rpath to Homebrew's libomp, loading a second OpenMP runtime; removed),
+  and CI installs the tarball through a local tap and extracts traces. Open:
   - **Windows code signing**: needs a SignPath project for this repository and `SIGNPATH_API_TOKEN`/`SIGNPATH_ORG_ID`
     (wire like BALL's: zip artifact configuration, test-signing policy first).
   - Publish the tap formula from the workflow (needs a tap-scoped token as a secret) instead of by hand.
