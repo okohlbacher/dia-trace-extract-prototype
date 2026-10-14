@@ -3,6 +3,9 @@
 #   - every non-system dependency whose file is bundled in lib/ is loaded as @rpath/<name> (the OpenMS build
 #     links Homebrew's libomp by absolute path, /opt/homebrew/opt/libomp/lib/libomp.dylib);
 #   - the tool gets the rpath @executable_path/../lib, every dylib @loader_path, every dylib id is @rpath/<name>;
+#   - every absolute rpath from the build is removed: OpenMS's libraries carried /opt/homebrew/opt/libomp/lib, which
+#     dyld searches before @loader_path, so on a Mac with Homebrew's libomp they loaded that copy next to the bundled
+#     one ("OMP: Error #15 ... libomp.dylib already initialized", V0.2.13 from the tap);
 #   - nothing outside the tree is referenced afterwards except /usr/lib and /System (checked);
 #   - every Mach-O is signed: with MACOS_SIGN_IDENTITY (+ MACOS_KEYCHAIN) using the hardened runtime and a secure
 #     timestamp, as notarization requires; without, ad hoc (arm64 needs a valid signature after install_name_tool);
@@ -35,6 +38,10 @@ for f in "${machos[@]}"; do
       [ "$d" = "@rpath/$base" ] || install_name_tool -change "$d" "@rpath/$base" "$f"
     fi
   done < <(deps "$f")
+  # absolute rpaths from the build machine (one deletion per occurrence)
+  while IFS= read -r r; do
+    case "$r" in @*) ;; *) install_name_tool -delete_rpath "$r" "$f" ;; esac
+  done < <(rpaths "$f")
   case "$f" in
     *.dylib)
       install_name_tool -id "@rpath/$(basename "$f")" "$f"
@@ -56,6 +63,9 @@ for f in "${machos[@]}"; do
       *) echo "::error::$f still references $d"; bad=1 ;;
     esac
   done < <(deps "$f")
+  while IFS= read -r r; do
+    case "$r" in @*) ;; *) echo "::error::$f still has the absolute rpath $r"; bad=1 ;; esac
+  done < <(rpaths "$f")
 done
 [ $bad -eq 0 ] || exit 1
 
