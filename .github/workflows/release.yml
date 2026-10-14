@@ -431,6 +431,8 @@ jobs:
           if [ -n "$MAC" ]; then
             python3 tool/ci/formula.py "$V" "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$MAC")" "$MAC" packages/diatraceextractor.rb
           fi
+          # the release report travels with the release, so it is covered by the checksums and the attestation
+          [ -f tool/docs/10-release-report.pdf ] && cp tool/docs/10-release-report.pdf "packages/DIATraceExtractor-$V-release-report.pdf"
           ls -la packages
       - name: Checksums
         shell: bash
@@ -450,6 +452,7 @@ jobs:
           body: |
             Binary packages built by the release workflow (OpenMS develop at the commit in `ci/openms.lock`): unpack and run
             `bin/DIATraceExtractor` (Linux, macOS: a launcher that finds the bundled libraries; Windows: `bin\DIATraceExtractor.exe`).
+            `DIATraceExtractor-<version>-release-report.pdf` is the release report (benchmarks, methods, reproduction).
             macOS: the `.dmg` holds the same folder; `diatraceextractor.rb` is the Homebrew formula for this release
             (`brew install --formula diatraceextractor.rb`, or through the tap `okohlbacher/odia`).
             `SHA256SUMS` lists every file's checksum (`sha256sum -c SHA256SUMS --ignore-missing`); each file carries a
