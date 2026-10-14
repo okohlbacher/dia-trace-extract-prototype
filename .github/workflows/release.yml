@@ -389,7 +389,12 @@ jobs:
           DMG="$RUNNER_TEMP/out/$name.dmg"
           codesign --force --timestamp --keychain "$MACOS_KEYCHAIN" --sign "$MACOS_SIGN_IDENTITY" "$DMG"
           bash tool/ci/notarize.sh "$DMG"
-          xcrun stapler staple "$DMG"
+          # stapling fetches the ticket from Apple's CDN, which drops connections now and then (error 68); retry
+          for attempt in 1 2 3 4 5; do
+            xcrun stapler staple "$DMG" && break
+            [ $attempt -eq 5 ] && { echo "::error::stapling failed $attempt times"; exit 1; }
+            echo "staple attempt $attempt failed; retrying in $((attempt * 20)) s"; sleep $((attempt * 20))
+          done
           xcrun stapler validate "$DMG"
           spctl -a -vv -t open --context context:primary-signature "$DMG"
       - name: "macOS: remove the signing keychain"
