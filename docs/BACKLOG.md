@@ -77,10 +77,18 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
-- **Release CI (2026-10-13, V0.2.6):** `.github/workflows/release.yml` builds OpenMS (pinned) and the tool on Linux x86_64/aarch64,
-  macOS arm64, Windows x86_64/arm64, packages self-contained folders (tar.gz, dmg, zip) and a Homebrew formula. The
-  arm64 Linux and Windows jobs do not block the release. Open: code signing/notarization (macOS, Windows); a public
-  Homebrew tap only works while the release assets are downloadable without a token.
+- **Release CI (V0.2.6–V0.2.11, 2026-10-13/14):** `.github/workflows/release.yml` builds OpenMS (pinned, `ci/openms.lock`) and
+  the tool on Linux x86_64/aarch64, macOS arm64 and Windows x86_64/arm64; all five are required, run ctest and an
+  extraction from the installed folder in a clean environment, and package self-contained folders (tar.gz, dmg, zip)
+  plus a Homebrew formula. Done: repository and tap `okohlbacher/homebrew-odia` public (`ci/publish_formula.sh TAG`
+  after each release); Windows packages self-contained (VC++ runtime, vcomp140), arm64 7/7 tests; macOS package
+  relocatable (@rpath) and, from V0.2.11, signed with the Developer ID, notarized and the `.dmg` stapled. Open:
+  - **Windows code signing**: needs a SignPath project for this repository and `SIGNPATH_API_TOKEN`/`SIGNPATH_ORG_ID`
+    (wire like BALL's: zip artifact configuration, test-signing policy first).
+  - Publish the tap formula from the workflow (needs a tap-scoped token as a secret) instead of by hand.
+  - Linux packages need glibc ≥ 2.39 (Ubuntu 24.04 runners); an older-glibc build (manylinux container) if users need it.
+  - Signed tarball/Homebrew installs start slowly the first time (online check of each bundled dylib); a stapled `.pkg`
+    would avoid it.
 - **Laptop benchmark (2026-10-13, MacBook Pro M4 Max, on battery; `docs/12-macos-benchmark-note.md`, report §6):** done and
   merged (V0.2.4). Three defects fixed: `--help` abort (unregistered subsection), exit-time abort under libc++ (pool never
   destroyed), `-threads 1` on the serial parser (70 → 14 s on the node). Open: re-run the laptop's 1-thread point. **Resolved 2026-10-13 (laptop analysis, commit df71463 on branch `ingest-perf` (rebased on V0.2.6; FileReader in the platform layer),
@@ -90,7 +98,7 @@
   chunks hold metadata only). M4 Max 16 threads 3.3 → 0.70 s, 1 thread 41 → 6.5 s, byte-identical output. Cluster re-measured with V0.2.7 on dax (within the Linux run-to-run spread, report §6); laptop re-measured on mains (0.70 s at 16 threads, 6.2 s at 1). Open: full-library extraction at 11.6/16 cores and ~3.9 s outside ingest/extraction.
 - **Full trace export for the group (2026-10-12):** extract all mass traces for every arm (ours A-V0.2, ours B, P; DIA-NN 1.7.12
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
-  put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Running: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (2026-10-13).
+  put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Done 2026-10-13: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (179 GB, layout in its README.txt). Open: share with the group.
 - Push the DIALibGen build fix (tools/DIALibGen, branch compact-parquet-plain-strings, 6f26790) and open its PR.
 - Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).

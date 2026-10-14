@@ -1,10 +1,12 @@
-# DIATraceExtractor V0.2.7: release report (2026-10-13)
+# DIATraceExtractor V0.2.11: release report (2026-10-14)
 
-**Versions.** This report accompanies release **V0.2.7** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+**Versions.** This report accompanies release **V0.2.11** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
 The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
-`-scheme B` preset, macOS and Windows support with release packages, three defect fixes, a faster mzML ingest
-(V0.2.7: positional reads and an unbounded in-order commit, output byte-identical) and this report's corrections,
-and every number here was re-checked against archived runs. Which binary produced which measurement is stated at
+`-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
+and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.11 changed no
+source file, only the Windows build and the install rules, and added binary packages for five platforms (Appendix A).
+The V0.2.7 measurements therefore hold for V0.2.11 on Linux and macOS, and every number here was re-checked against
+archived runs. Which binary produced which measurement is stated at
 each table and in Appendix C: the Astral and diaPASEF quality tables come from cb466f0 (V0.2); the §6 speed
 tables (cluster thread series, full libraries, laptop) were re-measured with the V0.2.7 binary (d963cb5 on the
 cluster, 318e5aa on the laptop; the two differ only in the floating-point parser used on Apple's libc++, whose
@@ -360,7 +362,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.7` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.11` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -372,13 +374,32 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.7`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.11`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
-fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
-**Requirements.** Linux, GCC ≥ 13, CMake ≥ 3.24, Ninja; an OpenMS develop (≥ 3.7) build tree with its vcpkg
+**Binary releases.** Every tag is built, tested (ctest plus an extraction from the installed folder in a clean
+environment) and packaged by `.github/workflows/release.yml` against the OpenMS commit pinned in `ci/openms.lock`.
+The GitHub release carries self-contained folders with the tool, the libraries it links and OpenMS's shared data:
+
+| platform | package | run |
+|---|---|---|
+| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.11-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
+| macOS Apple silicon | `…-macos-arm64.tar.gz`, `.dmg` | `bin/DIATraceExtractor` |
+| Windows x86_64, arm64 | `…-windows-<arch>.zip` | `bin\DIATraceExtractor.exe` |
+
+```bash
+brew tap okohlbacher/odia && brew install diatraceextractor      # macOS; the tap tracks the latest release
+```
+
+The macOS package is signed with the Developer ID (hardened runtime), notarized, and the `.dmg` stapled; from a
+tarball or Homebrew the first start can take minutes while macOS checks each bundled library online once (a tarball
+cannot carry the ticket). The Windows packages bundle the Visual C++ and OpenMP runtimes but are not code-signed
+yet, so SmartScreen warns on first start.
+
+**Building from source. Requirements.** Linux, GCC ≥ 13, CMake ≥ 3.24, Ninja; an OpenMS develop (≥ 3.7) build tree with its vcpkg
 dependencies, which provide Arrow/Parquet and, with `boost-json` and `boost-program-options` added to the OpenMS
 vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfig.cmake` directory can be given with
 `-DMZPEAK_BOOST_DIR`). Python 3 with pyarrow, pandas, numpy and matplotlib (`tools/pyenv` here) for the scripts;
@@ -386,7 +407,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.7
+git checkout V0.2.11
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build
@@ -395,7 +416,7 @@ cmake --build build -j 16
 ctest --test-dir build        # 7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare
 ```
 
-**macOS (Apple silicon).** Supported since V0.2.2 (the Linux-only calls are guarded). `scripts/bench_macos.sh`
+**macOS (Apple silicon) from source.** Supported since V0.2.2 (the Linux-only calls are guarded). `scripts/bench_macos.sh`
 builds OpenMS develop (its `macos-arm64-release` preset, Homebrew libomp; 1–3 h the first time) and the tool, fetches
 the inputs and runs the benchmark, one phase at a time or `all`; the ctest suite passes on macOS (7/7).
 
