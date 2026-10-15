@@ -56,32 +56,35 @@ ctest --test-dir build        # OpenSWATH parity + thread determinism
 ## Use
 
 ```bash
-# defaults: mass offsets and tolerances measured from the run (self-calibration), +-60 s around the library RT
-# (here in run minutes, as DIALibGen's tuned libraries carry), max over the centroids, MS1 on its own scans
-build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes \
-  -threads 64 -out traces.parquet -out_stats stats.json -out_calibration anchors.tsv
-# predicted RT in library units: also fit the RT map from the run
-build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode auto -threads 64 -out traces.parquet
-
-# or with external anchors / a fixed mass correction and fixed tolerances
-build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode anchors -rt_anchors anchors.tsv \
-  -mass_calibration off -mz_offset -2.5 -mz_offset_ms1 0.5 -mz_tol 6 -mz_tol_ms1 2.5 -threads 64 -out traces.parquet
+# the defaults: RT map, mass offsets and tolerances measured from the run, all cores (up to 64)
+DIATraceExtractor -in run.mzML -lib library.parquet -out traces.parquet
+# a library tuned to this run (RT in run minutes, as DIALibGen -mode tune writes): skip fitting the RT map
+DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes -out traces.parquet -out_stats stats.json
+# OpenSWATH's extraction rules, fixed tolerances (+- ppm)
+DIATraceExtractor -in run.mzML -lib library.parquet -scheme B -mz_tol 6 -mz_tol_ms1 6 -out traces.parquet
+# only convert a run (e.g. diaPASEF mzPeak) to mzML for tools that do not read mzPeak
+DIATraceExtractor -in run.mzpeak -out_mzml run.mzML
 ```
 
-- Input: centroided mzML (parsed in parallel chunks), mzPeak `.mzpeak` (partitioned parallel read; MS1 must be
-  centroided in the file, e.g. mzpeak-convert `--representation centroid --representation-levels 1`) or Thermo
-  `.raw`; libraries: DIA-NN/DIALibGen `.parquet`/`.tsv`,
-  OpenSWATH `.tsv`/`.pqp`/`.TraML`; `-ids` restricts to a precursor list; `-top_fragments` (default 6).
-- RT: `-rt_mode identity|minutes|linear|trafo|anchors|auto` maps library RT to run seconds (`auto`:
-  self-calibration from co-eluting anchors); `-rt_window` is
-  a half width (≤ 0 = whole run).
-- m/z: tolerances are multiples of the error widths measured from the run (`-mz_sigma_ms2`, by instrument class:
-  Orbitrap/Astral 9, timsTOF 4; `-mz_sigma_ms1` 4), or fixed ± ppm with `-mz_tol`/`-mz_tol_ms1`;
-  `-mass_calibration auto` (default) measures the offsets (with an m/z-dependent term when the data show one), `-mz_offset*` set them; `-aggregation max` (default) or `sum`; `-scheme B` is OpenSWATH's rules as one preset (sum, unit isotope spacing, no mass correction; needs `-mz_tol`/`-mz_tol_ms1`); `-ms1_isotopes` (default 2);
-  `-ms1_isotope_spacing unit` reproduces OpenSWATH's charge-independent isotope positions.
-- Output: traces Parquet (one row per trace; MS2 rows on the global cycle axis, MS1 rows on the MS1 scan axis;
-  intensity as float32 blob or `-encoding log8`), `<out>.axes.parquet` (both axes, exact acquisition times),
-  optional long TSV.
+`DIATraceExtractor --help` lists the 13 everyday options, `--helphelp` all of them. In short:
+
+- **Input:** `-in` is a centroided mzML, an mzPeak `.mzpeak` (MS1 must be centroided in the file, e.g. mzpeak-convert
+  `--representation centroid --representation-levels 1`) or a Thermo `.raw`. `-lib` is a DIA-NN/DIALibGen
+  `.parquet`/`.tsv` or an OpenSWATH `.tsv`/`.pqp`/`.TraML` library. `-ids` restricts the extraction to a precursor
+  list; `-top_fragments` (default 6, 0 = all).
+- **RT:** `-rt_mode auto` (default) fits the library-to-run RT map from the run itself and works with any library
+  RT scale (predicted, iRT, minutes); `minutes` and `seconds` take the library RT as run time. `-rt_anchors` or
+  `-rt_trafo` (advanced) give a map. `-rt_window` is the half width around each precursor: by default 60 s,
+  widened to the measured RT scatter where that is larger (about 105 s on timsTOF with predicted RT); a negative
+  value extracts the whole run. The tool warns when the library's RTs map onto only a small part of the run, the
+  sign of a wrong `-rt_mode`.
+- **m/z:** tolerances are measured from the run: multiples of the mass-error width by instrument class (Orbitrap and
+  Astral 9, timsTOF 4 for fragments; 4 for MS1), with the offsets (and an m/z-dependent term when the data show one)
+  corrected. `-mz_tol`/`-mz_tol_ms1` fix them in ± ppm. `-scheme B` applies OpenSWATH's rules as one preset (sum of
+  the centroids, MS1 isotopes at unit spacing, every window containing the precursor, no mass correction).
+- **Output:** `-out` is a Parquet dataset (a directory of part files, read as one table by pyarrow, polars or
+  DuckDB) with one row per trace: MS2 rows on the global cycle axis, MS1 rows on the MS1 scans. The axes go to
+  `<out stem>.axes.parquet`. `-out_tsv` writes a long TSV, `-out_stats` a JSON summary.
 
 ```python
 import numpy as np, pyarrow.parquet as pq

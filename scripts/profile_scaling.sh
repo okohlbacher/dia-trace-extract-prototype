@@ -16,7 +16,7 @@ stage() { local src=$1 dst=$SCRATCH/input/$(basename $1)
   echo $dst; }
 MZML=$(stage $P/benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_01.mzML)
 LIB=$(stage $LIB)
-ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol 6 -mz_tol_ms1 0 -aggregation max -mass_calibration auto"
+ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol 6 -mz_tol_ms1 0 -mass_calibration auto"
 mkdir -p $OUT
 run() {   # name threads [numactl args...]
   local name=$1 t=$2; shift 2

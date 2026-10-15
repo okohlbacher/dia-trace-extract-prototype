@@ -368,6 +368,8 @@ namespace ODIA
       stats_.ms2_points += static_cast<std::uint64_t>(r.fragments) * r.cycles;
       stats_.ms1_points += static_cast<std::uint64_t>(r.isotopes) * r.ms1_count;
       stats_.empty_range += r.cycles == 0;
+      stats_.rt_center_min = std::min<double>(stats_.rt_center_min, r.rt_center);
+      stats_.rt_center_max = std::max<double>(stats_.rt_center_max, r.rt_center);
     }
   }
 }

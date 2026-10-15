@@ -20,13 +20,12 @@ echo "run $RUN: MS2 tol $ACC ppm, MS2 offset $MS2OFF, MS1 offset (ours) $MS1OFF,
 run() { # name, extra flags
   local n=$1; shift
   [ -d $O/$n.parquet ] && return
-  $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_offset $MS2OFF \
+  $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mass_calibration off -mz_offset $MS2OFF \
      -threads $THREADS -out $O/$n.parquet "$@" > $O/$n.log 2>&1
 }
-run v_dnn   -aggregation max -mz_tol_ms1 $ACC1 -mz_offset_ms1 0          # DIA-NN's MS1 rule: raw m/z, its MS1 tolerance
-run v_tol   -aggregation max -mz_tol_ms1 $ACC1 -mz_offset_ms1 $MS1OFF    # only the tolerance changed
-run v_off   -aggregation max -mz_tol_ms1 $ACC  -mz_offset_ms1 0          # only the offset removed
-run v_A     -aggregation max -mz_tol_ms1 $ACC  -mz_offset_ms1 $MS1OFF    # = benchmark A (sanity)
-run v_sumA  -aggregation sum -mz_tol_ms1 $ACC  -mz_offset_ms1 $MS1OFF    # A with sum
-run v_dnn_sum -aggregation sum -mz_tol_ms1 $ACC1 -mz_offset_ms1 0
+run v_dnn   -mz_tol_ms1 $ACC1 -mz_offset_ms1 0          # DIA-NN's MS1 rule: raw m/z, its MS1 tolerance
+run v_tol   -mz_tol_ms1 $ACC1 -mz_offset_ms1 $MS1OFF    # only the tolerance changed
+run v_off   -mz_tol_ms1 $ACC  -mz_offset_ms1 0          # only the offset removed
+run v_A     -mz_tol_ms1 $ACC  -mz_offset_ms1 $MS1OFF    # = benchmark A (sanity)
+# (the sum variants needed -aggregation sum, removed in V0.2.15: sum is part of -scheme B only)
 echo done

@@ -36,16 +36,19 @@
 - **Co-elution window**: now measured (stage 2 uses twice the median FWHM of the stage-1 anchors, ≥ 3 cycles; stage
   1 keeps a seed of ±4). On Astral the FWHM is 2 cycles (3.3 s), giving ±4 as before.
 - **Anchor acceptance thresholds** (correlation 0.90/0.80, cosine 0.85/0.75, fragments 5/4): a decoy-calibrated score
-  cut is implemented (`calibration:anchor_fdr`, decoys = fragment windows shifted by `calibration:decoy_shift` Th)
+  cut is implemented (`CalibrationOptions::anchor_fdr`, decoys = fragment windows shifted by `decoy_shift` Th; no longer
+  command-line options since V0.2.15)
   but **off by default**: on Astral runs 01/02 such decoys almost never show 4 fragments at one apex, the cut
   collapsed to a negative score, noisy anchors entered (error width 0.93 → 1.18 ppm, tolerance ±5.5 → ±7.1 ppm) and
   DIA-NN agreement fell from 91.2% to 86.3%. False anchors are real peptides' fragments; peptide-like decoys from
   the library generator (`-generation:decoys`) are the right calibration set. Open.
-- **RT window**: `-rt_window 0` = measured (99th percentile of the anchor residuals + peak width; 36–53 s on Astral);
-  the default stays 60 s. Iterative re-extraction with a narrowed window: open.
-- **Apex intensity cutoff** (`calibration:min_relative_intensity`, now 0): evaluate 0 vs 0.1 with the mixture fit.
+- **RT window**: from V0.2.15 the default is max(60 s, 99th percentile of the anchor residuals + peak width) with
+  `-rt_mode auto` (Astral 60 s, timsTOF with predicted RT ~105 s, where ±60 s clipped 5-10% of the anchors' apexes).
+  Iterative re-extraction with a narrowed window: open.
+- **Apex intensity cutoff** (`CalibrationOptions::min_relative_intensity`, now 0): evaluate 0 vs 0.1 with the mixture fit.
 - **RT model internals** (mode bins 20, mode bandwidth 15 s, min stage-2 window 30 s, min reject 3 s, LOWESS span
-  0.15): configurable now; could be expressed in measured peak widths / chosen by cross-validation.
+  0.15): constants in `CalibrationOptions` since V0.2.15 (only the LOWESS span stays an option); could be expressed
+  in measured peak widths / chosen by cross-validation.
 - **Nearest-window assignment** assumes non-overlapping isolation windows; overlapping or staggered schemes untested.
 - **Generality:** ProteoBench diaPASEF (timsTOF SCP) runs end to end and agrees with DIA-NN 1.7.12 (on our mzML
   export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). The MS1 disagreement (60%) is DIA-NN's
@@ -77,6 +80,17 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
+- **Command line (V0.2.15, 2026-10-15; adversarial review with Codex and Kimi, `results/clicheck/`):** done:
+  `-rt_mode auto` default (the old default took library RT as run seconds and silently extracted the wrong place
+  for predicted, iRT or minutes libraries); all cores (up to 64) unless `-threads` is given; RT window widened to
+  the measured scatter; a warning when the mapped library RTs cover under a quarter of the run; 13 basic options in
+  `--help`, the rest under `--helphelp`; removed `-aggregation`, `-ms1_isotope_spacing`, `-window_assignment` (now
+  part of `-scheme B`, which also assigns every containing window), the linear RT map, `-rt_anchor_model`,
+  `-ingest_threads`, `-library_part_rows`, `-log8_decades` and 21 calibration thresholds; `-rt_anchors`/`-rt_trafo`
+  select their map. Fixed: `-ids` shrank the calibration panel on TSV/TraML libraries; `-ms1_isotopes -1` still
+  required an MS1 tolerance; scheme B accepted `-mz_offset`; `-mz_offset` was silently ignored with
+  `-mass_calibration auto` (now an error); a negative `-buffer_mb`; calibration failures exited as "corrupt input".
+  Open: DIALibGen's command line deserves the same review (`-threads 1` and Q Exactive defaults; long option list).
 - **Release CI (V0.2.6–V0.2.12, 2026-10-13/14):** `.github/workflows/release.yml` builds OpenMS (pinned, `ci/openms.lock`) and
   the tool on Linux x86_64/aarch64, macOS arm64 and Windows x86_64/arm64; all five are required, run ctest and an
   extraction from the installed folder in a clean environment, and package self-contained folders (tar.gz, dmg, zip)

@@ -79,16 +79,16 @@ echo "DIA-NN round 2: $(grep -oE 'Number of IDs at 0.01 FDR: [0-9]+' $O/diann/di
 #     P: DIA-NN parity: as A, but both tolerances = DIA-NN's optimised MS2 accuracy (as A was before)
 #     B: OpenSWATH rules (sum, no correction, unit isotope spacing, DIA-NN's accuracy)
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 0 \
-    -aggregation max -mass_calibration auto -threads $THREADS -out $O/odiaA.parquet -out_stats $O/odiaA.json > $O/odiaA.log 2>&1
+    -mass_calibration auto -threads $THREADS -out $O/odiaA.parquet -out_stats $O/odiaA.json > $O/odiaA.log 2>&1
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
-    -aggregation max -mass_calibration auto -threads $THREADS -out $O/odiaP.parquet -out_stats $O/odiaP.json > $O/odiaP.log 2>&1
+    -mass_calibration auto -threads $THREADS -out $O/odiaP.parquet -out_stats $O/odiaP.json > $O/odiaP.log 2>&1
 /usr/bin/time -v $X -in $MZML -lib $REF -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
     -scheme B -threads $THREADS -out $O/odiaB.parquet -out_stats $O/odiaB.json > $O/odiaB.log 2>&1
 
 # 3c'. tuned library: the extractor on the full library (all precursors, top 6 fragments; timing and memory)
 if [ $RECAL = tuned ]; then
   /usr/bin/time -v $X -in $MZML -lib $PRED -rt_mode minutes -rt_window 60 -mz_tol 6 -mz_tol_ms1 0 \
-      -aggregation max -mass_calibration auto -threads $THREADS -out $O/odia_full.parquet -out_stats $O/odia_full.json \
+      -mass_calibration auto -threads $THREADS -out $O/odia_full.parquet -out_stats $O/odia_full.json \
       > $O/odia_full.log 2>&1
   rm -rf $O/odia_full.parquet   # 1+ GB; kept: stats, log, axes
 fi

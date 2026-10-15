@@ -38,13 +38,13 @@ r.pid.to_csv(f"{d}/ids.txt", index=False, header=False)
 print(len(r), "identifications at 1% FDR")
 EOF
 
-COMMON="-in $MZML -lib $LIB -ids $D17/ids.txt -rt_mode anchors -rt_anchors $D17/anchors.tsv"
+COMMON="-in $MZML -lib $LIB -ids $D17/ids.txt -rt_anchors $D17/anchors.tsv"
 
 # 3. systematic mass offsets: maximise captured intensity at +-2 ppm on 5,000 identified precursors
 head -5000 $D17/ids.txt > $C/massscan/ids5k.txt
 for off in -5 -4 -3 -2.5 -2 -1.5 -1 -0.5 0 0.5 1 1.5 2 3; do
-  ( $X -in $MZML -lib $LIB -ids $C/massscan/ids5k.txt -rt_mode anchors -rt_anchors $D17/anchors.tsv -rt_window 20 \
-       -mz_tol 2 -mz_tol_ms1 2 -mz_offset $off -mz_offset_ms1 $off -aggregation sum -threads 4 \
+  ( $X -in $MZML -lib $LIB -ids $C/massscan/ids5k.txt -rt_anchors $D17/anchors.tsv -rt_window 20 \
+       -mz_tol 2 -mz_tol_ms1 2 -mass_calibration off -mz_offset $off -mz_offset_ms1 $off -threads 4 \
        -out $C/massscan/off$off.parquet > $C/massscan/off$off.log 2>&1 ) &
 done
 wait
@@ -66,15 +66,15 @@ ACC=$(grep -oE 'Optimised mass accuracy: [0-9.]+' $D17/diann.log | tail -1 | gre
 echo "DIA-NN optimised mass accuracy: $ACC ppm" | tee -a $C/mass_offsets.txt
 
 # 4. DIATraceExtractor, (A) DIA-NN-matched and (B) OpenSWATH-matched
-/usr/bin/time -v $X $COMMON -top_fragments 0 -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -aggregation max \
+/usr/bin/time -v $X $COMMON -top_fragments 0 -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC \
     -mz_offset $OFF2 -mz_offset_ms1 $OFF1 -threads $THREADS -out $C/odiaA.parquet -out_stats $C/odiaA.json > $C/odiaA.log 2>&1
-/usr/bin/time -v $X $COMMON -top_fragments 0 -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -aggregation sum \
-    -ms1_isotope_spacing unit -threads $THREADS -out $C/odiaB.parquet -out_stats $C/odiaB.json > $C/odiaB.log 2>&1
+/usr/bin/time -v $X $COMMON -top_fragments 0 -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B \
+    -threads $THREADS -out $C/odiaB.parquet -out_stats $C/odiaB.json > $C/odiaB.log 2>&1
 
 # 4c. (C) self-calibrated: RT map and mass offsets from the run itself (panel from the whole library),
 #     DIA-NN-matched rules; the DIA-NN IDs only select which precursors to export.
 /usr/bin/time -v $X -in $MZML -lib $LIB -ids $D17/ids.txt -top_fragments 0 -rt_mode auto -mass_calibration auto \
-    -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -aggregation max -threads $THREADS \
+    -rt_window 60 -mz_tol $ACC -mz_tol_ms1 $ACC -threads $THREADS \
     -out $C/odiaC.parquet -out_stats $C/odiaC.json -out_calibration $C/odiaC_anchors.tsv > $C/odiaC.log 2>&1
 
 # 5. OpenSWATH on identical coordinates (library built from the extractor's traces)

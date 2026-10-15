@@ -11,7 +11,7 @@ set -uo pipefail
 P=/ceph/ibmi/abi/oliver/Claude/ODIA-V3; cd $P
 X=${X:-$P/bin-releases/DIATraceExtractor-0.2.11}; export X
 STEPS=${STEPS:-1 2 3 4}
-O=$P/results/v0.2.11; mkdir -p $O/full $O/astral $O/diapasef
+O=${O:-$P/results/v0.2.11}; mkdir -p $O/full $O/astral $O/diapasef
 SC=/scratch/$USER/odia-bench; mkdir -p $SC/input/diapasef $SC/out/v0211
 PY=$P/tools/pyenv/bin/python
 log() { echo "[$(date +%H:%M:%S)] $*"; }

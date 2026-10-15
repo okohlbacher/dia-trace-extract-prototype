@@ -64,6 +64,7 @@ namespace ODIA
     std::uint64_t precursors = 0, without_window = 0, assignments = 0, empty_range = 0;
     std::uint64_t units = 0, traces = 0, ms2_points = 0, ms1_points = 0;
     std::uint64_t peak_lookups = 0;
+    double rt_center_min = 1e300, rt_center_max = -1e300;   ///< spread of the mapped precursor RTs (s)
     StageTime time;
   };
 

@@ -1,12 +1,15 @@
-# DIATraceExtractor V0.2.14: release report (2026-10-15)
+# DIATraceExtractor V0.2.15: release report (2026-10-15)
 
-**Versions.** This report accompanies release **V0.2.14** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+**Versions.** This report accompanies release **V0.2.15** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
 The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
 `-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
 and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.14 changed no
 source file, only the Windows build, the install rules and the release workflow, and added binary packages for five
-platforms with checksums and provenance attestations (Appendix A).
-**Every cluster measurement was re-run with the V0.2.11 binary**, the same source as V0.2.14 (`results/v0.2.11/`,
+platforms with checksums and provenance attestations (Appendix A). V0.2.15 reworked the command line (defaults
+that need no tuning, 13 basic options; Appendix A): for the commands of Appendix C its traces are bit-identical to
+V0.2.11's (`results/clicheck/`), so the measurements below stand; only the diaPASEF comparisons, which used the
+default RT window, were re-run with it (`results/v0.2.15/diapasef/`).
+**Every cluster measurement was re-run with the V0.2.11 binary** (`results/v0.2.11/`,
 `scripts/cluster_bench_v0211.sh`, on `dax` on 2026-10-14): the thread series, the full libraries, the Astral pair
 table with all four configurations of ours, the diaPASEF comparisons and costs, and the tolerance screens. Its
 Astral traces (A-V0.2 and B) are bit-identical to those of cb466f0 (V0.2), on which the galleries and the §4 rule
@@ -75,10 +78,10 @@ the search; OpenSWATH's include its scoring.
   strict anchors give the mass model: a median offset, or a line offset + slope × m/z when the m/z dependence is
   material (new in V0.2; it matters only on the timsTOF MS1, +15 ppm per 1000 Th; on Astral the fitted slopes are
   under 1 ppm per 1000 Th and change nothing measurable, `EXTRACTION.md`), and the error width as 1.4826 × MAD of the residuals. Tolerances are multiples of that width.
-- **Extraction.** Each precursor's fragments and MS1 isotopes are extracted within ±60 s of the mapped RT (or a
-  measured window, `-rt_window 0`), by a merge join of the sorted target windows against each spectrum's
-  centroids, taking the most intense centroid per window (DIA-NN's rule, `-aggregation max`) or their sum
-  (OpenSWATH's, `sum`).
+- **Extraction.** Each precursor's fragments and MS1 isotopes are extracted within ±60 s of the mapped RT (from
+  V0.2.15 widened to the measured RT scatter where that is larger), by a merge join of the sorted target windows
+  against each spectrum's centroids, taking the most intense centroid per window (DIA-NN's rule, scheme A) or their
+  sum (OpenSWATH's, scheme B).
 - **Output.** Traces as Parquet (`-out`, one row per trace, sharded) or as a long TSV (`-out_tsv`), with the axes
   file (`-out_axes`: global cycle axis, exact acquisition times per window, MS1 scan times), run statistics as
   JSON (`-out_stats`), the calibration anchors as TSV (`-out_calibration`, reusable as `-rt_anchors`), and the
@@ -94,10 +97,11 @@ follow either set, so that each comparison measures the rules and not the implem
 
 | rule | A (DIA-NN's rules; the default) | B (OpenSWATH's rules) |
 |---|---|---|
-| value per spectrum | the most intense centroid in the m/z window (`-aggregation max`) | the sum of all centroids in the window (`sum`); the whole column is one preset, `-scheme B` |
+| value per spectrum | the most intense centroid in the m/z window | the sum of all centroids in the window; the whole column is one preset, `-scheme B` |
 | mass correction | offsets (and the m/z-dependent term) measured from the run (`-mass_calibration auto`) | none: the window sits at the library m/z |
 | tolerance | multiples of the measured widths (`-mz_sigma_ms2`, `-mz_sigma_ms1`), or fixed ppm | DIA-NN's optimised MS2 accuracy for both levels, as the benchmark gave OpenSWATH (`-mz_tol`, `-mz_tol_ms1`) |
-| MS1 isotopes | M+k at m/z + k · 1.00336 / z | M+k at m/z + k · 1.00336 regardless of charge (`-ms1_isotope_spacing unit`) |
+| MS1 isotopes | M+k at m/z + k · 1.00336 / z | M+k at m/z + k · 1.00336 regardless of charge |
+| isolation windows | the window nearest the precursor | every window containing it (from V0.2.15; the same on the benchmark runs, which have no overlapping windows) |
 | RT window, MS1 axis | ±60 s around the mapped library RT; MS1 at its own scans | the same |
 
 Scheme B is a single preset (`-scheme B`, V0.2.1) because its three rules were easy to half-apply: once the
@@ -166,26 +170,30 @@ extra peaks ours does not. The galleries were regenerated for this release (the 
 `figures/` show the earlier configuration of the correlation figure).
 
 **timsTOF diaPASEF**, runs A01 and B01, DIA-NN 1.7.12 on our mzML export, DIA-NN's IDs, every library fragment
-(`results/v0.2.11/diapasef/cmp_*.tsv`; V0.2.11). Calibration finds 775 / 710 anchors in these 25 ng samples (342–374
+(`results/v0.2.15/diapasef/cmp_*.tsv`; V0.2.15, whose default RT window widens to the measured RT scatter, ±105 / ±80 s
+here instead of ±60 s). Calibration finds 775 / 710 anchors in these 25 ng samples (342–374
 used for the mass model), MS2 width 2.7 ppm; the MS1 error carries an m/z slope of +13–15 ppm per 1000 Th, so the
 defaults use the m/z-dependent model, MS1 width 2.2 ppm (3.2 ppm constant):
 
 | ours vs DIA-NN | MS2 median r | MS2 r > 0.9 | MS1 r > 0.9 |
 |---|---|---|---|
-| A01, defaults (4σ: MS2 ±10.8, MS1 ±8.9 ppm, m/z-dependent) | 0.992 | 86.0% | 57% |
-| A01, defaults with the constant MS1 model (MS1 ±12.9 ppm) | 0.992 | 86.0% | 63% |
-| A01, at DIA-NN's ±11.8 ppm | 0.9994 | 91.9% | 61% |
-| B01, defaults (4σ: MS2 ±10.6, MS1 ±8.7 ppm) | 0.974 | 76.0% | 59% |
-| B01, at ±11.8 ppm (DIA-NN: ±12.6) | 0.995 | 89.2% | 64% |
+| A01, defaults (4σ: MS2 ±10.8, MS1 ±8.9 ppm, m/z-dependent) | 0.991 | 86.8% | 59% |
+| A01, defaults with the constant MS1 model (MS1 ±12.9 ppm) | 0.991 | 86.8% | 65% |
+| A01, at DIA-NN's ±11.8 ppm | 0.9991 | 92.5% | 63% |
+| B01, defaults (4σ: MS2 ±10.6, MS1 ±8.7 ppm) | 0.974 | 76.5% | 61% |
+| B01, at ±11.8 ppm (DIA-NN: ±12.6) | 0.995 | 89.6% | 65% |
+
+(With V0.2.11's ±60 s window the same rows read 86.0 / 86.0 / 91.9 / 76.0 / 89.2% at MS2 and 57 / 63 / 61 / 59 / 64%
+at MS1, `results/v0.2.11/diapasef/`: the wider window adds the traces whose apex lay beyond ±60 s.)
 
 At equal tolerance the engines agree on diaPASEF as on Astral; at the defaults the slightly narrower window costs a
-few points, again by construction. The MS1 agreement of 57–64% looked like a defect and is not: where both engines
+few points, again by construction. The MS1 agreement of 59–65% looked like a defect and is not: where both engines
 have signal the values are identical, and each has zeros where the other has signal, so the two windows sit at
 different centres. Placing our MS1 window at the uncorrected library m/z with DIA-NN's MS2 accuracy raises the
-agreement to 79%, and widening that uncorrected window to ±20 ppm drops it to 43% (`cmp_A01_ms1raw11.8.tsv`,
+agreement to 80%, and widening that uncorrected window to ±20 ppm drops it to 45% (`cmp_A01_ms1raw11.8.tsv`,
 `cmp_A01_ms1raw20.tsv`, top 6 fragments): DIA-NN's export rule of §4, visible here because the MS1 offset is
 3.5 ppm plus the m/z slope instead of Astral's 1.3 ppm. The m/z-dependent model moves our MS1 centre further from
-the uncorrected one, which is why it lowers the agreement from 63% to 57%. Our MS1 traces are the mass-corrected
+the uncorrected one, which is why it lowers the agreement from 65% to 59%. Our MS1 traces are the mass-corrected
 ones.
 
 ## 4. Which rules are right? (re-extraction from the raw centroids, 3,000 IDs)
@@ -315,9 +323,10 @@ Measured on `dax` at a load of 5–11; V0.2.7 had measured 5.7–5.8 s and 8.0�
 5.6–5.9 s and 9.1 s at a load of about 21, and 6d26c49 8.6–9.0 s on the entrapment library on a quieter node (dossier §4). The thread table
 above uses `/usr/bin/time` wall clock, this one the tool's own total.
 
-**diaPASEF** (A01 and B01, 4.15 M-precursor library, 32 threads, V0.2.11, `results/v0.2.11/diapasef/odia_*_all.log`):
-44 s each (45 s wall incl. start-up), 15.5 GiB peak RSS, 36.7 M traces; the mzPeak per-spectrum read and the mobility
-collapse take 27 s of it, the calibration 4–5 s, the extraction 12 s. The peak falls in the ingest, while the
+**diaPASEF** (A01 and B01, 4.15 M-precursor library, 32 threads, V0.2.15, `results/v0.2.15/diapasef/odia_*_all.log`):
+51 / 43 s (A01 / B01), 15.4–15.6 GiB peak RSS, 36.7 M traces; the mzPeak per-spectrum read and the mobility
+collapse take 25–29 s of it, the calibration 4–5 s, the extraction 13–17 s. The extraction grows with the default RT
+window (±105 / ±80 s); with V0.2.11's ±60 s both runs took 44 s (extraction 12 s, `results/v0.2.11/diapasef/`). The peak falls in the ingest, while the
 calibration panel is extracted concurrently, and varies between runs (13.5–16.5 GiB over the archived runs).
 
 **On a laptop** (MacBook Pro, Apple M4 Max: 12 performance + 4 efficiency cores, no SMT, 128 GiB, macOS 26.6,
@@ -369,7 +378,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.14` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.15` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -381,9 +390,9 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.14`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.15`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
-fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files; V0.2.13 the disk image's stapling retried, this report published by the workflow; V0.2.14 the macOS package runs when installed through Homebrew (library validation off, as Homebrew re-signs the bundled libraries; the build's absolute rpaths removed, which had loaded Homebrew's libomp next to the bundled one), checked in CI. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files; V0.2.13 the disk image's stapling retried, this report published by the workflow; V0.2.14 the macOS package runs when installed through Homebrew (library validation off, as Homebrew re-signs the bundled libraries; the build's absolute rpaths removed, which had loaded Homebrew's libomp next to the bundled one), checked in CI; V0.2.15 the command line reviewed (adversarially, with two other models): the RT map fitted from the run, all cores and a measured RT window by default, a warning for a wrong RT scale, 13 basic options, parity switches folded into `-scheme B`. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -396,7 +405,7 @@ The GitHub release carries self-contained folders with the tool, the libraries i
 
 | platform | package | run |
 |---|---|---|
-| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.14-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
+| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.15-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
 | macOS Apple silicon | `…-macos-arm64.tar.gz`, `.dmg` | `bin/DIATraceExtractor` |
 | Windows x86_64, arm64 | `…-windows-<arch>.zip` | `bin\DIATraceExtractor.exe` |
 
@@ -417,7 +426,7 @@ vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfi
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.14
+git checkout V0.2.15
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build
@@ -433,14 +442,19 @@ the inputs and runs the benchmark, one phase at a time or `all`; the ctest suite
 **Use.**
 
 ```bash
-# defaults: RT map, mass offsets and tolerances measured from the run; +-60 s around the library RT
-# (-rt_mode minutes: tuned libraries carry run minutes; auto: predicted RT, the map is fitted from the run)
-build/DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes -threads 64 \
-  -out traces.parquet -out_stats stats.json -out_calibration anchors.tsv
-build/DIATraceExtractor -in run.mzpeak -lib library.parquet -rt_mode auto -threads 64 -out traces.parquet
-build/DIATraceExtractor -in run.mzpeak -out_mzml run.mzML            # the loaded run as centroided mzML, for other tools
-build/DIATraceExtractor --help                                       # all options, including calibration:*
+# the defaults: RT map, mass offsets and tolerances measured from the run, all cores (up to 64)
+DIATraceExtractor -in run.mzML -lib library.parquet -out traces.parquet
+# a library tuned to this run (RT in run minutes): skip fitting the RT map; a JSON summary
+DIATraceExtractor -in run.mzpeak -lib library.parquet -rt_mode minutes -out traces.parquet -out_stats stats.json
+DIATraceExtractor -in run.mzpeak -out_mzml run.mzML      # the loaded run as centroided mzML, for other tools
+DIATraceExtractor --help                                 # the 13 everyday options; --helphelp: all
 ```
+
+From V0.2.15 the defaults need no tuning: `-rt_mode auto` (before: library RT taken as run seconds unless
+`-rt_mode` was given), all cores unless `-threads` is given (before: TOPP's 1), and an RT window widened to the
+measured RT scatter. Options that only served the benchmark's parity experiments were folded into `-scheme` or
+removed (`-aggregation`, `-ms1_isotope_spacing`, `-window_assignment`, the linear RT map, 21 calibration
+thresholds); the commands in Appendix C are given in the V0.2.15 form.
 
 Input formats: mzML (indexed, centroided) and mzPeak; libraries as DIALibGen compact Parquet, DIA-NN/OpenSWATH TSV,
 TraML or PQP.
@@ -509,10 +523,10 @@ $DIANN --f $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML --lib library/diann1
        --out report.tsv --temp temp --threads 64 --verbose 1 --qvalue 0.01
 $DIANN --f $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML --lib lib_diann17.tsv --out report.tsv --temp temp \
        --threads 64 --verbose 1 --qvalue 0.01 --xic 60
-# ours A-V0.1 (MS2 +-6 ppm, MS1 measured), ours P (DIA-NN parity: both tolerances = DIA-NN's 5.9051 ppm), ours B (OpenSWATH rules)
+# ours A-V0.1 (MS2 +-6 ppm, MS1 +-2.11 ppm, the width cbad9dd measured; constant offsets), ours P (DIA-NN parity: both tolerances = DIA-NN's 5.9051 ppm), ours B (OpenSWATH rules)
 $X -in $S/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -lib library/refined/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet \
-   -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 0 -aggregation max -mass_calibration auto -threads 64 -out odiaA.parquet -out_stats odiaA.json
-$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -aggregation max -mass_calibration auto -threads 64 -out odiaP.parquet
+   -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 2.114775 -calibration:mass_model constant -threads 64 -out odiaA.parquet -out_stats odiaA.json
+$X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -threads 64 -out odiaP.parquet
 $X ... -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads 64 -out odiaB.parquet        # V0.2.1; before: -mass_calibration off -aggregation sum -ms1_isotope_spacing unit
 # OpenSwathWorkflow (full window = 2 x DIA-NN's accuracy)
 $OSW -in benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_01.mzML -tr lib_openswath.tsv -out_chrom osw.xic -out_features osw.featureXML \
