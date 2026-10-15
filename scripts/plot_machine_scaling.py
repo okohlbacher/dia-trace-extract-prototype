@@ -32,7 +32,7 @@ axs[0].set_yscale("log"); axs[0].set_ylabel("wall time (s, log)"); axs[0].set_ti
 axs[1].set_ylabel("peak RSS (GiB)"); axs[1].set_ylim(0, None); axs[1].set_title("Peak memory", loc="left", fontsize=10)
 axs[0].legend(fontsize=7.5, frameon=False, loc="lower left")
 fig.suptitle("Run 01, shared library (82,333 precursors, all fragments): 2 x EPYC 9654 node (solid) vs MacBook Pro M4 Max (dashed)\n"
-             "node: V0.2.11 at a load of about 0.01 per hardware thread; laptop: V0.2.7, the same source (mains power, mean of two repeats)", fontsize=9, x=0.01, ha="left")
+             "node: V0.2.15 at a load of about 0.03 per hardware thread; laptop: V0.2.7, the same extraction code (mains power, mean of two repeats)", fontsize=9, x=0.01, ha="left")
 fig.tight_layout()
 for ext in ("png", "pdf"): fig.savefig(f"{out}.{ext}", dpi=170)
 print(lap.to_string(index=False))

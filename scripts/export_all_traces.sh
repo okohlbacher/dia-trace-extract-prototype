@@ -27,8 +27,8 @@ for RUN in 01 02 03; do
   R=$P/results/refined/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01/run$RUN
   ACC=$(grep -oE 'Optimised mass accuracy: [0-9.]+' $R/diann/diann.log | tail -1 | grep -oE '[0-9.]+$')
   run $D/odiaA -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -threads $T
-  run $D/odiaP -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC -threads $T
-  run $D/odiaB -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
+  run $D/odiaP -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -threads $T
+  run $D/odiaB -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
   cp --update=none $R/diann/diann_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
   [ -s $R/osw_traces.parquet ] && { cp --update=none $R/osw_traces.parquet $D/osw.parquet; ref_tsv $D/osw.parquet $D/osw.tsv; }
   echo "DIA-NN accuracy $ACC ppm; files:" >> $D/README.txt; ls -la $D >> $D/README.txt
@@ -38,8 +38,8 @@ for RUN in A01 B01; do
   M=$S/input/diapasef/$RUN.mzpeak; LIB=$P/library/hye_timstof.parquet; IDS=$P/results/diapasef/diann_${RUN}_ids.txt
   ACC=$(grep -oE 'Optimised mass accuracy: [0-9.]+' $P/results/diapasef/diann_$RUN.log | tail -1 | grep -oE '[0-9.]+$')
   run $D/odiaA -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -threads $T
-  run $D/odiaP -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol $ACC -mz_tol_ms1 $ACC -threads $T
-  run $D/odiaB -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
+  run $D/odiaP -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -threads $T
+  run $D/odiaB -in $M -lib $LIB -rt_mode auto -rt_window 60 -top_fragments 0 -ids $IDS -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -scheme B -threads $T
   cp --update=none $P/results/diapasef/diann_${RUN}_xic.parquet $D/diann.parquet; ref_tsv $D/diann.parquet $D/diann.tsv
   echo "DIA-NN accuracy $ACC ppm; files:" >> $D/README.txt; ls -la $D >> $D/README.txt
 done 2>&1 | tee -a $OUT/export.log

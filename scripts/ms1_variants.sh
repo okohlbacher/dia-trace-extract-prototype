@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MS1 divergence experiments (ours A vs DIA-NN 1.7.12): re-run DIATraceExtractor on the shared tuned library
 # with MS1 mass offset / tolerance / aggregation variants. MS2 settings are kept as in benchmark A
-# (the measured MS2 offset is passed explicitly instead of -mass_calibration auto). MS1 M+0..M+2 extracted.
+# (the measured MS2 offset is passed explicitly instead of -mz_calibration auto). MS1 M+0..M+2 extracted.
 # Usage: ms1_variants.sh 01 [threads]   -> results/analysis/ms1var_runNN/<variant>.parquet
 set -euo pipefail
 RUN=$1; THREADS=${2:-16}
@@ -20,7 +20,7 @@ echo "run $RUN: MS2 tol $ACC ppm, MS2 offset $MS2OFF, MS1 offset (ours) $MS1OFF,
 run() { # name, extra flags
   local n=$1; shift
   [ -d $O/$n.parquet ] && return
-  $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mass_calibration off -mz_offset $MS2OFF \
+  $X -in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_calibration off -mz_offset_ms2 $MS2OFF \
      -threads $THREADS -out $O/$n.parquet "$@" > $O/$n.log 2>&1
 }
 run v_dnn   -mz_tol_ms1 $ACC1 -mz_offset_ms1 0          # DIA-NN's MS1 rule: raw m/z, its MS1 tolerance

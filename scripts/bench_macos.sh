@@ -94,7 +94,7 @@ bench() {
     log "shared library, $t threads, repeat $rep"
     /usr/bin/time -l $X -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -threads $t \
         -out /tmp/odiaA.parquet -out_stats odiaA_t${t}_r$rep.json > odiaA_t${t}_r$rep.log 2>&1 || log "  ours A failed (see odiaA_t${t}_r$rep.log)"
-    /usr/bin/time -l $X -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads $t \
+    /usr/bin/time -l $X -in $M -lib $LIB -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 5.9051 -mz_tol_ms1 5.9051 -scheme B -threads $t \
         -out /tmp/odiaB.parquet -out_stats odiaB_t${t}_r$rep.json > odiaB_t${t}_r$rep.log 2>&1 || log "  ours B failed"
     rm -rf /tmp/odiaA.parquet /tmp/odiaB.parquet /tmp/odiaA.axes.parquet /tmp/odiaB.axes.parquet
   done; done

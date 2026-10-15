@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- trace export.
 #include "TraceWriter.h"
+#include "ParquetMerge.h"
 #include "ArrowPool.h"
 #include "ArrowCheck.h"
 
@@ -33,11 +34,9 @@ namespace ODIA
 
     constexpr double C13_C12 = 1.0033548378;
 
-    std::unique_ptr<parquet::arrow::FileWriter> openWriter(const std::string& file, const arrow::Schema& schema,
-                                                           std::int64_t rows_per_group,
-                                                           std::shared_ptr<arrow::io::FileOutputStream>& out)
+    std::unique_ptr<parquet::arrow::FileWriter> openWriter(const std::shared_ptr<arrow::io::OutputStream>& out,
+                                                           const arrow::Schema& schema, std::int64_t rows_per_group)
     {
-      out = check(arrow::io::FileOutputStream::Open(file));
       auto props = parquet::WriterProperties::Builder()
                      .compression(parquet::Compression::ZSTD)
                      ->compression_level(3)
@@ -58,7 +57,8 @@ namespace ODIA
   /// One Parquet part file.
   struct TraceWriter::Shard
   {
-    std::shared_ptr<arrow::io::FileOutputStream> out;
+    std::shared_ptr<arrow::io::OutputStream> out;
+    std::shared_ptr<PartStream> part;   ///< when several parts are joined into one file
     std::unique_ptr<parquet::arrow::FileWriter> writer;
     double busy = 0;
   };
@@ -115,35 +115,36 @@ namespace ODIA
     {
       const int n = std::max(1, cfg_.shards);
       std::vector<std::string> paths;
-      if (n == 1) { paths.push_back(cfg_.parquet); }
-      else
-      {
-        namespace fs = std::filesystem;
-        if (fs::exists(cfg_.parquet) && !fs::is_directory(cfg_.parquet)) { fs::remove(cfg_.parquet); }
-        fs::create_directories(cfg_.parquet);
-        // Stale parts of an earlier run (a reader would take them for ours): only files named like our own
-        // shards, part-NNN.parquet, are removed; anything else in the directory is left alone.
-        for (const auto& e : fs::directory_iterator(cfg_.parquet))
+      namespace fs = std::filesystem;
+      // Stale parts in a directory -out of releases before 0.2.15 (which wrote a directory of part files) or of an
+      // interrupted run: only files named like our own parts, part-NNN.parquet, are removed.
+      auto clearParts = [](const fs::path& dir) {
+        if (!fs::is_directory(dir)) { return; }
+        for (const auto& e : fs::directory_iterator(dir))
         {
           const std::string f = e.path().filename().string();
           const bool ours = f.size() == 16 && f.starts_with("part-") && f.ends_with(".parquet")
                             && std::all_of(f.begin() + 5, f.begin() + 8, [](unsigned char c) { return std::isdigit(c) != 0; });
           if (ours && e.is_regular_file()) { fs::remove(e.path()); }
         }
-        for (int i = 0; i < n; ++i)
-        {
-          char name[32];
-          std::snprintf(name, sizeof name, "part-%03d.parquet", i);
-          paths.push_back((fs::path(cfg_.parquet) / name).string());
-        }
-      }
-      for (const auto& path : paths)
+        std::error_code ec;
+        fs::remove(dir, ec);   // only when now empty
+      };
+      clearParts(cfg_.parquet);
+      if (fs::is_directory(cfg_.parquet)) { throw std::runtime_error(cfg_.parquet + " is a directory holding other files; give a file name for -out"); }
+      // Several parts are written in parallel, each into memory; their completed row groups are appended to the one
+      // -out file as they come (ParquetJoiner), and close() writes one footer over all of them.
+      if (n > 1) { joiner_ = std::make_unique<ParquetJoiner>(cfg_.parquet, static_cast<std::size_t>(n)); }
+      for (int i = 0; i < n; ++i) { paths.push_back(cfg_.parquet); }
+      for (std::size_t i = 0; i < paths.size(); ++i)
       {
         auto sh = std::make_unique<Shard>();
+        if (joiner_) { sh->part = std::make_shared<PartStream>(*joiner_, i); sh->out = sh->part; }
+        else { sh->out = check(arrow::io::FileOutputStream::Open(paths[i])); }
         // Rows buffered per part until its row group is flushed: a fixed total over all parts (more parts =
         // smaller row groups), so the writer's memory does not grow with the part count.
         const std::int64_t rows = std::max<std::int64_t>(16384, cfg_.rows_per_group * 8 / static_cast<std::int64_t>(paths.size()));
-        sh->writer = openWriter(path, *schema_, rows, sh->out);
+        sh->writer = openWriter(sh->out, *schema_, rows);
         shards_.push_back(std::move(sh));
       }
     }
@@ -197,8 +198,8 @@ namespace ODIA
     const std::int64_t n = lane.length(); // before finish(): it resets the builder
     auto batch = arrow::RecordBatch::Make(schema, n,
       {finish(lane), finish(cycle), finish(rt), finish(spec), finish(wt), finish(wl), finish(wu)});
-    std::shared_ptr<arrow::io::FileOutputStream> out;
-    auto w = openWriter(cfg_.axes, *schema, 1 << 20, out);
+    std::shared_ptr<arrow::io::OutputStream> out = check(arrow::io::FileOutputStream::Open(cfg_.axes));
+    auto w = openWriter(out, *schema, 1 << 20);
     check(w->WriteRecordBatch(*batch));
     check(w->Close());
     check(out->Close());
@@ -388,7 +389,11 @@ namespace ODIA
     const bool pq = sink < shards_.size();
     if (pq)
     {
-      if (e.batch) { check(shards_[sink]->writer->WriteRecordBatch(*e.batch)); }
+      if (e.batch)
+      {
+        check(shards_[sink]->writer->WriteRecordBatch(*e.batch));
+        if (shards_[sink]->part) { shards_[sink]->part->drain(); }   // completed row groups to the joined file
+      }
       shards_[sink]->busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
     else
@@ -421,6 +426,7 @@ namespace ODIA
     }
     for (auto& t : closers) { t.join(); }
     for (auto& e : errors) { if (e) { std::rethrow_exception(e); } }
+    if (joiner_) { joiner_->finish(); merge_seconds_ = joiner_->appendSeconds(); }
     if (tsv_) { const bool ok = std::fclose(tsv_) == 0; tsv_ = nullptr; if (!ok) { throw std::runtime_error("TSV close failed"); } }
   }
 }

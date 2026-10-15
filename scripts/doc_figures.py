@@ -7,7 +7,7 @@ usage: doc_figures.py MZML TRACES_DIR AXES_PARQUET ANCHORS_TSV PRECURSOR_ID OUT_
   MZML          the run (indexed mzML; only the spectra around the example are read)
   TRACES_DIR    DIATraceExtractor output (Parquet directory) that contains PRECURSOR_ID
   AXES_PARQUET  its axes file
-  ANCHORS_TSV   -out_calibration of a run with -mass_calibration auto
+  ANCHORS_TSV   -out_calibration of a run with -mz_calibration auto
 Writes overview, run_grid, extraction_example, calibration and parallel figures (PNG) to OUT_DIR.
 """
 import base64, os, re, sys, zlib

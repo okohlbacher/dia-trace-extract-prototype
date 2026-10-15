@@ -13,7 +13,7 @@ set(OPENMS_BIN ${OpenMS_DIR}/bin)
 # 2 MS1 isotopes at OpenSWATH's (charge-independent) spacing.
 add_test(NAME extract_traml
   COMMAND DIATraceExtractor -in ${TD}/OpenSwathWorkflow_1_input.mzML -lib ${TD}/OpenSwathWorkflow_1_input.TraML
-          -rt_window -1 -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B
+          -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B
           -out traml.parquet -out_tsv traml.tsv -threads 4)
 add_test(NAME openswath_reference
   COMMAND ${OPENMS_BIN}/OpenSwathWorkflow -in ${TD}/OpenSwathWorkflow_1_input.mzML -tr ${TD}/OpenSwathWorkflow_1_input.TraML
@@ -29,9 +29,9 @@ set_tests_properties(parity_with_openswath PROPERTIES DEPENDS "extract_traml;ope
 # Output must not depend on the thread count.
 add_test(NAME determinism_t1
   COMMAND DIATraceExtractor -in ${TD}/OpenSwathWorkflow_1_input.mzML -lib ${TD}/OpenSwathWorkflow_1_input.TraML
-          -rt_window -1 -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -mass_calibration off -unit_precursors 1 -out det1.parquet -threads 1)
+          -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -mz_calibration off -unit_precursors 1 -out det1.parquet -threads 1)
 add_test(NAME determinism_t8
   COMMAND DIATraceExtractor -in ${TD}/OpenSwathWorkflow_1_input.mzML -lib ${TD}/OpenSwathWorkflow_1_input.TraML
-          -rt_window -1 -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -mass_calibration off -unit_precursors 1 -out det8.parquet -threads 8)
+          -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -mz_calibration off -unit_precursors 1 -out det8.parquet -threads 8)
 add_test(NAME determinism_compare COMMAND ${PY} ${PROJECT_SOURCE_DIR}/scripts/compare_parquet.py det1.parquet det8.parquet)
 set_tests_properties(determinism_compare PROPERTIES DEPENDS "determinism_t1;determinism_t8")

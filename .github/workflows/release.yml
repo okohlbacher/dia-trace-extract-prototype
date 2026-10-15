@@ -266,7 +266,7 @@ jobs:
           dumpbin -nologo -dependents "$X" | grep -i "\.dll" | while read -r dll; do echo "$dll -> $(where "$dll" 2>/dev/null | head -1 || echo NOT FOUND)"; done
           dump 60 help.log -- "$X" --help
           dump 180 traml.log -- "$X" -in $TD/OpenSwathWorkflow_1_input.mzML -lib $TD/OpenSwathWorkflow_1_input.TraML -rt_window -1 \
-               -mz_tol 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B -out diag.parquet -threads 1 -debug 2
+               -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B -out diag.parquet -threads 1 -debug 2
       # ---- macOS: Developer ID signing and notarization (optional: without the MACOS_* secrets the tree is
       # relocated and ad-hoc signed). Secrets reach steps only through env; `if:` cannot test them.
       - name: macOS signing configuration
@@ -346,7 +346,7 @@ jobs:
         run: |
           set -o pipefail
           T="$RUNNER_TEMP/stage/$name"; TD="$GITHUB_WORKSPACE/tool/testdata/openms"; O="$RUNNER_TEMP/smoke"; mkdir -p "$O"
-          ARGS=(-in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol 50 -mz_tol_ms1 50
+          ARGS=(-in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50
                 -top_fragments 0 -scheme B -threads 2 -out "$O/smoke.parquet" -out_tsv "$O/smoke.tsv")
           if [ "$RUNNER_OS" = "Windows" ]; then
             env -i SYSTEMROOT="$SYSTEMROOT" PATH="$SYSTEMROOT/System32" "$T/bin/DIATraceExtractor.exe" "${ARGS[@]}" > smoke.log 2>&1 || { cat smoke.log; exit 1; }
@@ -390,7 +390,7 @@ jobs:
           X="$(brew --prefix)/bin/DIATraceExtractor"
           "$X" --help 2>&1 | grep -E "^Version: ${version//./\.} " || { "$X" --help 2>&1 | tail -20; exit 1; }
           TD="$GITHUB_WORKSPACE/tool/testdata/openms"; O="$RUNNER_TEMP/brew-smoke"; mkdir -p "$O"
-          "$X" -in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol 50 \
+          "$X" -in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 -mz_tol_ms2 50 \
                -mz_tol_ms1 50 -top_fragments 0 -scheme B -threads 2 -out "$O/smoke.parquet" -out_tsv "$O/smoke.tsv" > brew-smoke.log 2>&1 \
             || { cat brew-smoke.log; exit 1; }
           [ $(wc -l < "$O/smoke.tsv") -gt 100 ] || { echo "::error::Homebrew-installed tool wrote no traces"; cat brew-smoke.log; exit 1; }

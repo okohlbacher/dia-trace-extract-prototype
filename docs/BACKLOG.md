@@ -53,11 +53,11 @@
 - **Generality:** ProteoBench diaPASEF (timsTOF SCP) runs end to end and agrees with DIA-NN 1.7.12 (on our mzML
   export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). The MS1 disagreement (60%) is DIA-NN's
   export rule (uncorrected m/z, MS2 accuracy): 79% when emulated; closed. Mass model: offset + slope × m/z when
-  material (`calibration:mass_model`, 2026-10-12), which timsTOF MS1 needs (+15 ppm/kTh). Open: the
+  material (`calibration:mz_model`, 2026-10-12), which timsTOF MS1 needs (+15 ppm/kTh). Open: the
   intensity dependence of the errors (weak centroids low, strong high, on both instruments) cannot be modelled
   before extraction; it argues for the ID-screen multiples rather than the anchor width.
 - **Tolerance rule:** the trace-quality screen (dossier §7) gives MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
-  MS1 4σ on both; the multiples are set per instrument class (`-mz_sigma_ms2`). Tried and rejected as a measured
+  MS1 4σ on both; the multiples are set per instrument class (`-mz_accuracy_ms2`). Tried and rejected as a measured
   criterion (2026-10-12, `ODIA_PROFILE=1` prints the curves): the anchors' all-fragment co-elution curve, the same on
   the weaker half of the anchors, on the weak fragments only, and on both -- all rise monotonically to 8σ on
   timsTOF too (anchors are present precursors whose fragments stay correlated when the window widens; the ID
@@ -80,16 +80,22 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
-- **Command line (V0.2.15, 2026-10-15; adversarial review with Codex and Kimi, `results/clicheck/`):** done:
-  `-rt_mode auto` default (the old default took library RT as run seconds and silently extracted the wrong place
-  for predicted, iRT or minutes libraries); all cores (up to 64) unless `-threads` is given; RT window widened to
-  the measured scatter; a warning when the mapped library RTs cover under a quarter of the run; 13 basic options in
-  `--help`, the rest under `--helphelp`; removed `-aggregation`, `-ms1_isotope_spacing`, `-window_assignment` (now
-  part of `-scheme B`, which also assigns every containing window), the linear RT map, `-rt_anchor_model`,
-  `-ingest_threads`, `-library_part_rows`, `-log8_decades` and 21 calibration thresholds; `-rt_anchors`/`-rt_trafo`
-  select their map. Fixed: `-ids` shrank the calibration panel on TSV/TraML libraries; `-ms1_isotopes -1` still
-  required an MS1 tolerance; scheme B accepted `-mz_offset`; `-mz_offset` was silently ignored with
-  `-mass_calibration auto` (now an error); a negative `-buffer_mb`; calibration failures exited as "corrupt input".
+- **Command line (V0.2.15, 2026-10-15; adversarial review with Codex and Kimi, `results/clicheck/`, `results/rtwin/`):**
+  done: `-rt_mode auto` default (the old default took library RT as run seconds and silently extracted the wrong
+  place for predicted, iRT or minutes libraries); all cores up to 64 unless `-threads` is given (384 threads were
+  4.5x slower than 64 on the 7 M library: the scheduler beyond 64 threads, below); the RT window measured along the
+  gradient (4 x robust RT scatter + 2 x FWHM per RT bin; 99.6-99.8% of DIA-NN's whole peaks inside, ±60 s: 80% on
+  timsTOF); a warning when the mapped library RTs cover under a quarter of the run; `-out` one Parquet file (32
+  writers append their row groups to it while extracting; one footer; content-identical across thread counts, bytes
+  not); consistent names (`-mz_tol_ms2`, `-mz_accuracy_ms2/_ms1`, `-mz_calibration`, `-mz_offset_ms2`,
+  `-calibration:mz_model`, `-no_ms1`, `-write_parts`); 13 basic options in `--help`, the rest under `--helphelp`;
+  removed `-aggregation`, `-ms1_isotope_spacing`, `-window_assignment` (part of `-scheme B`, which also assigns every
+  containing window), the linear RT map, `-rt_anchor_model`, `-ingest_threads`, `-library_part_rows`, `-log8_decades`
+  and 21 calibration thresholds; `-rt_anchors`/`-rt_trafo` select their map; per-anchor FWHM in `-out_calibration`.
+  Fixed: `-ids` shrank the calibration panel on TSV/TraML libraries; MS1 off still required an MS1 tolerance; scheme B
+  accepted `-mz_offset`; `-mz_offset` was silently ignored with mass calibration on (now an error); a negative
+  `-buffer_mb`; calibration failures exited as "corrupt input". Not taken up: one `-calibration` switch for RT and
+  mass (Kimi), descriptive scheme names (Codex).
   Open: DIALibGen's command line deserves the same review (`-threads 1` and Q Exactive defaults; long option list).
 - **Release CI (V0.2.6–V0.2.12, 2026-10-13/14):** `.github/workflows/release.yml` builds OpenMS (pinned, `ci/openms.lock`) and
   the tool on Linux x86_64/aarch64, macOS arm64 and Windows x86_64/arm64; all five are required, run ctest and an
@@ -120,7 +126,7 @@
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
   put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Done 2026-10-13: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (179 GB, layout in its README.txt). Open: share with the group.
 - Push the DIALibGen build fix (tools/DIALibGen, branch compact-parquet-plain-strings, 6f26790) and open its PR.
-- Lower-priority: scheduler beyond 64 threads (lock + look-ahead window); compact-v2 library layout.
+- Scheduler beyond 64 threads (lock + look-ahead window): 384 threads are 4.5x slower than 64 on the 7 M library (2 x EPYC 9654, 2026-10-15); the default stops at 64 meanwhile. Compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).
 - 50K shared library (Justin).
 - Optional compact-v2 library layout (uint32 m/z, uint16 intensity; docs/03).

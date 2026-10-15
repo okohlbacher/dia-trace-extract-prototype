@@ -10,7 +10,7 @@ X=${X:-$P/build-stream/DIATraceExtractor}
 SCRATCH=${SCRATCH:-/scratch/$USER/odia-bench}
 MZML=$SCRATCH/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML
 LIB=$SCRATCH/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet
-ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol 6 -mz_tol_ms1 0 -mass_calibration auto"
+ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol_ms2 6 -mz_tol_ms1 0 -mz_calibration auto"
 mkdir -p $OUT
 run() {   # name threads [stacks]
   local name=$1 t=$2 stacks=${3:-}

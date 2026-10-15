@@ -6,6 +6,7 @@
 #include "RtMap.h"
 #include "RunGrid.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -20,6 +21,17 @@ namespace ODIA
     double ms2_ppm_slope = 0.0, ms2_mz_ref = 0.0;   ///< m/z-dependent part (ppm per Th); 0 = constant correction
     double ms1_ppm_slope = 0.0, ms1_mz_ref = 0.0;
     double rt_half_window = 60.0;     ///< +- seconds around the mapped library RT; <= 0: whole run
+    std::vector<double> rt_window_at, rt_window_half;   ///< measured half window by mapped RT (s), linear in between and
+                                                        ///< constant beyond the ends; when set, it replaces rt_half_window
+    double halfWindow(double rt) const
+    {
+      if (rt_window_at.empty()) { return rt_half_window; }
+      if (rt <= rt_window_at.front()) { return rt_window_half.front(); }
+      if (rt >= rt_window_at.back()) { return rt_window_half.back(); }
+      const std::size_t i = static_cast<std::size_t>(std::upper_bound(rt_window_at.begin(), rt_window_at.end(), rt) - rt_window_at.begin());
+      const double f = (rt - rt_window_at[i - 1]) / (rt_window_at[i] - rt_window_at[i - 1]);
+      return rt_window_half[i - 1] + f * (rt_window_half[i] - rt_window_half[i - 1]);
+    }
     bool aggregate_sum = true;        ///< sum all centroids in tolerance (OpenSWATH) or take the max (DIA-NN)
     bool extract_ms1 = true;
     int ms1_isotopes = 2;             ///< isotopes after the monoisotope (M+1 .. M+n)

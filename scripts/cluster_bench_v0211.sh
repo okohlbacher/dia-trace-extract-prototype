@@ -46,7 +46,7 @@ if [[ " $STEPS " == *" 3 "* ]]; then
   log "3. Astral pair table"
   G=$SC/out/v0211/gallery; mkdir -p $G
   timed $O/astral/odiaA $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -threads 32 -out $G/odiaA.parquet -out_stats $O/astral/odiaA.json
-  timed $O/astral/odiaB $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC -scheme B -threads 32 -out $G/odiaB.parquet -out_stats $O/astral/odiaB.json
+  timed $O/astral/odiaB $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -scheme B -threads 32 -out $G/odiaB.parquet -out_stats $O/astral/odiaB.json
   for a in A B; do for s in "" .axes; do
     printf "odia$a$s vs gallery_v02 (cb466f0): "; $PY scripts/same_traces.py $G/odia$a$s.parquet results/gallery_v02/odia$a$s.parquet; done; done | tee $O/astral/same_as_cb466f0.txt
   for a in A B; do
@@ -70,11 +70,11 @@ if [[ " $STEPS " == *" 4 "* ]]; then
     rm -rf $D/${s}_all.parquet $D/${s}_all.axes.parquet
     # DIA-NN's IDs with all library fragments (as archived; top 6 only for the uncorrected-centre MS1 probe)
     log "$s on DIA-NN's IDs"; run idsdef -ids $ids -top_fragments 0
-    run idsP -ids $ids -top_fragments 0 -mz_tol 11.8 -mz_tol_ms1 11.8
+    run idsP -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 11.8
     if [ $s = A01 ]; then
-      run idsconst -ids $ids -top_fragments 0 -calibration:mass_model constant
-      for w in 4 7 20 30; do run ms1_$w -ids $ids -top_fragments 0 -mz_tol 11.8 -mz_tol_ms1 $w; done
-      for w in 11.8 20; do run ms1raw$w -ids $ids -mass_calibration off -mz_offset -4.6 -mz_tol 10.8 -mz_offset_ms1 0 -mz_tol_ms1 $w; done
+      run idsconst -ids $ids -top_fragments 0 -calibration:mz_model constant
+      for w in 4 7 20 30; do run ms1_$w -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 $w; done
+      for w in 11.8 20; do run ms1raw$w -ids $ids -mz_calibration off -mz_offset_ms2 -4.6 -mz_tol_ms2 10.8 -mz_offset_ms1 0 -mz_tol_ms1 $w; done
     fi
     rm -rf $D/${s}_*.parquet
   done
@@ -82,9 +82,9 @@ fi
 if [[ " $STEPS " == *" 5 "* ]]; then
   log "5. Astral rules A-V0.1 and P (the archived runs are from cbad9dd, whose calibration differs; same rules here)"
   G=$SC/out/v0211/rules; mkdir -p $G
-  timed $O/astral/odiaAV01 $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol 6 -mz_tol_ms1 2.114775 \
-    -calibration:mass_model constant -threads 32 -out $G/odiaAV01.parquet -out_stats $O/astral/odiaAV01.json
-  timed $O/astral/odiaP $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol $ACC -mz_tol_ms1 $ACC \
+  timed $O/astral/odiaAV01 $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 6 -mz_tol_ms1 2.114775 \
+    -calibration:mz_model constant -threads 32 -out $G/odiaAV01.parquet -out_stats $O/astral/odiaAV01.json
+  timed $O/astral/odiaP $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC \
     -threads 32 -out $G/odiaP.parquet -out_stats $O/astral/odiaP.json
   for a in AV01 P; do
     $PY scripts/compare_traces.py --odia $G/odia$a.parquet --axes $G/odia$a.axes.parquet --diann results/gallery_v02/diann/diann_xic.parquet \

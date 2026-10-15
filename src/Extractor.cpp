@@ -31,9 +31,10 @@ namespace ODIA
     if (!opt_.ms1_scan_axis) { return {lo, hi}; }
     const auto& t = grid_.ms1.rt;
     if (hi <= lo || t.empty()) { return {0, 0}; }
-    if (opt_.rt_half_window <= 0.0) { return {0, t.size()}; }
-    const auto b = std::lower_bound(t.begin(), t.end(), rt_center - opt_.rt_half_window) - t.begin();
-    const auto e = std::upper_bound(t.begin(), t.end(), rt_center + opt_.rt_half_window) - t.begin();
+    const double hw = opt_.halfWindow(rt_center);
+    if (hw <= 0.0) { return {0, t.size()}; }
+    const auto b = std::lower_bound(t.begin(), t.end(), rt_center - hw) - t.begin();
+    const auto e = std::upper_bound(t.begin(), t.end(), rt_center + hw) - t.begin();
     return {static_cast<std::size_t>(b), static_cast<std::size_t>(std::max(b, e))};
   }
 
@@ -123,8 +124,9 @@ namespace ODIA
 
   std::pair<std::size_t, std::size_t> Extractor::cycleRange_(double rt_center) const
   {
-    if (opt_.rt_half_window <= 0.0) { return {0, grid_.cycles()}; }
-    return {grid_.lowerCycle(rt_center - opt_.rt_half_window), grid_.upperCycle(rt_center + opt_.rt_half_window)};
+    const double hw = opt_.halfWindow(rt_center);
+    if (hw <= 0.0) { return {0, grid_.cycles()}; }
+    return {grid_.lowerCycle(rt_center - hw), grid_.upperCycle(rt_center + hw)};
   }
 
   namespace

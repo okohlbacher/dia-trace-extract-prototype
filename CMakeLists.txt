@@ -55,6 +55,7 @@ add_library(odia_traces STATIC
   src/Extractor.cpp
   src/Scheduler.cpp
   src/TraceWriter.cpp
+  src/ParquetMerge.cpp
   src/Calibration.cpp)
 target_include_directories(odia_traces PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # mzPeak reader/writer: the mzpeak-openms library (git submodule external/mzpeak, tag partitioned-read-2026-10-11),

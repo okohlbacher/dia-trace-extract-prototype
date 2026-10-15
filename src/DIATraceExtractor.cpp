@@ -28,6 +28,7 @@
 #include <omp.h>
 #include <fstream>
 #include <iomanip>
+#include <array>
 #include <sstream>
 #include "Platform.h"
 #include <OpenMS/CONCEPT/VersionInfo.h>
@@ -171,8 +172,8 @@ public:
   TOPPDIATraceExtractor()
     : TOPPBase("DIATraceExtractor",
                "Extract fragment and MS1 isotope traces (XICs) of a spectral library from a DIA run. "
-               "RT map, mass offsets and tolerances are measured from the run; uses all cores (up to 64) "
-               "unless -threads is given.", {}, false)
+               "RT map, RT window, mass offsets and tolerances are measured from the run; uses all cores "
+               "(up to 64) unless -threads is given.", {}, false)
   {
     version_ = ODIA_VERSION;
     verboseVersion_ = std::string(ODIA_VERSION) + " (OpenMS " + VersionInfo::getVersion() + ")";
@@ -187,8 +188,8 @@ protected:
     registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.");
     registerInputFile_("lib", "<file>", "",
                        "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.", false);
-    registerOutputFile_("out", "<file>", "", "Traces (Parquet; a directory of part files that pyarrow, polars and DuckDB "
-                        "read as one table). The RT axes go to <out stem>.axes.parquet next to it.", false);
+    registerOutputFile_("out", "<file>", "", "Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet "
+                        "next to it.", false);
     registerOutputFile_("out_tsv", "<file>", "", "Traces as a long TSV, one row per point (large).", false);
     registerOutputFile_("out_stats", "<file>", "", "Run statistics (JSON): calibration, stage times, memory.", false);
     registerInputFile_("ids", "<file>", "", "Extract only these precursors (ids, one per line).", false);
@@ -201,16 +202,16 @@ protected:
                           "-rt_anchors or -rt_trafo select a given map instead.", false);
     setValidStrings_("rt_mode", {"auto", "minutes", "seconds"});
     registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
-                          "0 (default): 60 s, widened to the measured RT scatter when -rt_mode auto finds it larger; "
-                          "negative: the whole run.", false);
-    registerDoubleOption_("mz_tol", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
-                          "(-mz_sigma_ms2 x the fragment mass-error width).", false);
+                          "0 (default): measured from the run, along the gradient: 4 x the RT scatter of the calibration "
+                          "anchors about the RT map + 2 x their peak width (FWHM). Negative: the whole run.", false);
+    registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
+                          "(-mz_accuracy_ms2 x the fragment mass-error width).", false);
     registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm. 0 (default): measured from the run "
-                          "(-mz_sigma_ms1 x the MS1 mass-error width).", false);
-    setMinFloat_("mz_tol", 0.0); setMinFloat_("mz_tol_ms1", 0.0);
+                          "(-mz_accuracy_ms1 x the MS1 mass-error width).", false);
+    setMinFloat_("mz_tol_ms2", 0.0); setMinFloat_("mz_tol_ms1", 0.0);
     registerStringOption_("scheme", "<name>", "A", "A (default): DIA-NN's extraction rules (max of the centroids in the window) "
                           "with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit "
-                          "spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol and "
+                          "spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and "
                           "-mz_tol_ms1.", false);
     setValidStrings_("scheme", {"A", "B"});
     registerOutputFile_("out_mzml", "<file>", "", "Also write the run as a centroided mzML, one spectrum per isolation window "
@@ -223,8 +224,9 @@ protected:
     registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV), usable as -rt_anchors.", false, true);
     registerStringOption_("run_name", "<name>", "", "Run name in the output (default: the input file name without extension).", false, true);
     registerFlag_("targets_only", "Skip library decoys.", true);
-    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only; -1: no MS1 traces).", false, true);
-    setMinInt_("ms1_isotopes", -1); setMaxInt_("ms1_isotopes", 200);
+    registerFlag_("no_ms1", "No MS1 traces (fragments only).", true);
+    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only).", false, true);
+    setMinInt_("ms1_isotopes", 0); setMaxInt_("ms1_isotopes", 200);
     registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (their own times, in the axes file) or "
                           "interpolated onto the MS2 cycle axis (cycles).", false, true);
     setValidStrings_("ms1_axis", {"scans", "cycles"});
@@ -232,32 +234,32 @@ protected:
     registerInputFile_("rt_trafo", "<file>", "", "Use this RT map instead: trafoXML, library RT -> run RT (s).", false, true);
     setValidFormats_("rt_trafo", {"trafoXML"});
     registerFlag_("rt_trafo_invert", "The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).", true);
-    registerDoubleOption_("mz_sigma_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
+    registerDoubleOption_("mz_accuracy_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
                           "errors. 0 (default): by instrument class from the run's metadata (Orbitrap/Astral 9, TOF 4, unknown 6).", false, true);
-    registerDoubleOption_("mz_sigma_ms1", "<k>", 4.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors.", false, true);
-    setMinFloat_("mz_sigma_ms2", 0.0); setMinFloat_("mz_sigma_ms1", 0.1);
-    registerStringOption_("mass_calibration", "<mode>", "auto", "auto: correct the m/z by the offsets measured from the run. "
-                          "off: use -mz_offset and -mz_offset_ms1 instead (needs -mz_tol and -mz_tol_ms1).", false, true);
-    setValidStrings_("mass_calibration", {"auto", "off"});
-    registerDoubleOption_("mz_offset", "<ppm>", 0.0, "Fragment m/z correction with -mass_calibration off (ppm added to the target).", false, true);
-    registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 m/z correction with -mass_calibration off (ppm added to the target).", false, true);
+    registerDoubleOption_("mz_accuracy_ms1", "<k>", 4.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors.", false, true);
+    setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.1);
+    registerStringOption_("mz_calibration", "<mode>", "auto", "auto: correct the m/z by the offsets measured from the run. "
+                          "off: use -mz_offset_ms2 and -mz_offset_ms1 instead (needs -mz_tol_ms2 and -mz_tol_ms1).", false, true);
+    setValidStrings_("mz_calibration", {"auto", "off"});
+    registerDoubleOption_("mz_offset_ms2", "<ppm>", 0.0, "Fragment m/z correction with -mz_calibration off (ppm added to the target).", false, true);
+    registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 m/z correction with -mz_calibration off (ppm added to the target).", false, true);
     registerStringOption_("encoding", "<enc>", "float32", "Trace intensities: float32, or log8 (1 byte per point, log-spaced "
                           "over 6 decades below each trace's maximum).", false, true);
     setValidStrings_("encoding", {"float32", "log8"});
     registerFlag_("expand_rt", "Also write each trace's RT values in its row (larger file).", true);
     registerFlag_("skip_empty", "Do not write traces that are all zero.", true);
-    registerIntOption_("out_shards", "<n>", 32, "Parquet part files written in parallel; 1 writes -out as a single file "
-                       "(slower for large libraries).", false, true);
-    setMinInt_("out_shards", 1);
+    registerIntOption_("write_parts", "<n>", 32, "Parquet writers working in parallel on the one -out file (1: a single "
+                       "writer, slower for large libraries). Fixed, so that the output does not depend on -threads.", false, true);
+    setMinInt_("write_parts", 1);
     registerIntOption_("unit_precursors", "<n>", 256, "Precursors per parallel work unit.", false, true);
     setMinInt_("unit_precursors", 1);
     registerIntOption_("buffer_mb", "<MiB>", 512, "Memory for extracted traces waiting to be written.", false, true);
     setMinInt_("buffer_mb", 16);
     // TOPPBase::printUsage_ throws for an option whose subsection is not registered: register the subsection.
     registerTOPPSubsection_("calibration", "Calibration from the run itself");
-    registerStringOption_("calibration:mass_model", "<model>", "linear", "Mass correction: linear (offset + slope x m/z, kept "
+    registerStringOption_("calibration:mz_model", "<model>", "linear", "Mass correction: linear (offset + slope x m/z, kept "
                           "only where the m/z dependence is material, else constant) or constant.", false, true);
-    setValidStrings_("calibration:mass_model", {"constant", "linear"});
+    setValidStrings_("calibration:mz_model", {"constant", "linear"});
     registerIntOption_("calibration:panel", "<n>", 0, "Precursors sampled for calibration (0: 5% of the library).", false, true);
     setMinInt_("calibration:panel", 0);
     registerDoubleOption_("calibration:search_ppm", "<ppm>", 50.0, "First-pass mass search half width, before calibration.", false, true);
@@ -289,7 +291,8 @@ protected:
   int threadCount_()
   {
     if (threads_given_ && getIntOption_("threads") > 0) { return getIntOption_("threads"); }
-    // 0 = all cores, as TOPP documents; the default (not given) likewise, capped: extraction is flat beyond ~64 threads
+    // all cores the process may use (the affinity mask); the default stops at 64, where the extraction stops scaling
+    // and contention takes over (7 M precursors on 2 x EPYC 9654: 9.4 s at 64 threads, 22 s at 192, 43 s at 384)
     return std::max(1, std::min(omp_get_num_procs(), threads_given_ ? omp_get_num_procs() : 64));
   }
 
@@ -360,19 +363,19 @@ protected:
     else if (getFlag_("rt_trafo_invert")) { OPENMS_LOG_ERROR << "-rt_trafo_invert needs -rt_trafo." << std::endl; return ILLEGAL_PARAMETERS; }
     const double rt_window_opt = getDoubleOption_("rt_window");
     const bool rt_needed = rt_window_opt >= 0.0;   // a whole-run extraction needs no RT map
-    const bool ms1_enabled = getIntOption_("ms1_isotopes") >= 0;
-    const double mz_tol = getDoubleOption_("mz_tol"), mz_tol_ms1 = getDoubleOption_("mz_tol_ms1");
+    const bool ms1_enabled = !getFlag_("no_ms1");
+    const double mz_tol = getDoubleOption_("mz_tol_ms2"), mz_tol_ms1 = getDoubleOption_("mz_tol_ms1");
     const bool scheme_b = getStringOption_("scheme") == "B";
-    const bool offsets_given = getDoubleOption_("mz_offset") != 0.0 || getDoubleOption_("mz_offset_ms1") != 0.0;
+    const bool offsets_given = getDoubleOption_("mz_offset_ms2") != 0.0 || getDoubleOption_("mz_offset_ms1") != 0.0;
     if (scheme_b && (mz_tol <= 0 || (ms1_enabled && mz_tol_ms1 <= 0)))
     {
-      OPENMS_LOG_ERROR << "-scheme B (OpenSWATH's rules) extracts without mass correction and needs fixed tolerances: give -mz_tol"
+      OPENMS_LOG_ERROR << "-scheme B (OpenSWATH's rules) extracts without mass correction and needs fixed tolerances: give -mz_tol_ms2"
                        << (ms1_enabled ? " and -mz_tol_ms1" : "") << " (ppm)." << std::endl;
       return ILLEGAL_PARAMETERS;
     }
-    if (scheme_b && offsets_given) { OPENMS_LOG_ERROR << "-scheme B extracts without mass correction; -mz_offset/-mz_offset_ms1 do not apply." << std::endl; return ILLEGAL_PARAMETERS; }
-    const bool mass_auto = !scheme_b && getStringOption_("mass_calibration") == "auto";
-    if (mass_auto && offsets_given) { OPENMS_LOG_ERROR << "-mz_offset/-mz_offset_ms1 replace the measured correction: give them with -mass_calibration off." << std::endl; return ILLEGAL_PARAMETERS; }
+    if (scheme_b && offsets_given) { OPENMS_LOG_ERROR << "-scheme B extracts without mass correction; -mz_offset_ms2/-mz_offset_ms1 do not apply." << std::endl; return ILLEGAL_PARAMETERS; }
+    const bool mass_auto = !scheme_b && getStringOption_("mz_calibration") == "auto";
+    if (mass_auto && offsets_given) { OPENMS_LOG_ERROR << "-mz_offset_ms2/-mz_offset_ms1 replace the measured correction: give them with -mz_calibration off." << std::endl; return ILLEGAL_PARAMETERS; }
     if (scheme_b) { OPENMS_LOG_INFO << "Scheme B: sum of the centroids in the window, MS1 isotopes at unit spacing, every window containing the precursor, no mass correction." << std::endl; }
     const bool rt_auto = mode == "auto" && rt_needed;
     const int ingest_threads = std::min(threads, 32);   // the parse is memory-bandwidth bound beyond ~32 threads
@@ -425,16 +428,16 @@ protected:
     }
 
     // --- tolerance multiples: given, or by instrument class
-    double sigma_ms2 = getDoubleOption_("mz_sigma_ms2");
+    double sigma_ms2 = getDoubleOption_("mz_accuracy_ms2");
     {
       const auto cls = instrumentClass(grid.instrument);
       if (sigma_ms2 <= 0.0) { sigma_ms2 = cls.second; }
       OPENMS_LOG_INFO << "Instrument: " << (grid.instrument.empty() ? std::string("(none in the run's metadata)") : "'" + grid.instrument + "'")
-                      << " -> " << cls.first << "; tolerances " << sigma_ms2 << " sigma (MS2), " << getDoubleOption_("mz_sigma_ms1") << " sigma (MS1)"
-                      << (getDoubleOption_("mz_sigma_ms2") > 0 ? " [MS2 given]" : "") << std::endl;
+                      << " -> " << cls.first << "; tolerances " << sigma_ms2 << " sigma (MS2), " << getDoubleOption_("mz_accuracy_ms1") << " sigma (MS1)"
+                      << (getDoubleOption_("mz_accuracy_ms2") > 0 ? " [MS2 given]" : "") << std::endl;
       if (grid.instrument.empty() || cls.first == "unknown")
       {
-        OPENMS_LOG_WARN << "Instrument class unknown: MS2 tolerance " << sigma_ms2 << " sigma; set -mz_sigma_ms2 (Orbitrap 9, TOF 4)." << std::endl;
+        OPENMS_LOG_WARN << "Instrument class unknown: MS2 tolerance " << sigma_ms2 << " sigma; set -mz_accuracy_ms2 (Orbitrap 9, TOF 4)." << std::endl;
       }
     }
 
@@ -457,8 +460,8 @@ protected:
           : std::max(1.0, copt.panel_fraction * static_cast<double>(all_rows)));
       copt.search_ppm = getDoubleOption_("calibration:search_ppm");
       copt.accuracy_sigma = sigma_ms2;
-      copt.ms1_sigma = getDoubleOption_("mz_sigma_ms1");
-      copt.linear_mass_model = getStringOption_("calibration:mass_model") == "linear";
+      copt.ms1_sigma = getDoubleOption_("mz_accuracy_ms1");
+      copt.linear_mass_model = getStringOption_("calibration:mz_model") == "linear";
       copt.lowess_span = getDoubleOption_("calibration:lowess_span");
       copt.threads = threads;
       try { cal = ODIA::calibrate(*cal_lib, grid, copt); }
@@ -468,7 +471,7 @@ protected:
         // measured tolerances there is nothing to extract with; with explicit ones, go on uncorrected.
         std::string missing;
         if (rt_auto) { missing += " the RT map (-rt_mode auto; give -rt_mode minutes|seconds, -rt_anchors or -rt_trafo)"; }
-        if (mz_tol <= 0) { missing += std::string(missing.empty() ? "" : ";") + " the fragment tolerance (give -mz_tol)"; }
+        if (mz_tol <= 0) { missing += std::string(missing.empty() ? "" : ";") + " the fragment tolerance (give -mz_tol_ms2)"; }
         if (ms1_enabled && mz_tol_ms1 <= 0) { missing += std::string(missing.empty() ? "" : ";") + " the MS1 tolerance (give -mz_tol_ms1)"; }
         if (!missing.empty()) { OPENMS_LOG_ERROR << "Calibration failed: " << e.what() << ". Needed for:" << missing << "." << std::endl; return UNEXPECTED_RESULT; }
         OPENMS_LOG_WARN << "Calibration failed: " << e.what() << "; no mass correction, the given tolerances." << std::endl;
@@ -508,19 +511,19 @@ protected:
     eopt.ms1_ppm = ms1_enabled ? mz_tol_ms1 : 1.0;   // no MS1 traces: the MS1 tolerance is not used
     if (eopt.ms2_ppm <= 0.0)
     {
-      if (!cal) { OPENMS_LOG_ERROR << "The fragment tolerance is measured by the calibration, which is off (-mass_calibration off): give -mz_tol <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
+      if (!cal) { OPENMS_LOG_ERROR << "The fragment tolerance is measured by the calibration, which is off (-mz_calibration off): give -mz_tol_ms2 <ppm>." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms2_ppm = cal->ms2_accuracy_ppm;
-      if (eopt.ms2_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS2 accuracy could not be measured (too few apex centroids); give -mz_tol <ppm>." << std::endl; return UNEXPECTED_RESULT; }
+      if (eopt.ms2_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS2 accuracy could not be measured (too few apex centroids); give -mz_tol_ms2 <ppm>." << std::endl; return UNEXPECTED_RESULT; }
       OPENMS_LOG_INFO << "MS2 tolerance: +-" << eopt.ms2_ppm << " ppm (" << cal->accuracy_sigma << " x the measured width)" << std::endl;
     }
     if (eopt.ms1_ppm <= 0.0)
     {
-      if (!cal) { OPENMS_LOG_ERROR << "The MS1 tolerance is measured by the calibration, which is off (-mass_calibration off): give -mz_tol_ms1 <ppm> (or -ms1_isotopes -1 for no MS1 traces)." << std::endl; return ILLEGAL_PARAMETERS; }
+      if (!cal) { OPENMS_LOG_ERROR << "The MS1 tolerance is measured by the calibration, which is off (-mz_calibration off): give -mz_tol_ms1 <ppm> (or -no_ms1 for no MS1 traces)." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
       if (eopt.ms1_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS1 accuracy could not be measured (too few MS1 centroids); give -mz_tol_ms1 <ppm>." << std::endl; return UNEXPECTED_RESULT; }
-      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << getDoubleOption_("mz_sigma_ms1") << " x the measured width)" << std::endl;
+      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << getDoubleOption_("mz_accuracy_ms1") << " x the measured width)" << std::endl;
     }
-    eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset");
+    eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : getDoubleOption_("mz_offset_ms2");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : getDoubleOption_("mz_offset_ms1");
     if (mass_auto && cal)
     {
@@ -528,17 +531,49 @@ protected:
       eopt.ms1_ppm_slope = cal->ms1_slope_ppm_per_th; eopt.ms1_mz_ref = cal->ms1_mz_ref;
     }
     eopt.rt_half_window = rt_window_opt;
+    std::string rt_window_text = std::to_string(rt_window_opt);
     if (eopt.rt_half_window == 0.0)
     {
-      // 60 s, widened when the run's own RT map scatters more: its anchors' 99th-percentile residual plus a peak width
-      // (timsTOF, predicted RT: about 105 s; Astral: about 25 s, so 60 s)
-      eopt.rt_half_window = 60.0;
-      if (rt_auto && cal) { eopt.rt_half_window = std::max(60.0, cal->rt_residual_p99 + cal->peak_fwhm_s); }
-      OPENMS_LOG_INFO << "RT window: +-" << eopt.rt_half_window << " s" << (eopt.rt_half_window > 60.0 ? " (measured RT scatter)" : "") << std::endl;
+      // Measured, RT-dependent: 4 x the robust sigma (1.4826 MAD) of the calibration anchors' residuals about the RT map
+      // in use, plus 2 x their median peak FWHM, per RT bin of ~150 anchors (at most 8), linear in between. The robust
+      // sigma is not biased by the calibration's RT search window (which truncates the anchors' tails), and matched the
+      // scatter of DIA-NN's IDs on Astral and timsTOF; the rule contained 99.6-99.8% of DIA-NN's whole peaks there
+      // (fixed +-60 s: 99.8% Astral, 80% timsTOF; results/rtwin/).
+      std::vector<std::array<double, 3>> pts;   // run RT, residual, FWHM
+      if (cal) { for (const auto& a : cal->anchors) { if (a.used) { pts.push_back({a.run_rt, a.run_rt - rt_map(a.library_rt), a.fwhm_s}); } } }
+      if (pts.size() >= 50)
+      {
+        std::sort(pts.begin(), pts.end());
+        const std::size_t nb = std::clamp<std::size_t>(pts.size() / 150, 1, 8);
+        auto median = [](std::vector<double> v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+        for (std::size_t b = 0; b < nb; ++b)
+        {
+          const std::size_t lo = b * pts.size() / nb, hi = (b + 1) * pts.size() / nb;
+          std::vector<double> t, r, f;
+          for (std::size_t i = lo; i < hi; ++i) { t.push_back(pts[i][0]); r.push_back(pts[i][1]); f.push_back(pts[i][2]); }
+          const double rm = median(r);
+          std::vector<double> dev; for (double x : r) { dev.push_back(std::fabs(x - rm)); }
+          eopt.rt_window_at.push_back(median(t));
+          eopt.rt_window_half.push_back(4.0 * 1.4826 * median(dev) + 2.0 * median(f));
+        }
+        const auto [mn, mx] = std::minmax_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
+        eopt.rt_half_window = *mx;   // > 0: not a whole-run extraction
+        std::ostringstream os; os.precision(3);
+        for (std::size_t b = 0; b < nb; ++b) { os << (b ? ", " : "") << eopt.rt_window_half[b] << " s at " << std::lround(eopt.rt_window_at[b]) << " s"; }
+        rt_window_text = "measured: " + os.str();
+        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, 4 x the RT scatter + 2 x the peak FWHM of " << pts.size()
+                        << " anchors in " << nb << " RT bin(s) (" << os.str() << ")" << std::endl;
+      }
+      else
+      {
+        eopt.rt_half_window = 60.0;
+        rt_window_text = "60 (no calibration anchors to measure it)";
+        OPENMS_LOG_WARN << "RT window: +-60 s (too few calibration anchors to measure the RT scatter; -rt_window sets it)." << std::endl;
+      }
     }
     eopt.aggregate_sum = scheme_b;
     eopt.extract_ms1 = ms1_enabled;
-    eopt.ms1_isotopes = std::max(0, getIntOption_("ms1_isotopes"));
+    eopt.ms1_isotopes = getIntOption_("ms1_isotopes");
     eopt.assign_all_windows = scheme_b;
     eopt.threads = threads;
     eopt.isotope_unit_spacing = scheme_b;
@@ -562,7 +597,7 @@ protected:
     wcfg.log8_decades = 6.0;
     wcfg.expand_rt = getFlag_("expand_rt");
     wcfg.skip_empty = getFlag_("skip_empty");
-    wcfg.shards = getIntOption_("out_shards");
+    wcfg.shards = getIntOption_("write_parts");
     wcfg.isotope_unit_spacing = eopt.isotope_unit_spacing;
     wcfg.ms1_scan_axis = eopt.ms1_scan_axis;
     wcfg.metadata = {{"input", in}, {"library", lib_file}, {"rt_map", rt_map.describe()},
@@ -571,7 +606,7 @@ protected:
                      {"mz_offset_slope_ppm_per_th", std::to_string(eopt.ms2_ppm_slope)}, {"mz_offset_mz_ref", std::to_string(eopt.ms2_mz_ref)},
                      {"mz_offset_ms1_slope_ppm_per_th", std::to_string(eopt.ms1_ppm_slope)}, {"mz_offset_ms1_mz_ref", std::to_string(eopt.ms1_mz_ref)},
                      {"scheme", getStringOption_("scheme")}, {"aggregation", eopt.aggregate_sum ? "sum" : "max"},
-                     {"rt_window_half_s", std::to_string(eopt.rt_half_window)},
+                     {"rt_window_half_s", rt_window_text},
                      {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};
     ODIA::TraceWriter writer(grid, wcfg);
 
@@ -629,8 +664,9 @@ protected:
                         << " precursors outside it): check -rt_mode (the library's RT scale); -rt_mode auto fits the map from the run." << std::endl;
       }
     }
-    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points in " << writer.shardCount() << " Parquet part(s) (busiest writer "
-                    << writer.busySeconds() << " s, final drain " << t_close.wall << " s)" << std::endl;
+    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points, " << writer.shardCount() << " Parquet part(s) written in parallel"
+                    << (writer.shardCount() > 1 ? " into one file" : "") << " (busiest writer " << writer.busySeconds() << " s, final drain "
+                    << t_close.wall << " s; appending to the file " << writer.mergeSeconds() << " s in total)" << std::endl;
     if (ODIA::prof::enabled()) { ODIA::prof::report(stderr); }
     if (std::getenv("ODIA_PROFILE") != nullptr)
     {

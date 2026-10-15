@@ -16,7 +16,7 @@ stage() { local src=$1 dst=$SCRATCH/input/$(basename $1)
   if [ ! -s $dst ] || [ $(stat -c %s $src) != $(stat -c %s $dst) ]; then cp $src $dst.part && mv $dst.part $dst; fi; echo $dst; }
 MZML=$(stage $P/benchmark-data/DIA-astral-entrapment/mzML/LFQ_Astral_DIA_15min_50ng_Human_01.mzML)
 LIB=$(stage $P/library/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet)
-ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol 6 -mz_tol_ms1 0 -mass_calibration auto"
+ARGS="-in $MZML -lib $LIB -rt_mode minutes -rt_window 60 -mz_tol_ms2 6 -mz_tol_ms1 0 -mz_calibration auto"
 run() {   # name threads [extra tool args] -- [prefix command...]
   local name=$1 t=$2; shift 2
   local extra=() pre=()

@@ -1,5 +1,6 @@
 // ODIA-V3 trace extractor -- trace export.
 #pragma once
+#include "ParquetMerge.h"
 
 #include "Extractor.h"
 #include "Library.h"
@@ -42,8 +43,8 @@ namespace ODIA
       bool isotope_unit_spacing = false;
       bool ms1_scan_axis = true;   ///< MS1 rows index the MS1 scans (axes lane -2) instead of the cycle axis
       std::int64_t rows_per_group = 1 << 17;
-      /// Parquet part files (unit u goes to part u % shards). 1 = a single file at `parquet`; > 1 =
-      /// `parquet` is a directory of part-NNN.parquet files (one dataset). Fixed, not derived from the
+      /// Parquet parts written in parallel (unit u goes to part u % shards) and joined into the one file `parquet`
+      /// on close (column chunks copied, no re-encoding); 1 writes `parquet` directly. Fixed, not derived from the
       /// thread count, so the output does not depend on -threads.
       int shards = 32;
       std::vector<std::pair<std::string, std::string>> metadata;  ///< written into the Parquet footer
@@ -77,6 +78,7 @@ namespace ODIA
     std::uint64_t points() const { return points_; }
     double busySeconds() const;   ///< max over sinks of the time spent writing
     std::size_t shardCount() const { return shards_.size(); }
+    double mergeSeconds() const { return merge_seconds_; }   ///< appending the parts' row groups to the one file
 
   private:
     struct Shard;
@@ -86,6 +88,8 @@ namespace ODIA
     Config cfg_;
     std::shared_ptr<arrow::Schema> schema_;
     std::vector<std::unique_ptr<Shard>> shards_;
+    std::unique_ptr<ParquetJoiner> joiner_;
+    double merge_seconds_ = 0;
     std::FILE* tsv_ = nullptr;
     double tsv_busy_ = 0;
     bool closed_ = false;

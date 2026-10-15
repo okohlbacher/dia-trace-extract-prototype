@@ -74,6 +74,7 @@ namespace ODIA
     float correlation = 0, cosine = 0;
     float residual = 0;                  ///< run_rt - map(library_rt) after the final fit
     bool used = false;                   ///< survived outlier rejection
+    float fwhm_s = 0;                    ///< width of the summed fragment trace at half the apex (s)
   };
 
   struct CalibrationResult

@@ -31,7 +31,7 @@ def extract(k):
     out = os.path.join(a.scratch, f"{os.path.basename(a.out)}_k{k:g}.parquet")
     if not os.path.exists(out):
         cmd = [a.extractor, "-in", a.run, "-lib", a.lib, "-rt_mode", a.rt_mode, "-top_fragments", "0", "-ids", a.ids,
-               "-mz_tol", f"{k * a.sigma_ms2:.4f}", "-mz_tol_ms1", f"{k * a.sigma_ms1:.4f}", "-threads", str(a.threads), "-out", out] + a.extra.split()
+               "-mz_tol_ms2", f"{k * a.sigma_ms2:.4f}", "-mz_tol_ms1", f"{k * a.sigma_ms1:.4f}", "-threads", str(a.threads), "-out", out] + a.extra.split()
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0: sys.exit(f"k={k}: {r.stderr[-2000:]}")
     return out
