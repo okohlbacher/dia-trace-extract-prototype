@@ -691,6 +691,20 @@ namespace ODIA
     const std::size_t n = std::min(want, eligible.size());
     for (std::size_t i = 0; i < n; ++i) { panel.push_back(eligible[i * eligible.size() / std::max<std::size_t>(1, n)]); }
     res.panel = panel.size();
+    // Decoy panel: the library's own peptide decoys (when it has them), as many as targets, drawn the same way.
+    // They stand for absent peptides; without them the decoys are the targets with shifted fragment windows.
+    std::vector<std::uint32_t> decoy_panel;
+    {
+      std::vector<std::uint32_t> d;
+      for (std::uint32_t p = 0; p < lib.size(); ++p)
+      {
+        if (lib.decoy[p] && lib.fragmentsOf(p) >= static_cast<std::uint32_t>(opt.min_fragments)) { d.push_back(p); }
+      }
+      std::stable_sort(d.begin(), d.end(), [&](std::uint32_t a, std::uint32_t b) { return lib.library_rt[a] < lib.library_rt[b]; });
+      const std::size_t nd = opt.library_decoys ? std::min(n, d.size()) : 0;
+      for (std::size_t i = 0; i < nd; ++i) { decoy_panel.push_back(d[i * d.size() / std::max<std::size_t>(1, nd)]); }
+      res.decoy_panel = decoy_panel.size();
+    }
 
     // Stage 1: whole run, strict criteria; robust initial curve from run-RT modes, then a fit.
     const Criteria strict{opt.strict_min_fragments, opt.strict_min_correlation, opt.strict_min_cosine};
@@ -788,6 +802,13 @@ namespace ODIA
       }
       return cut;
     };
+    // The decoys scored like the targets: the library's decoy panel, else the targets with shifted fragment windows.
+    const auto decoysFor = [&](const Criteria& open, const MassSearch& s) {
+      if (!decoy_panel.empty()) { return examinePanel(lib, grid, opt2, decoy_panel, open, s, &map1, res.stage2_window_s); }
+      Criteria shifted = open;
+      shifted.decoy_shift_th = opt.decoy_shift;
+      return examinePanel(lib, grid, opt2, panel, shifted, s, &map1, res.stage2_window_s);
+    };
     std::size_t stage2_decoys = 0;
     for (int round = 0; round < std::max(1, opt.search_rounds); ++round)
     {
@@ -804,9 +825,7 @@ namespace ODIA
         Criteria open = relaxed;
         open.min_correlation = -1; open.min_cosine = -1;   // everything co-eluting at all: the cut decides
         auto targets = examinePanel(lib, grid, opt2, panel, open, search, &map1, res.stage2_window_s);
-        Criteria decoy = open;
-        decoy.decoy_shift_th = opt.decoy_shift;
-        const auto decoys = examinePanel(lib, grid, opt2, panel, decoy, search, &map1, res.stage2_window_s);
+        const auto decoys = decoysFor(open, search);
         res.score_cut = scoreCut(targets, decoys, opt.anchor_fdr);
         res.strict_score_cut = scoreCut(targets, decoys, opt.anchor_fdr / 10);
         relaxed.min_score = res.score_cut;
@@ -845,8 +864,7 @@ namespace ODIA
         sk.ms2_width = k * m2.sigma; sk.ms1_width = k * std::max(m1.sigma, 1e-3); sk.ms2_sigma = 0;
         Criteria open = relaxed; open.min_correlation = -1; open.min_cosine = -1; open.min_score = -1;
         auto targets = examinePanel(lib, grid, opt2, panel, open, sk, &map1, res.stage2_window_s);
-        Criteria decoy = open; decoy.decoy_shift_th = opt.decoy_shift;
-        const auto decoys = examinePanel(lib, grid, opt2, panel, decoy, sk, &map1, res.stage2_window_s);
+        const auto decoys = decoysFor(open, sk);
         const double cut = scoreCut(targets, decoys, 0.01);
         const auto n_t = std::count_if(targets.begin(), targets.end(), [&](const PanelResult& x) { return x.score >= cut; });
         const auto n_d = std::count_if(decoys.begin(), decoys.end(), [&](const PanelResult& x) { return x.score >= cut; });

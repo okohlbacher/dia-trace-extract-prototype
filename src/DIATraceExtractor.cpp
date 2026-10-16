@@ -382,6 +382,10 @@ protected:
     struct Panel { ODIA::Library lib; std::size_t keep_every = 1; ODIA::StageTime time; };
     std::future<Panel> panel_future;
     std::uint64_t all_rows = 0;   // the whole library (also with -ids): the calibration panel is drawn from all of it
+    // Experiment (results/decoys/): ODIA_ANCHOR_FDR accepts anchors at a decoy-calibrated false rate, scoring the library's
+    // own peptide decoys when it has them. Not adopted as a default: at 1% too few anchors survive on timsTOF, at 5%
+    // the timsTOF mass width widens, and on Astral the cleaner anchors understate the RT scatter (window coverage 96%).
+    const bool decoy_experiment = std::getenv("ODIA_ANCHOR_FDR") != nullptr;
     if (rt_auto || mass_auto)
     {
       // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
@@ -394,13 +398,13 @@ protected:
           : std::max(1.0, ODIA::CalibrationOptions{}.panel_fraction * static_cast<double>(all_rows)));
       const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, all_rows / (2 * panel_size)));
       const int panel_threads = std::max(std::min(4, threads), threads - ingest_threads);
-      panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads] {
+      panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads, decoy_experiment] {
         const ODIA::StageTime t0 = ODIA::stageClock();
         omp_set_num_threads(panel_threads);
         Panel p;
         ODIA::LibraryLoadOptions popt;
         popt.top_fragments = 0;   // all fragments: the anchor search uses the top 6, the tolerance curve all of them
-        popt.targets_only = true;
+        popt.targets_only = !decoy_experiment;   // the library's decoys only for the decoy-calibrated experiment
         popt.threads = panel_threads;
         popt.keep_every = keep_every;
         ODIA::LibraryReader(lib_file, popt).readAll(p.lib, panel_threads);   // streamed: never the whole library
@@ -463,6 +467,7 @@ protected:
       copt.ms1_sigma = getDoubleOption_("mz_accuracy_ms1");
       copt.linear_mass_model = getStringOption_("calibration:mz_model") == "linear";
       copt.lowess_span = getDoubleOption_("calibration:lowess_span");
+      if (const char* fdr = std::getenv("ODIA_ANCHOR_FDR")) { copt.anchor_fdr = std::atof(fdr); }   // experiment, see above
       copt.threads = threads;
       try { cal = ODIA::calibrate(*cal_lib, grid, copt); }
       catch (const std::exception& e)
@@ -485,7 +490,7 @@ protected:
                       << cal->used << " used; RT residual |p50/p95/p99| " << cal->rt_residual_p50 << " / "
                       << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; peak FWHM " << cal->peak_fwhm_cycles << " cycles ("
                       << cal->peak_fwhm_s << " s), co-elution window +-" << cal->half_window_cycles << " cycles; score cut " << cal->score_cut
-                      << " (" << cal->decoy_anchors << " decoys above it), strict cut " << cal->strict_score_cut << "; MS2 offset "
+                      << " (" << cal->decoy_anchors << " decoys above it, " << (cal->decoy_panel ? std::to_string(cal->decoy_panel) + " library decoys" : std::string("shifted-fragment decoys")) << "), strict cut " << cal->strict_score_cut << "; MS2 offset "
                       << cal->ms2_offset_ppm << " ppm" << slopeText(cal->ms2_slope_ppm_per_th, cal->ms2_mz_ref) << " (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
                       << cal->ms1_offset_ppm << " ppm" << slopeText(cal->ms1_slope_ppm_per_th, cal->ms1_mz_ref) << " (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
                       << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (coverage half widths " << cal->ms2_coverage_ppm << " / " << cal->ms1_coverage_ppm << " ppm; = " << cal->accuracy_sigma << " sigma; co-elution by k:"

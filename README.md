@@ -56,7 +56,7 @@ ctest --test-dir build        # OpenSWATH parity + thread determinism
 ## Use
 
 ```bash
-# the defaults: RT map, RT window, mass offsets and tolerances measured from the run; all cores (up to 64)
+# the defaults: RT map, RT window, mass offsets and tolerances measured from the run; all physical cores
 DIATraceExtractor -in run.mzML -lib library.parquet -out traces.parquet
 # a library tuned to this run (RT in run minutes, as DIALibGen -mode tune writes): skip fitting the RT map
 DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes -out traces.parquet -out_stats stats.json
@@ -76,9 +76,10 @@ for output files.
   list; `-top_fragments` (default 6, 0 = all).
 - **RT:** `-rt_mode auto` (default) fits the library-to-run RT map from the run itself and works with any library
   RT scale (predicted, iRT, minutes); `minutes` and `seconds` take the library RT as run time; `-rt_anchors` or
-  `-rt_trafo` give a map. `-rt_window` (half width) is by default measured along the gradient: 4 × the RT scatter of
-  the calibration anchors about the map + 2 × their peak width (FWHM), per RT bin (about ±45–70 s on Astral, ±75–210 s
-  on timsTOF with predicted RT; it contained 99.6–99.8% of DIA-NN's whole peaks on the benchmark runs). A value in
+  `-rt_trafo` give a map. `-rt_window` (half width) is by default measured along the gradient: 7 × the robust RT scatter
+  of the calibration anchors about the map + 2 × their peak width (FWHM), per RT bin. On the ten benchmark
+  configurations (Astral runs 01–03 with tuned and predicted libraries, timsTOF A01/B01) it contained 99.4–100% of
+  DIA-NN's whole peaks; about ±40–90 s with tuned libraries, ±250–300 s with predicted RT. A value in
   seconds fixes it, a negative value extracts the whole run. The tool warns when the library's RTs map onto only a
   small part of the run, the sign of a wrong `-rt_mode`.
 - **m/z:** the tolerances `-mz_tol_ms2`/`-mz_tol_ms1` (± ppm) are by default measured: `-mz_accuracy_ms2` and

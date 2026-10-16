@@ -37,6 +37,7 @@ namespace ODIA
     bool linear_mass_model = true;    ///< m/z-dependent correction (offset + slope x (mz - ref)) when the data support it
     double min_relative_intensity = 0.0; ///< apex centroids below this share of the anchor's strongest fragment are left out of the mass model
     int top_fragments = 6;            ///< fragments per panel precursor used for co-elution
+    bool library_decoys = true;       ///< score the library's own decoys (when present) as the decoy population
     int half_window_cycles = 0;       ///< co-elution window around a candidate apex (+- cycles); 0 = twice the median
                                       ///< peak FWHM of the stage-1 anchors, at least 3 (stage 1 itself uses seed_window_cycles)
     int seed_window_cycles = 4;       ///< stage-1 window when half_window_cycles is measured
@@ -85,6 +86,7 @@ namespace ODIA
     std::size_t stage1_anchors = 0, stage1_used = 0;
     double stage2_window_s = 0;
     double rt_residual_p50 = 0, rt_residual_p95 = 0, rt_residual_p99 = 0;  ///< |residual|, s, used anchors
+    std::size_t decoy_panel = 0;          ///< library decoys scored (0: shifted-fragment decoys)
     double peak_fwhm_cycles = 0, peak_fwhm_s = 0;   ///< median FWHM of the stage-1 anchors' summed fragment trace
     int half_window_cycles = 0;                     ///< co-elution window used in stage 2
     double score_cut = 0, strict_score_cut = 0;     ///< decoy-calibrated stage-2 score cuts (anchor_fdr; anchor_fdr / 10)
