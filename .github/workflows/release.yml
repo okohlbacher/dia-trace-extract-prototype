@@ -425,13 +425,12 @@ jobs:
           DMG="$RUNNER_TEMP/out/$name.dmg"
           codesign --force --timestamp --keychain "$MACOS_KEYCHAIN" --sign "$MACOS_SIGN_IDENTITY" "$DMG"
           bash tool/ci/notarize.sh "$DMG"
-          # stapling fetches the ticket from Apple's CDN, which drops connections now and then (error 68); retry
+          # stapling and validating fetch the ticket from Apple's CDN, which drops connections now and then (error 68); retry
           for attempt in 1 2 3 4 5; do
-            xcrun stapler staple "$DMG" && break
+            xcrun stapler staple "$DMG" && xcrun stapler validate "$DMG" && break
             [ $attempt -eq 5 ] && { echo "::error::stapling failed $attempt times"; exit 1; }
             echo "staple attempt $attempt failed; retrying in $((attempt * 20)) s"; sleep $((attempt * 20))
           done
-          xcrun stapler validate "$DMG"
           spctl -a -vv -t open --context context:primary-signature "$DMG"
       # Installer package: the same folder under /usr/local/lib/diatraceextractor, the launcher linked as
       # /usr/local/bin/DIATraceExtractor. Built, installed and run on every macOS build; signed with the Developer ID
@@ -472,11 +471,10 @@ jobs:
           productsign --timestamp --keychain "$MACOS_KEYCHAIN" --sign "$MACOS_INSTALLER_IDENTITY" "$RUNNER_TEMP/$name-unsigned.pkg" "$PKG"
           bash tool/ci/notarize.sh "$PKG"
           for attempt in 1 2 3 4 5; do
-            xcrun stapler staple "$PKG" && break
+            xcrun stapler staple "$PKG" && xcrun stapler validate "$PKG" && break
             [ $attempt -eq 5 ] && { echo "::error::stapling failed $attempt times"; exit 1; }
             sleep $((attempt * 20))
           done
-          xcrun stapler validate "$PKG"
           spctl -a -vv -t install "$PKG"
       - name: "macOS: remove the signing keychain"
         if: always() && steps.signing.outputs.keychain != ''
