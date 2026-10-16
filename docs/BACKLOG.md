@@ -31,8 +31,6 @@
   background mixture (both too narrow / unstable), the anchors' co-elution curve (right on Astral, not on TOF).
   Explore: a kernel-density estimate of the error distribution (as FeatureFinderMetabo's mass-trace detection in
   OpenMS); an anchor-based criterion that reproduces the TOF optimum.
-- **RT window.** Now fixed `-rt_window 60`. Explore: peak width and RT-map uncertainty as a function of RT from the
-  calibration anchors (iterative refinement, iterative re-extraction with a narrowed window).
 - **Co-elution window**: now measured (stage 2 uses twice the median FWHM of the stage-1 anchors, ≥ 3 cycles; stage
   1 keeps a seed of ±4). On Astral the FWHM is 2 cycles (3.3 s), giving ±4 as before.
 - **Anchor acceptance thresholds** (correlation 0.90/0.80, cosine 0.85/0.75, fragments 5/4): a decoy-calibrated score
@@ -42,9 +40,9 @@
   collapsed to a negative score, noisy anchors entered (error width 0.93 → 1.18 ppm, tolerance ±5.5 → ±7.1 ppm) and
   DIA-NN agreement fell from 91.2% to 86.3%. False anchors are real peptides' fragments; peptide-like decoys from
   the library generator (`-generation:decoys`) are the right calibration set. Open.
-- **RT window**: from V0.2.15 the default is max(60 s, 99th percentile of the anchor residuals + peak width) with
-  `-rt_mode auto` (Astral 60 s, timsTOF with predicted RT ~105 s, where ±60 s clipped 5-10% of the anchors' apexes).
-  Iterative re-extraction with a narrowed window: open.
+- **RT window**: measured since V0.2.15 (4 × robust RT scatter of the anchors about the map + 2 × FWHM, per RT bin;
+  99.6-99.8% of DIA-NN's whole peaks inside; `results/rtwin/`). Open: iterative re-extraction with a narrowed window;
+  the 4 / 2 multiples were chosen on three runs (Astral 01, timsTOF A01/B01) and should be checked on more data.
 - **Apex intensity cutoff** (`CalibrationOptions::min_relative_intensity`, now 0): evaluate 0 vs 0.1 with the mixture fit.
 - **RT model internals** (mode bins 20, mode bandwidth 15 s, min stage-2 window 30 s, min reject 3 s, LOWESS span
   0.15): constants in `CalibrationOptions` since V0.2.15 (only the LOWESS span stays an option); could be expressed
