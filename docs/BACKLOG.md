@@ -78,6 +78,22 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
+- **0.3.0: command line and instrument defaults, phase 2** (`docs/cli-review/CLI-REVIEW.md`, following
+  `docs/HANDOFF-instrument-defaults-and-cli.md`; phase 1 done 2026-10-16 with Codex, Kimi and Vibe). Taken over from
+  the recommendations: instrument defaults as YAML data files (yaml-cpp; `orbitrap.yaml` 9, `tof.yaml` 4 as today's
+  classes, `astral.yaml` 9 and `timstof.yaml` 4 with their measured sources, `default.yaml` 6 and the RT-window rule),
+  `-instrument` (basic) and `-instrument_file`, provenance of every resolved value (sources, raw instrument string,
+  file hashes outside any fingerprint), the one-line unknown-option message and skipping the deprecated names in
+  `-write_ini` through a TOPPBase patch (offered upstream), short log lines under the stable prefixes with the detail
+  behind `-debug 1`, `docs/messages-review.md`, CHANGELOG. Done in 0.2.16: the 0.2.14 names accepted again (until 0.4),
+  the INI threads rule.
+- **DIALibGen on OpenMS develop:** 0.11.5's search module subclasses OpenSWATH's calibration workflow and sets its
+  estimated windows, which develop made private (no setters); a port is needed before a develop build (the
+  version-neutral fixes: local branch `openms-develop-build` in tools/DIALibGen). DIALibGen's own CI builds against
+  OpenMS 3.5/3.6; its CLI cleanup is DIALibGen PR #5 (0.12.1).
+- **Peptide decoys for the calibration (2026-10-16, `results/decoys/`):** tried, not adopted (the anchor cut is not
+  robust across instruments; the decoy-based tolerance curve does not reproduce the screen's optima). Kept as the
+  experiment `ODIA_ANCHOR_FDR`.
 - **Command line (V0.2.15, 2026-10-15; adversarial review with Codex and Kimi, `results/clicheck/`, `results/rtwin/`):**
   done: `-rt_mode auto` default (the old default took library RT as run seconds and silently extracted the wrong
   place for predicted, iRT or minutes libraries); all cores up to 64 unless `-threads` is given (384 threads were
@@ -109,10 +125,12 @@
   and CI installs the tarball through a local tap and extracts traces. Open:
   - **Windows code signing**: needs a SignPath project for this repository and `SIGNPATH_API_TOKEN`/`SIGNPATH_ORG_ID`
     (wire like BALL's: zip artifact configuration, test-signing policy first).
-  - Publish the tap formula from the workflow (needs a tap-scoped token as a secret) instead of by hand.
+  - Tap formula from the workflow: done in 0.2.16, active once the secret HOMEBREW_TAP_DEPLOY_KEY (a write deploy
+    key of okohlbacher/homebrew-odia) is set; until then `ci/publish_formula.sh TAG`.
   - Linux packages need glibc ≥ 2.39 (Ubuntu 24.04 runners); an older-glibc build (manylinux container) if users need it.
-  - Signed tarball/Homebrew installs start slowly the first time (online check of each bundled dylib); a stapled `.pkg`
-    would avoid it.
+  - macOS `.pkg` (stapled, avoids the slow first start of signed tarballs): built, installed and run on every macOS
+    build since 0.2.16; signed, notarized and published once MACOS_INSTALLER_CERTIFICATE_BASE64/_PASSWORD (a
+    Developer ID Installer certificate) are set.
 - **Laptop benchmark (2026-10-13, MacBook Pro M4 Max, on battery; `docs/12-macos-benchmark-note.md`, report §6):** done and
   merged (V0.2.4). Three defects fixed: `--help` abort (unregistered subsection), exit-time abort under libc++ (pool never
   destroyed), `-threads 1` on the serial parser (70 → 14 s on the node). Open: re-run the laptop's 1-thread point. **Resolved 2026-10-13 (laptop analysis, commit df71463 on branch `ingest-perf` (rebased on V0.2.6; FileReader in the platform layer),
@@ -123,7 +141,6 @@
 - **Full trace export for the group (2026-10-12):** extract all mass traces for every arm (ours A-V0.2, ours B, P; DIA-NN 1.7.12
   XICs; OpenSWATH) for every benchmark file (Astral runs 01–03, diaPASEF A01/B01) in both formats (Parquet and TSV), and
   put them on Ceph next to the benchmark data. Rule B is the `-scheme B` preset (V0.2.1). Done 2026-10-13: `scripts/export_all_traces.sh benchmark-data/traces-v0.2.1` (179 GB, layout in its README.txt). Open: share with the group.
-- Push the DIALibGen build fix (tools/DIALibGen, branch compact-parquet-plain-strings, 6f26790) and open its PR.
 - Scheduler beyond 64 threads (lock + look-ahead window): 384 threads are 4.5x slower than 64 on the 7 M library (2 x EPYC 9654, 2026-10-15); the default stops at 64 meanwhile. Compact-v2 library layout.
 - Lower the library-load transient memory peak (decoded row groups + parts + joined copy coexist).
 - 50K shared library (Justin).
