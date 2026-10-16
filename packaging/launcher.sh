@@ -1,7 +1,13 @@
 #!/bin/sh
 # DIATraceExtractor launcher of the binary release: the bundled libraries and OpenMS's shared data are found
 # relative to this script, so the directory can live anywhere. The tool itself is libexec/DIATraceExtractor.
-here=$(cd "$(dirname "$0")/.." && pwd)
+# follow symbolic links (the .pkg installer links /usr/local/bin/DIATraceExtractor to this script)
+self=$0
+while [ -L "$self" ]; do
+  target=$(readlink "$self")
+  case "$target" in /*) self=$target ;; *) self=$(dirname "$self")/$target ;; esac
+done
+here=$(cd "$(dirname "$self")/.." && pwd)
 export OPENMS_DATA_PATH="$here/share/OpenMS"
 # Linux: the bundled libraries via the loader path. macOS: the tool finds them through its own rpath
 # (@executable_path/../lib, ci/macos_relocate_sign.sh); DYLD_* variables would be ignored by the hardened runtime.

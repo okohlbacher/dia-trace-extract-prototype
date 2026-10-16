@@ -25,11 +25,13 @@
   #include <fcntl.h>
   #if defined(__linux__)
     #include <malloc.h>
+    #include <sched.h>
     #include <fstream>
   #endif
   #if defined(__APPLE__)
     #include <mach/mach.h>
     #include <mach-o/dyld.h>
+    #include <sys/sysctl.h>
   #endif
 #endif
 
@@ -239,4 +241,50 @@ namespace ODIA::platform
     // execv returns only on failure: continue with the variable set for this process
   }
 #endif
+
+  int physicalCores()
+  {
+#if defined(_WIN32)
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len);
+    std::vector<unsigned char> buf(len);
+    if (len == 0 || !GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data()), &len)) { return 1; }
+    DWORD_PTR mask = 0, sys = 0;
+    GetProcessAffinityMask(GetCurrentProcess(), &mask, &sys);
+    int cores = 0;
+    for (DWORD off = 0; off < len;)
+    {
+      auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data() + off);
+      // a core counts when one of its hardware threads is in the process mask (group 0; more groups: count all)
+      const GROUP_AFFINITY& g = info->Processor.GroupMask[0];
+      if (g.Group != 0 || (g.Mask & mask) != 0) { ++cores; }
+      off += info->Size;
+    }
+    return std::max(1, cores);
+#elif defined(__APPLE__)
+    int n = 0; std::size_t sz = sizeof n;
+    if (sysctlbyname("hw.physicalcpu", &n, &sz, nullptr, 0) != 0 || n < 1) { n = static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN)); }
+    return std::max(1, n);
+#else
+    // the CPUs in the affinity mask, one per (package, core)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof set, &set) != 0) { return std::max(1, static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN))); }
+    std::vector<std::pair<int, int>> seen;
+    int unknown = 0;
+    for (int c = 0; c < CPU_SETSIZE; ++c)
+    {
+      if (!CPU_ISSET(c, &set)) { continue; }
+      const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(c) + "/topology/";
+      std::ifstream fp(base + "physical_package_id"), fc(base + "core_id");
+      int pkg = -1, core = -1;
+      if (!(fp >> pkg) || !(fc >> core)) { ++unknown; continue; }
+      seen.emplace_back(pkg, core);
+    }
+    std::sort(seen.begin(), seen.end());
+    seen.erase(std::unique(seen.begin(), seen.end()), seen.end());
+    return std::max(1, static_cast<int>(seen.size()) + unknown);
+#endif
+  }
 }
+

@@ -172,8 +172,8 @@ public:
   TOPPDIATraceExtractor()
     : TOPPBase("DIATraceExtractor",
                "Extract fragment and MS1 isotope traces (XICs) of a spectral library from a DIA run. "
-               "RT map, RT window, mass offsets and tolerances are measured from the run; uses all cores "
-               "(up to 64) unless -threads is given.", {}, false)
+               "RT map, RT window, mass offsets and tolerances are measured from the run; uses all physical "
+               "cores unless -threads is given.", {}, false)
   {
     version_ = ODIA_VERSION;
     verboseVersion_ = std::string(ODIA_VERSION) + " (OpenMS " + VersionInfo::getVersion() + ")";
@@ -202,7 +202,7 @@ protected:
                           "-rt_anchors or -rt_trafo select a given map instead.", false);
     setValidStrings_("rt_mode", {"auto", "minutes", "seconds"});
     registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
-                          "0 (default): measured from the run, along the gradient: 4 x the RT scatter of the calibration "
+                          "0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration "
                           "anchors about the RT map + 2 x their peak width (FWHM). Negative: the whole run.", false);
     registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
                           "(-mz_accuracy_ms2 x the fragment mass-error width).", false);
@@ -291,9 +291,9 @@ protected:
   int threadCount_()
   {
     if (threads_given_ && getIntOption_("threads") > 0) { return getIntOption_("threads"); }
-    // all cores the process may use (the affinity mask); the default stops at 64, where the extraction stops scaling
-    // and contention takes over (7 M precursors on 2 x EPYC 9654: 9.4 s at 64 threads, 22 s at 192, 43 s at 384)
-    return std::max(1, std::min(omp_get_num_procs(), threads_given_ ? omp_get_num_procs() : 64));
+    // default: the physical cores the process may use (SMT siblings do not help the extraction); 0: every hardware
+    // thread, as TOPP documents
+    return threads_given_ ? std::max(1, omp_get_num_procs()) : ODIA::platform::physicalCores();
   }
 
   ExitCodes run_(int, const char**)
@@ -335,7 +335,7 @@ protected:
     }
     const int threads = threadCount_();
     omp_set_num_threads(threads);
-    OPENMS_LOG_INFO << "Threads: " << threads << (threads_given_ ? "" : " (all cores, up to 64; -threads sets the number)") << std::endl;
+    OPENMS_LOG_INFO << "Threads: " << threads << (threads_given_ ? "" : " (the physical cores; -threads sets the number)") << std::endl;
 
     // --- library: opened as a stream of parts (read concurrently with extraction below)
     const ODIA::StageTime t_lib0 = ODIA::stageClock();
@@ -534,11 +534,12 @@ protected:
     std::string rt_window_text = std::to_string(rt_window_opt);
     if (eopt.rt_half_window == 0.0)
     {
-      // Measured, RT-dependent: 4 x the robust sigma (1.4826 MAD) of the calibration anchors' residuals about the RT map
+      // Measured, RT-dependent: 7 x the robust sigma (1.4826 MAD) of the calibration anchors' residuals about the RT map
       // in use, plus 2 x their median peak FWHM, per RT bin of ~150 anchors (at most 8), linear in between. The robust
-      // sigma is not biased by the calibration's RT search window (which truncates the anchors' tails), and matched the
-      // scatter of DIA-NN's IDs on Astral and timsTOF; the rule contained 99.6-99.8% of DIA-NN's whole peaks there
-      // (fixed +-60 s: 99.8% Astral, 80% timsTOF; results/rtwin/).
+      // sigma is not biased by the calibration's RT search window (which truncates the anchors' tails), but the
+      // residuals have heavy tails: on all ten benchmark configurations (Astral runs 01-03 with tuned and predicted
+      // libraries, timsTOF A01/B01) 7 x contained >= 99.4% of DIA-NN's whole peaks (median 99.99%); 4 x fell to 94.7%,
+      // 6 x to 98.1%, fixed +-60 s to 79% (results/rtwin/all/).
       std::vector<std::array<double, 3>> pts;   // run RT, residual, FWHM
       if (cal) { for (const auto& a : cal->anchors) { if (a.used) { pts.push_back({a.run_rt, a.run_rt - rt_map(a.library_rt), a.fwhm_s}); } } }
       if (pts.size() >= 50)
@@ -554,14 +555,14 @@ protected:
           const double rm = median(r);
           std::vector<double> dev; for (double x : r) { dev.push_back(std::fabs(x - rm)); }
           eopt.rt_window_at.push_back(median(t));
-          eopt.rt_window_half.push_back(4.0 * 1.4826 * median(dev) + 2.0 * median(f));
+          eopt.rt_window_half.push_back(7.0 * 1.4826 * median(dev) + 2.0 * median(f));
         }
         const auto [mn, mx] = std::minmax_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
         eopt.rt_half_window = *mx;   // > 0: not a whole-run extraction
         std::ostringstream os; os.precision(3);
         for (std::size_t b = 0; b < nb; ++b) { os << (b ? ", " : "") << eopt.rt_window_half[b] << " s at " << std::lround(eopt.rt_window_at[b]) << " s"; }
         rt_window_text = "measured: " + os.str();
-        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, 4 x the RT scatter + 2 x the peak FWHM of " << pts.size()
+        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, 7 x the RT scatter + 2 x the peak FWHM of " << pts.size()
                         << " anchors in " << nb << " RT bin(s) (" << os.str() << ")" << std::endl;
       }
       else

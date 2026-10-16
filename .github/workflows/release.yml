@@ -278,7 +278,10 @@ jobs:
           NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD }}
           NOTARY_ID: ${{ secrets.MACOS_APPLE_ID }}
           NOTARY_TEAM: ${{ secrets.MACOS_TEAM_ID }}
+          INSTALLER_CERT: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_BASE64 }}
         run: |
+          if [ -n "$CERT" ] && [ -n "$INSTALLER_CERT" ]; then echo "installer=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::no MACOS_INSTALLER_CERTIFICATE_BASE64 (Developer ID Installer) -- the .pkg is built and tested but not published"; echo "installer=false" >> "$GITHUB_OUTPUT"; fi
           if [ -z "$CERT" ]; then
             echo "::notice::no MACOS_CERTIFICATE_BASE64 -- the macOS package is ad-hoc signed"
             echo "sign=false" >> "$GITHUB_OUTPUT"; echo "notarize=false" >> "$GITHUB_OUTPUT"; exit 0
@@ -295,6 +298,8 @@ jobs:
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           KCPW="${MACOS_KEYCHAIN_PASSWORD:-$(uuidgen)}"; echo "::add-mask::$KCPW"
@@ -315,6 +320,15 @@ jobs:
             echo "::error::MACOS_SIGNING_IDENTITY does not match the imported certificate ($IDENT)"; exit 1; fi
           echo "identity=$IDENT" >> "$GITHUB_OUTPUT"; echo "keychain=$KC" >> "$GITHUB_OUTPUT"
           echo "signing as: $IDENT"
+          if [ -n "$MACOS_INSTALLER_CERTIFICATE_BASE64" ]; then
+            printf '%s' "$MACOS_INSTALLER_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+            security import "$RUNNER_TEMP/installer.p12" -k "$KC" -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12
+            rm -f "$RUNNER_TEMP/installer.p12"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+            INST=$(security find-identity -v "$KC" | sed -n 's/.*"\(Developer ID Installer: .*\)"/\1/p' | head -1)
+            [ -n "$INST" ] || { echo "::error::no Developer ID Installer identity in MACOS_INSTALLER_CERTIFICATE_BASE64"; exit 1; }
+            echo "installer_identity=$INST" >> "$GITHUB_OUTPUT"; echo "installer package signed as: $INST"
+          fi
       - name: Install the self-contained tree
         shell: bash
         run: |
@@ -419,6 +433,51 @@ jobs:
           done
           xcrun stapler validate "$DMG"
           spctl -a -vv -t open --context context:primary-signature "$DMG"
+      # Installer package: the same folder under /usr/local/lib/diatraceextractor, the launcher linked as
+      # /usr/local/bin/DIATraceExtractor. Built, installed and run on every macOS build; signed with the Developer ID
+      # Installer certificate, notarized and stapled (so it installs offline without the per-library online check a
+      # tarball gets) and published only when that certificate is configured.
+      - name: "macOS: installer package (.pkg), installed and run"
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/pkgroot"; rm -rf "$ROOT"; mkdir -p "$ROOT/usr/local/lib" "$ROOT/usr/local/bin"
+          ditto "$RUNNER_TEMP/stage/$name" "$ROOT/usr/local/lib/diatraceextractor"
+          ln -s ../lib/diatraceextractor/bin/DIATraceExtractor "$ROOT/usr/local/bin/DIATraceExtractor"
+          pkgbuild --root "$ROOT" --identifier de.uni-tuebingen.diatraceextractor --version "$version" --install-location / \
+                   "$RUNNER_TEMP/$name-unsigned.pkg"
+          sudo installer -pkg "$RUNNER_TEMP/$name-unsigned.pkg" -target /
+          /usr/local/bin/DIATraceExtractor --help 2>&1 | grep -E "^Version: ${version//./\\.} " || { /usr/local/bin/DIATraceExtractor --help 2>&1 | tail -20; exit 1; }
+          TD="$GITHUB_WORKSPACE/tool/testdata/openms"; O="$RUNNER_TEMP/pkg-smoke"; mkdir -p "$O"
+          /usr/local/bin/DIATraceExtractor -in "$TD/OpenSwathWorkflow_1_input.mzML" -lib "$TD/OpenSwathWorkflow_1_input.TraML" -rt_window -1 \
+            -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -scheme B -threads 2 -out "$O/smoke.parquet" -out_tsv "$O/smoke.tsv" > pkg-smoke.log 2>&1 \
+            || { cat pkg-smoke.log; exit 1; }
+          [ $(wc -l < "$O/smoke.tsv") -gt 100 ] || { echo "::error::the installed .pkg wrote no traces"; cat pkg-smoke.log; exit 1; }
+          echo "installed .pkg runs: $(grep -E '^Written:' pkg-smoke.log)"
+          sudo rm -rf /usr/local/lib/diatraceextractor /usr/local/bin/DIATraceExtractor; sudo pkgutil --forget de.uni-tuebingen.diatraceextractor > /dev/null
+      - name: "macOS: sign, notarize and staple the installer package"
+        if: steps.sign.outputs.installer == 'true' && steps.sign.outputs.notarize == 'true'
+        timeout-minutes: 60
+        shell: bash
+        env:
+          MACOS_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+          MACOS_INSTALLER_IDENTITY: ${{ steps.signing.outputs.installer_identity }}
+          MACOS_APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          PKG="$RUNNER_TEMP/out/$name.pkg"
+          productsign --timestamp --keychain "$MACOS_KEYCHAIN" --sign "$MACOS_INSTALLER_IDENTITY" "$RUNNER_TEMP/$name-unsigned.pkg" "$PKG"
+          bash tool/ci/notarize.sh "$PKG"
+          for attempt in 1 2 3 4 5; do
+            xcrun stapler staple "$PKG" && break
+            [ $attempt -eq 5 ] && { echo "::error::stapling failed $attempt times"; exit 1; }
+            sleep $((attempt * 20))
+          done
+          xcrun stapler validate "$PKG"
+          spctl -a -vv -t install "$PKG"
       - name: "macOS: remove the signing keychain"
         if: always() && steps.signing.outputs.keychain != ''
         shell: bash
@@ -463,6 +522,14 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-checksums: packages/SHA256SUMS
+      - name: Homebrew tap configuration
+        id: tap
+        shell: bash
+        env:
+          KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -n "$KEY" ] && [ -f packages/diatraceextractor.rb ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::no HOMEBREW_TAP_DEPLOY_KEY (or no formula) -- the tap is not updated; run ci/publish_formula.sh"; echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
       - name: Publish
         uses: softprops/action-gh-release@v3
         with:
@@ -479,3 +546,27 @@ jobs:
             (`brew install --formula diatraceextractor.rb`, or through the tap `okohlbacher/odia`).
             `SHA256SUMS` lists every file's checksum (`sha256sum -c SHA256SUMS --ignore-missing`); each file carries a
             build provenance attestation (`gh attestation verify FILE -R ${{ github.repository }}`).
+            macOS installer: `DIATraceExtractor-<version>-macos-arm64.pkg` (when present) installs the folder under
+            `/usr/local/lib/diatraceextractor` and links `/usr/local/bin/DIATraceExtractor`.
+      # after Publish: the formula points at the release's tarball, which must be downloadable
+      - name: Check out the Homebrew tap
+        if: steps.tap.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: okohlbacher/homebrew-odia
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: Update the Homebrew tap
+        if: steps.tap.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          mkdir -p tap/Formula
+          cp packages/diatraceextractor.rb tap/Formula/diatraceextractor.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/diatraceextractor.rb
+          if git diff --cached --quiet; then echo "tap already at this formula"; exit 0; fi
+          git commit -q -m "diatraceextractor ${{ github.event.inputs.ref || github.ref_name }}"
+          git push -q origin HEAD
+          grep -m1 version Formula/diatraceextractor.rb

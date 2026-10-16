@@ -36,6 +36,9 @@ namespace ODIA::platform
 
   /// Hand memory the allocator holds back to the OS (glibc's malloc_trim; a no-op elsewhere).
   void trimHeap();
+  /// Physical cores this process may run on (its CPU affinity on Linux and Windows; hardware threads of one core
+  /// count once); at least 1.
+  int physicalCores();
 
   /// Positional reads of one file from any thread: one shared handle, no per-thread stream state (pread; ReadFile
   /// with an offset on Windows). readAt fails when the range is short. Not copyable.
