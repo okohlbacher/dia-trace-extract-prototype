@@ -1,0 +1,6 @@
+# Time-of-flight instruments (the class rule of V0.2.2-V0.2.16, now data): matched when the run's instrument name
+# contains "tof" (ignoring case).
+name: TOF
+keywords: [tof]
+# The fragment co-elution optimum of the tolerance screen on timsTOF is k = 4-5 (report s5); applied to the class.
+mz_accuracy_ms2: 4

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <climits>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -286,5 +287,30 @@ namespace ODIA::platform
     return std::max(1, static_cast<int>(seen.size()) + unknown);
 #endif
   }
-}
 
+  std::string executablePath()
+  {
+#if defined(_WIN32)
+    std::wstring buf(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    if (n == 0 || n >= buf.size()) { return ""; }
+    buf.resize(n);
+    const int len = WideCharToMultiByte(CP_UTF8, 0, buf.c_str(), static_cast<int>(n), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, buf.c_str(), static_cast<int>(n), out.data(), len, nullptr, nullptr);
+    return out;
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buf(size, '\0');
+    if (_NSGetExecutablePath(buf.data(), &size) != 0) { return ""; }
+    buf.resize(std::strlen(buf.c_str()));
+    char real[PATH_MAX];
+    return ::realpath(buf.c_str(), real) != nullptr ? std::string(real) : buf;
+#else
+    char buf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    return n > 0 ? std::string(buf, static_cast<std::size_t>(n)) : std::string();
+#endif
+  }
+}

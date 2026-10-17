@@ -1,0 +1,7 @@
+# Orbitrap Astral: measured on the ProteoBench Astral benchmark (report s5: fragment co-elution optimum k = 8-10,
+# heavy error tail, dropouts still falling at k = 12).
+name: Astral
+extends: orbitrap
+aliases: [Orbitrap Astral, Astral Zoom]
+keywords: [astral]
+mz_accuracy_ms2: 9

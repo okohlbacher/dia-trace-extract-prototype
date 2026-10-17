@@ -1,0 +1,6 @@
+# Orbitrap instruments (the class rule of V0.2.2-V0.2.16, now data): matched when the run's instrument name contains
+# one of the keywords (ignoring case).
+name: Orbitrap
+keywords: [orbitrap, astral, exploris, exactive, lumos, fusion, eclipse, velos, elite, tribrid, ascend]
+# The fragment co-elution optimum of the tolerance screen on Astral is k = 8-10 (report s5); applied to the class.
+mz_accuracy_ms2: 9

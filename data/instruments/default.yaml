@@ -1,0 +1,15 @@
+# DIATraceExtractor: the defaults that apply where no instrument file sets a value.
+# Precedence, per value: the option given (command line or INI) > the instrument's file (and the files it extends)
+# > this file. Every value cites its source (docs/10-release-report.md = "report").
+name: default
+# Fragment tolerance = this multiple x the measured robust width of the fragment mass errors, for an instrument of
+# unknown class: between the Orbitrap (9) and TOF (4) multiples (the class rule since V0.2.2, docs/00-dossier.md s7).
+mz_accuracy_ms2: 6
+# MS1 tolerance multiple: MS1 co-elution peaks at 4 sigma on both instruments of the tolerance screen (report s5).
+mz_accuracy_ms1: 4
+# Measured RT window: rt_window_sigma x the robust RT scatter of the calibration anchors about the RT map
+# + rt_window_fwhm x their median peak FWHM, per RT bin. 7 and 2 contain >= 99.37% of DIA-NN's whole peaks on all ten
+# benchmark configurations (Astral runs 01-03 with tuned and predicted libraries, timsTOF A01/B01; report s2,
+# results/rtwin/all/); 4 sigma fell to 94.7%, 6 sigma to 98.1%.
+rt_window_sigma: 7
+rt_window_fwhm: 2

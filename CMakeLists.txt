@@ -19,6 +19,8 @@ find_package(Arrow CONFIG REQUIRED)
 find_package(Parquet CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(ZLIB REQUIRED)
+# the instrument files (data/instruments/*.yaml); from OpenMS's vcpkg tree (ci/patch_openms_manifest.py adds it)
+find_package(yaml-cpp CONFIG REQUIRED)
 message(STATUS "OpenMS ${OpenMS_VERSION} (${OpenMS_DIR}); Arrow ${Arrow_VERSION}")
 
 if(TARGET Arrow::arrow_shared)
@@ -56,7 +58,8 @@ add_library(odia_traces STATIC
   src/Scheduler.cpp
   src/TraceWriter.cpp
   src/ParquetMerge.cpp
-  src/Calibration.cpp)
+  src/Calibration.cpp
+  src/Instruments.cpp)
 target_include_directories(odia_traces PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # mzPeak reader/writer: the mzpeak-openms library (git submodule external/mzpeak, tag partitioned-read-2026-10-11),
 # built here against the same Arrow as OpenMS. It needs Boost >= 1.89 with json and program_options, which the
@@ -89,9 +92,11 @@ if(MSVC)
     target_compile_options(numpress PRIVATE /utf-8 /EHsc)
   endif()
 endif()
-target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX ZLIB::ZLIB mzpeak)
+target_link_libraries(odia_traces PUBLIC OpenMS ${ODIA_ARROW} ${ODIA_PARQUET} OpenMP::OpenMP_CXX ZLIB::ZLIB mzpeak yaml-cpp::yaml-cpp)
 target_compile_options(odia_traces PRIVATE ${ODIA_CXX_OPTIONS})
 target_compile_definitions(odia_traces PUBLIC ${ODIA_CXX_DEFINITIONS} ODIA_VERSION="${PROJECT_VERSION}")
+# the source tree's instrument files, found when the tool runs from a build directory (src/Instruments.cpp)
+set_property(SOURCE src/Instruments.cpp APPEND PROPERTY COMPILE_DEFINITIONS ODIA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
   target_link_libraries(odia_traces PUBLIC psapi)
 endif()
@@ -163,4 +168,6 @@ if(ODIA_OPENMS_SHARE)
 else()
   message(WARNING "ODIA_OPENMS_SHARE not found: the installed tree will lack share/OpenMS and the tool will not start from it")
 endif()
+# the instrument defaults (src/Instruments.cpp finds them at <prefix>/share/DIATraceExtractor/instruments)
+install(DIRECTORY data/instruments/ DESTINATION share/DIATraceExtractor/instruments FILES_MATCHING PATTERN "*.yaml")
 install(FILES README.md LICENSE DESTINATION . OPTIONAL)

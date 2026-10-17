@@ -336,6 +336,8 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_ENV"
           cmake --install tool/build --prefix "$RUNNER_TEMP/stage/$NAME"
           du -sh "$RUNNER_TEMP/stage/$NAME"; ls "$RUNNER_TEMP/stage/$NAME"
+          # the instrument files must be in the package (the tool would fall back to this checkout's data/ here)
+          test -f "$RUNNER_TEMP/stage/$NAME/share/DIATraceExtractor/instruments/default.yaml" || { echo "::error::instrument files not installed"; exit 1; }
       - name: "macOS: make the tree relocatable and sign it (Developer ID with hardened runtime, else ad hoc)"
         if: runner.os == 'macOS'
         shell: bash
