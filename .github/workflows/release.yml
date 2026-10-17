@@ -122,6 +122,9 @@ jobs:
           git -C "$OPENMS_SRC" checkout "$REF"
           git -C "$OPENMS_SRC" submodule update --init --depth 1 vcpkg
           # TOPPBase: deprecated options left out of -write_ini, one-line unknown-option message (patches/README.md)
+          # (Windows checks out with CRLF, the patch has LF: the two files it touches are checked out with LF first)
+          P=(src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h src/openms_cli/source/APPLICATIONS/TOPPBase.cpp)
+          (cd "$OPENMS_SRC" && rm -f "${P[@]}" && git -c core.autocrlf=false -c core.eol=lf checkout -- "${P[@]}")
           git -C "$OPENMS_SRC" apply --whitespace=nowarn "$GITHUB_WORKSPACE/tool/patches/openms-toppbase-deprecated-options.patch"
           NOCOIN=""; [ "${{ matrix.name }}" = "windows-arm64" ] && NOCOIN=--no-coin
           python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC" $NOCOIN
