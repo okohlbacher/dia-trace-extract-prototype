@@ -35,3 +35,12 @@ add_test(NAME determinism_t8
           -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -mz_calibration off -unit_precursors 1 -out det8.parquet -threads 8)
 add_test(NAME determinism_compare COMMAND ${PY} ${PROJECT_SOURCE_DIR}/scripts/compare_parquet.py det1.parquet det8.parquet)
 set_tests_properties(determinism_compare PROPERTIES DEPENDS "determinism_t1;determinism_t8")
+
+# The command line (docs/HANDOFF-instrument-defaults-and-cli.md section 6): --help (line count pinned), unknown
+# options, instrument files and value sources, the 0.2.14 names, -write_ini.
+foreach(check help unknown_option instruments compatibility write_ini)
+  add_test(NAME cli_${check}
+    COMMAND ${PY} ${CMAKE_CURRENT_SOURCE_DIR}/cli_checks.py ${check} $<TARGET_FILE:DIATraceExtractor> ${TD} ${PROJECT_SOURCE_DIR})
+  set_property(TEST cli_${check} PROPERTY WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/cli_${check})
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/cli_${check})
+endforeach()
