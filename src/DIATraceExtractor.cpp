@@ -253,12 +253,29 @@ Param migrateIni(const Param& p)
   for (const auto& d : kDeprecated)
   {
     if (!(setD(d) || setI(d) || setS(d))) { continue; }
-    if (d.replacement[0] != '\0') { out.setValue(d.replacement, p.getValue(d.name)); continue; }
+    if (d.replacement[0] != '\0')
+    {
+      // a different value under the current name in the same INI is a conflict: the current name is kept
+      const std::string nn = d.replacement;
+      bool clash = false;
+      if (p.exists(nn))
+      {
+        if (d.type == 's') { const std::string now = p.getValue(nn).toString(); clash = now != d.new_default && now != p.getValue(d.name).toString(); }
+        else
+        {
+          const double now = double(p.getValue(nn)), v = double(p.getValue(d.name));
+          clash = std::fabs(now - std::atof(d.new_default)) > 1e-12 && std::fabs(now - v) > 1e-12;
+        }
+      }
+      if (clash) { dropped.push_back(std::string(d.name) + " (its current name " + nn + " has another value, kept)"); continue; }
+      out.setValue(nn, p.getValue(d.name));
+      continue;
+    }
     const bool at_default = d.type == 's' ? p.getValue(d.name).toString() == d.old_default
                           : std::fabs(double(p.getValue(d.name)) - std::atof(d.old_default)) < 1e-12;
     const std::string n = d.name;
     if (at_default || n == "aggregation" || n == "ms1_isotope_spacing" || n == "rt_intercept" || n == "rt_slope") { continue; }
-    dropped.push_back(n);
+    dropped.push_back(n + " (removed in 0.2.15)");
   }
   if (has("aggregation") && has("ms1_isotope_spacing") && p.getValue("aggregation").toString() == "sum" && p.getValue("ms1_isotope_spacing").toString() == "unit") { out.setValue("scheme", "B"); }
   if (has("rt_mode"))
@@ -276,7 +293,7 @@ Param migrateIni(const Param& p)
   {
     std::string t;
     for (const auto& x : dropped) { t += (t.empty() ? "" : ", ") + x; }
-    OPENMS_LOG_WARN << "WARNING: not carried over into the new INI (removed in 0.2.15): " << t << "." << std::endl;
+    OPENMS_LOG_WARN << "WARNING: not carried over into the new INI: " << t << "." << std::endl;
   }
   return out;
 }
@@ -437,13 +454,13 @@ protected:
       if (!(setD(d) || setI(d) || setS(d))) { continue; }
       if (d.replacement[0] != '\0')
       {
-        // renamed: the value moves to the new name; a different value given under the new name is a conflict.
-        // The command line overrides an INI file: an old name from the INI yields to a new name on the command line
-        // (and, at its old default, is only an INI file written by 0.2.14), an old name on the command line wins
-        // over a new name from the INI.
+        // renamed: the value moves to the new name (also at its old default: an INI value counts as given); a
+        // different value given under the new name is a conflict. The command line overrides an INI file: an old
+        // name from the INI yields to a new name on the command line, an old name on the command line wins over a
+        // new name from the INI.
         const std::string nn = d.replacement;
         const bool old_cli = cli_names_.count(d.name) > 0, new_cli = cli_names_.count(nn) > 0;
-        if (!old_cli && (new_cli || isOldDefault(d))) { if (!isOldDefault(d)) { notes.push_back("-" + std::string(d.name) + " of the INI file overridden by -" + nn); } continue; }
+        if (!old_cli && new_cli) { notes.push_back("-" + std::string(d.name) + " of the INI file overridden by -" + nn); continue; }
         bool clash = false;
         if (d.type == 'd')
         {

@@ -71,6 +71,9 @@ elif check == "instruments":
     expect(v["mz_tol_ms2"] == {"value": "20", "source": "given"}, "a fixed tolerance is recorded as given", json.dumps(v))
     for name, inst in (("timsTOF Pro 2", "timsTOF"), ("Bruker timsTOF HT", "timsTOF"), ("Exploris 480", "Orbitrap"), ("Q-TOF", "TOF")):
         expect(extract("named", "-instrument", name)["instrument"]["name"] == inst, f"-instrument '{name}' -> {inst}")
+    # several files match: the order of the class rule of 0.2.16 (timsTOF, then the Orbitraps, then other TOFs)
+    for name, inst in (("tims Astral", "timsTOF"), ("tims orbitrap", "timsTOF"), ("Orbitrap TOF", "Orbitrap"), ("Astral TOF", "Astral")):
+        expect(extract("mixed", "-instrument", name)["instrument"]["name"] == inst, f"-instrument '{name}' -> {inst} (priority)")
     rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", "-instrument", "Fancy", ok=False)
     expect(rc == 6 and "unknown instrument 'Fancy'" in out, "an unknown -instrument name is an error", out)
     own = write_yaml("exploris.yaml", "name: Exploris\nextends: orbitrap\nmz_accuracy_ms2: 7\n")
@@ -98,6 +101,12 @@ elif check == "compatibility":
     expect(same_table("old.parquet", "new.parquet"), "old and new option names: identical traces")
     rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-mz_tol", "5", "-out", "x.parquet", ok=False)
     expect(rc == 6 and "different values" in out, "an old and a new name with different values is an error", out)
+    # an old name in an INI counts as given, also at its old default: it overrides an instrument file
+    ini = open(os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini")).read()
+    expect('name="mz_sigma_ms1" value="4.0"' in ini, "fixture: the 0.2.14 INI has mz_sigma_ms1 4.0")
+    own = write_yaml("ms1.yaml", "name: Wide\nextends: orbitrap\nmz_accuracy_ms1: 8\n")
+    s = extract("oldini", "-ini", os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini"), "-instrument_file", own)
+    expect(s["values"]["mz_accuracy_ms1"] == {"value": "4", "source": "given"}, "old INI value (at its old default) over the instrument file", json.dumps(s["values"]))
     # an INI written by 0.2.14 runs
     rc, out = run("-ini", os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini"), "-in", IN, "-lib", LIB, *FIXED, "-out", "ini.parquet")
     expect(rc == 0, "an INI written by 0.2.14 runs")
@@ -119,6 +128,13 @@ elif check == "write_ini":
     open("old.ini", "w").write(old)
     run("-write_ini", "migrated.ini", "-ini", "old.ini")
     m = open("migrated.ini").read()
+    # the current name with another value in the same INI is kept (and reported)
+    both = re.sub(r'(\s*)(<ITEM name="mz_tol" [^\n]*/>)', r'\1\2\1<ITEM name="mz_tol_ms2" value="20.0" type="double" description="" required="false" advanced="false" />', old, count=1)
+    expect('name="mz_tol_ms2" value="20.0"' in both, "fixture: an INI with mz_tol 6 and mz_tol_ms2 20")
+    open("both.ini", "w").write(both)
+    rc, out = run("-write_ini", "both_migrated.ini", "-ini", "both.ini")
+    expect('name="mz_tol_ms2" value="20.0"' in open("both_migrated.ini").read(), "-write_ini keeps the current name's value on a conflict")
+    expect("mz_tol (its current name mz_tol_ms2 has another value, kept)" in out, "-write_ini reports the conflict", out)
     for k, v in (("mz_tol_ms2", "6.0"), ("rt_mode", "seconds"), ("scheme", "B")):
         expect(f'name="{k}" value="{v}"' in m, f"-write_ini -ini <0.2.14 INI>: {k} = {v}")
     expect('name="mz_tol"' not in m and 'name="aggregation"' not in m, "-write_ini -ini <0.2.14 INI>: no old names")

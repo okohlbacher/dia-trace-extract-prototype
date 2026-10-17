@@ -4,4 +4,7 @@ name: timsTOF
 extends: tof
 aliases: [timsTOF Pro, timsTOF Pro 2, timsTOF SCP, timsTOF HT, timsTOF Ultra, timsTOF fleX]
 keywords: [tims]
+# When several files match the run's instrument name, the highest priority wins (0.2.16 tested timsTOF first,
+# then the Orbitraps, then other TOFs); then the most specific file, then the longest keyword.
+priority: 2
 mz_accuracy_ms2: 4

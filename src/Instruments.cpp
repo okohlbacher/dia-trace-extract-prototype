@@ -1,12 +1,15 @@
 #include "Instruments.h"
 #include "Platform.h"
 
-#include <OpenMS/FORMAT/FileHandler.h>
-
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
 #include <filesystem>
 #include <set>
 #include <sstream>
@@ -17,6 +20,44 @@ namespace ODIA
   namespace
   {
     namespace fs = std::filesystem;
+
+    /// Paths inside the tool are UTF-8 strings; on Windows a narrow std::filesystem::path would use the ANSI code page.
+    fs::path fromUtf8(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
+    std::string toUtf8(const fs::path& p) { const std::u8string u = p.u8string(); return std::string(u.begin(), u.end()); }
+
+    /// SHA-1 of a byte string (FIPS 180-4), for the provenance of the files' contents.
+    std::string sha1Hex(const std::string& data)
+    {
+      std::uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+      std::string m = data;
+      const std::uint64_t bits = static_cast<std::uint64_t>(data.size()) * 8;
+      m += static_cast<char>(0x80);
+      while (m.size() % 64 != 56) { m += '\0'; }
+      for (int i = 7; i >= 0; --i) { m += static_cast<char>((bits >> (8 * i)) & 0xff); }
+      const auto rol = [](std::uint32_t x, int n) { return (x << n) | (x >> (32 - n)); };
+      for (std::size_t off = 0; off < m.size(); off += 64)
+      {
+        std::array<std::uint32_t, 80> w{};
+        for (int i = 0; i < 16; ++i)
+        {
+          w[i] = (std::uint32_t(static_cast<unsigned char>(m[off + 4 * i])) << 24) | (std::uint32_t(static_cast<unsigned char>(m[off + 4 * i + 1])) << 16)
+               | (std::uint32_t(static_cast<unsigned char>(m[off + 4 * i + 2])) << 8) | std::uint32_t(static_cast<unsigned char>(m[off + 4 * i + 3]));
+        }
+        for (int i = 16; i < 80; ++i) { w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1); }
+        std::uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; ++i)
+        {
+          const std::uint32_t f = i < 20 ? (b & c) | (~b & d) : i < 40 ? b ^ c ^ d : i < 60 ? (b & c) | (b & d) | (c & d) : b ^ c ^ d;
+          const std::uint32_t k = i < 20 ? 0x5A827999u : i < 40 ? 0x6ED9EBA1u : i < 60 ? 0x8F1BBCDCu : 0xCA62C1D6u;
+          const std::uint32_t t = rol(a, 5) + f + e + k + w[i];
+          e = d; d = c; c = rol(b, 30); b = a; a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+      }
+      std::ostringstream o;
+      for (std::uint32_t x : h) { o << std::hex << std::setw(8) << std::setfill('0') << x; }
+      return o.str();
+    }
 
     std::string lower(std::string s)
     {
@@ -61,20 +102,20 @@ namespace ODIA
     {
       static const std::map<std::string, Range> r = {
         {"mz_accuracy_ms2", {0.0, 100.0, true}}, {"mz_accuracy_ms1", {0.0, 100.0, true}},
-        {"rt_window_sigma", {0.0, 100.0, true}}, {"rt_window_fwhm", {0.0, 100.0, false}}};
+        {"rt_window_sigma", {0.0, 100.0, true}}, {"rt_window_fwhm", {0.0, 100.0, false}}, {"priority", {-100.0, 100.0, false}}};
       return r;
     }
 
     std::vector<InstrumentFile> loadDirectory(const std::string& dir)
     {
-      std::vector<std::string> paths;
-      for (const auto& e : fs::directory_iterator(dir))
+      std::vector<fs::path> paths;
+      for (const auto& e : fs::directory_iterator(fromUtf8(dir)))
       {
-        if (e.is_regular_file() && e.path().extension() == ".yaml") { paths.push_back(e.path().string()); }
+        if (e.is_regular_file() && e.path().extension() == ".yaml") { paths.push_back(e.path()); }
       }
       std::sort(paths.begin(), paths.end());
       std::vector<InstrumentFile> files;
-      for (const auto& p : paths) { files.push_back(readInstrumentFile(p, fs::path(p).filename() == "default.yaml")); }
+      for (const auto& p : paths) { files.push_back(readInstrumentFile(p, p.filename() == "default.yaml")); }
       return files;
     }
 
@@ -116,20 +157,26 @@ namespace ODIA
       return chain;
     }
 
-    /// The most specific file whose keywords occur in `instrument` (the deepest extends chain; then the longest
-    /// keyword), or nullptr.
+    /// The file whose keywords occur in `instrument`: the highest priority (the order of the class rule of 0.2.16:
+    /// timsTOF before the Orbitraps before other TOFs), then the most specific (the deepest extends chain), then the
+    /// longest keyword; nullptr when none matches.
     const InstrumentFile* classify(const std::vector<InstrumentFile>& files, const std::string& instrument)
     {
       const std::string s = lower(instrument);
       const InstrumentFile* best = nullptr;
       std::size_t best_depth = 0, best_len = 0;
+      double best_priority = 0;
       for (const auto& f : files)
       {
         std::size_t len = 0;
         for (const auto& k : f.keywords) { if (!k.empty() && s.find(lower(k)) != std::string::npos) { len = std::max(len, k.size()); } }
         if (len == 0) { continue; }
         const std::size_t depth = chainOf(files, &f).size();
-        if (best == nullptr || depth > best_depth || (depth == best_depth && len > best_len)) { best = &f; best_depth = depth; best_len = len; }
+        const double priority = f.values.count("priority") ? f.values.at("priority") : 0.0;
+        if (best == nullptr || priority > best_priority || (priority == best_priority && (depth > best_depth || (depth == best_depth && len > best_len))))
+        {
+          best = &f; best_depth = depth; best_len = len; best_priority = priority;
+        }
       }
       return best;
     }
@@ -139,7 +186,7 @@ namespace ODIA
       for (const auto& d : instrumentDirectories())
       {
         std::error_code ec;
-        if (fs::is_regular_file(fs::path(d) / "default.yaml", ec)) { dir = d; return loadDirectory(d); }
+        if (fs::is_regular_file(fromUtf8(d) / "default.yaml", ec)) { dir = d; return loadDirectory(d); }
       }
       std::string searched;
       for (const auto& d : instrumentDirectories()) { searched += (searched.empty() ? "" : ", ") + d; }
@@ -156,27 +203,30 @@ namespace ODIA
   std::vector<std::string> instrumentDirectories()
   {
     std::vector<std::string> dirs;
-    const std::string exe = platform::executablePath();
+    const std::string exe = platform::executablePath();   // UTF-8
     if (!exe.empty())
     {
       // <prefix>/bin/DIATraceExtractor or <prefix>/libexec/DIATraceExtractor (the release layout); a build
       // directory has no share/ next to it and falls through to the source tree
-      dirs.push_back((fs::path(exe).parent_path().parent_path() / "share" / "DIATraceExtractor" / "instruments").string());
+      dirs.push_back(toUtf8(fromUtf8(exe).parent_path().parent_path() / "share" / "DIATraceExtractor" / "instruments"));
     }
 #ifdef ODIA_SOURCE_DIR
-    dirs.push_back((fs::path(ODIA_SOURCE_DIR) / "data" / "instruments").string());
+    dirs.push_back(toUtf8(fromUtf8(ODIA_SOURCE_DIR) / "data" / "instruments"));
 #endif
     return dirs;
   }
 
-  InstrumentFile readInstrumentFile(const std::string& path, bool is_default)
+  InstrumentFile readInstrumentFile(const std::filesystem::path& file, bool is_default)
   {
     InstrumentFile f;
+    const std::string path = toUtf8(file);
     f.path = path;
-    f.file = fs::path(path).filename().string();
+    f.file = toUtf8(file.filename());
+    std::ifstream in(file, std::ios::binary);
+    if (!in) { fail(path, "", "cannot be read"); }
+    const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     YAML::Node root;
-    try { root = YAML::LoadFile(path); }
-    catch (const YAML::BadFile&) { fail(path, "", "cannot be read"); }
+    try { root = YAML::Load(content); }
     catch (const YAML::Exception& e) { fail(path, "", std::string("not valid YAML (") + e.what() + ")"); }
     if (!root.IsMap()) { fail(path, "", "expected a map of keys (name: ..., mz_accuracy_ms2: ...)"); }
     std::set<std::string> seen;
@@ -214,7 +264,7 @@ namespace ODIA
       else
       {
         std::string allowed = "name, ";
-        if (!is_default) { allowed += "extends, aliases, keywords, "; }
+        if (!is_default) { allowed += "extends, aliases, keywords, priority, "; }
         for (const auto& k : instrumentValueKeys()) { allowed += k + (k == instrumentValueKeys().back() ? "" : ", "); }
         fail(path, key, "unknown key (allowed: " + allowed + ")");
       }
@@ -224,7 +274,7 @@ namespace ODIA
     {
       for (const auto& k : instrumentValueKeys()) { if (f.values.count(k) == 0) { fail(path, k, "missing (default.yaml sets every value)"); } }
     }
-    f.sha1 = OpenMS::FileHandler::computeFileHash(path);
+    f.sha1 = sha1Hex(content);
     return f;
   }
 
@@ -255,7 +305,7 @@ namespace ODIA
 
     if (!instrument_file.empty())
     {
-      InstrumentFile own = readInstrumentFile(instrument_file, false);
+      InstrumentFile own = readInstrumentFile(fs::path(instrument_file), false);   // as given (the tool's narrow paths)
       // a file of the same name replaces the shipped one for this run
       files.erase(std::remove_if(files.begin(), files.end(), [&](const InstrumentFile& f) { return normalise(f.name) == normalise(own.name); }), files.end());
       files.push_back(std::move(own));

@@ -100,7 +100,7 @@ for output files.
   run's metadata, the most specific match (`timsTOF` over `TOF`); `-instrument <name>` names it (a file name or alias,
   e.g. `Astral`, `timsTOF SCP`, or any instrument name classified like the metadata, e.g. `Exploris 480` → Orbitrap);
   `-instrument_file my.yaml` uses a file of your own for one run (keys `name`, `extends`, `aliases`, `keywords`,
-  `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`; unknown or repeated keys, wrong types and
+  `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`, `priority` for overlapping keywords; unknown or repeated keys, wrong types and
   values out of range are errors). Per value: the option given > the instrument's file > the files it extends >
   `default.yaml`. The log names the files used; the Parquet footer (`odia.instrument*`, `odia.value_sources`) and
   `-out_stats` record each value used with its source (`given`, `instrument-default:Astral`, `default`, `measured`).

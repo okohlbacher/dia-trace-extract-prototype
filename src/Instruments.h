@@ -3,6 +3,7 @@
 // holds every default; one file per instrument or instrument class holds only what differs and may extend another
 // (astral.yaml extends orbitrap.yaml). Precedence per value: the option given > the instrument's file > the files it
 // extends > default.yaml.
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -11,13 +12,13 @@ namespace ODIA
 {
   struct InstrumentFile
   {
-    std::string path;                       ///< as read
+    std::string path;                       ///< as read (UTF-8)
     std::string file;                       ///< file name (astral.yaml)
     std::string name;                       ///< Astral
     std::string extends;                    ///< the file (stem or name) this one extends; "" for none
     std::vector<std::string> aliases;       ///< further names for -instrument
     std::vector<std::string> keywords;      ///< matched in the run's instrument name (ignoring case)
-    std::map<std::string, double> values;   ///< mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm
+    std::map<std::string, double> values;   ///< mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm, priority
     std::string sha1;                       ///< content hash (provenance only)
   };
 
@@ -46,7 +47,7 @@ namespace ODIA
   std::vector<std::string> instrumentDirectories();
 
   /// Reads and validates one file (throws std::runtime_error naming the file and the key).
-  InstrumentFile readInstrumentFile(const std::string& path, bool is_default);
+  InstrumentFile readInstrumentFile(const std::filesystem::path& file, bool is_default);
 
   /// Resolves the defaults for a run: `spec` is "auto" (from `run_instrument`, the run's metadata) or a name;
   /// `instrument_file` (may be empty) is a file used for this run on top of the shipped ones. `warning` receives a

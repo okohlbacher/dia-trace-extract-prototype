@@ -4,4 +4,5 @@ name: Astral
 extends: orbitrap
 aliases: [Orbitrap Astral, Astral Zoom]
 keywords: [astral]
+priority: 1   # as orbitrap.yaml
 mz_accuracy_ms2: 9

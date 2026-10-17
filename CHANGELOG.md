@@ -17,7 +17,9 @@ same as with 0.2.16 for every input tried (Astral run 01 and timsTOF A01 at the 
   for runs whose metadata lack it, e.g. converted mzML files. Naming an instrument that contradicts the metadata gives a
   `WARNING:`. An unknown name is an error that lists the known ones.
 - **New `-instrument_file <yaml>`** (advanced): your own instrument file for one run, over the shipped ones. Unknown
-  or repeated keys, wrong types and out-of-range values are errors that name the file and the key.
+  or repeated keys, wrong types and out-of-range values are errors that name the file and the key. When several files
+  match the run's instrument name, the highest `priority` wins (timsTOF 2, Orbitrap and Astral 1, TOF 0: the order of
+  the 0.2.16 rule), then the most specific file, then the longest keyword.
 - **`-mz_accuracy_ms1` now defaults to 0 = the instrument's multiple** (4 for every shipped file, as before). An INI
   file that carries 4.0 behaves the same.
 - **Provenance:** the Parquet footer gains `odia.instrument`, `odia.instrument_run` (the run's own instrument string),
@@ -36,6 +38,7 @@ same as with 0.2.16 for every input tried (Astral run 01 and timsTOF A01 at the 
   cannot carry over.
 - **An old name in an INI file yields to the new name on the command line** (before: an error when the values
   differed); an old name on the command line still overrides the INI, and both names on the same level with different
-  values remain an error.
+  values remain an error. An old name in an INI counts as given even at its old default (e.g. `mz_sigma_ms1 4` of a
+  0.2.14 INI fixes the MS1 multiple at 4, over an instrument file).
 - **Building** needs yaml-cpp (in OpenMS's vcpkg tree, added by `ci/patch_openms_manifest.py`) and the OpenMS patch
   `patches/openms-toppbase-deprecated-options.patch` (applied by the release workflow).
