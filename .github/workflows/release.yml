@@ -121,6 +121,8 @@ jobs:
           git clone --filter=blob:none https://github.com/OpenMS/OpenMS.git "$OPENMS_SRC"
           git -C "$OPENMS_SRC" checkout "$REF"
           git -C "$OPENMS_SRC" submodule update --init --depth 1 vcpkg
+          # TOPPBase: deprecated options left out of -write_ini, one-line unknown-option message (patches/README.md)
+          git -C "$OPENMS_SRC" apply --whitespace=nowarn "$GITHUB_WORKSPACE/tool/patches/openms-toppbase-deprecated-options.patch"
           NOCOIN=""; [ "${{ matrix.name }}" = "windows-arm64" ] && NOCOIN=--no-coin
           python3 tool/ci/patch_openms_manifest.py "$OPENMS_SRC" $NOCOIN
           [ "${{ matrix.name }}" = "windows-arm64" ] && python3 tool/ci/patch_openms_arm64.py "$OPENMS_SRC" || true

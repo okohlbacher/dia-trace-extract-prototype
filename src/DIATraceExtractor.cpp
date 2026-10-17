@@ -239,6 +239,47 @@ const Deprecated kDeprecated[] = {
   {"calibration:min_reject", 'd', "3.0", "", "", "fixed at 3 s"},
 };
 
+/// -write_ini -ini <0.2.14 INI>: the values given under the old names, on the current names (the translations of
+/// resolveCompatibility_(); what cannot be translated is reported and left out).
+Param migrateIni(const Param& p)
+{
+  Param out;
+  std::vector<std::string> dropped;
+  const auto has = [&](const std::string& k) { return p.exists(k); };
+  const auto setD = [&](const Deprecated& d) { return d.type == 'd' && has(d.name) && double(p.getValue(d.name)) > kUnsetDouble / 2; };
+  const auto setI = [&](const Deprecated& d) { return d.type == 'i' && has(d.name) && int(p.getValue(d.name)) != kUnsetInt; };
+  const auto setS = [&](const Deprecated& d) { return d.type == 's' && has(d.name) && !p.getValue(d.name).toString().empty(); };
+  for (const auto& d : kDeprecated)
+  {
+    if (!(setD(d) || setI(d) || setS(d))) { continue; }
+    if (d.replacement[0] != '\0') { out.setValue(d.replacement, p.getValue(d.name)); continue; }
+    const bool at_default = d.type == 's' ? p.getValue(d.name).toString() == d.old_default
+                          : std::fabs(double(p.getValue(d.name)) - std::atof(d.old_default)) < 1e-12;
+    const std::string n = d.name;
+    if (at_default || n == "aggregation" || n == "ms1_isotope_spacing" || n == "rt_intercept" || n == "rt_slope") { continue; }
+    dropped.push_back(n);
+  }
+  if (has("aggregation") && has("ms1_isotope_spacing") && p.getValue("aggregation").toString() == "sum" && p.getValue("ms1_isotope_spacing").toString() == "unit") { out.setValue("scheme", "B"); }
+  if (has("rt_mode"))
+  {
+    const std::string m = p.getValue("rt_mode").toString();
+    const double ic = has("rt_intercept") && double(p.getValue("rt_intercept")) > kUnsetDouble / 2 ? double(p.getValue("rt_intercept")) : 0.0;
+    const double sl = has("rt_slope") && double(p.getValue("rt_slope")) > kUnsetDouble / 2 ? double(p.getValue("rt_slope")) : 1.0;
+    if (m == "identity" || (m == "linear" && ic == 0.0 && sl == 1.0)) { out.setValue("rt_mode", "seconds"); }
+    else if (m == "linear" && ic == 0.0 && sl == 60.0) { out.setValue("rt_mode", "minutes"); }
+    else if (m == "linear") { out.setValue("rt_mode", "auto"); dropped.push_back("rt_mode linear (give the map as -rt_anchors)"); }
+    else if (m == "anchors" || m == "trafo") { out.setValue("rt_mode", "auto"); }
+  }
+  if (has("ms1_isotopes") && int(p.getValue("ms1_isotopes")) < 0) { out.setValue("no_ms1", "true"); out.setValue("ms1_isotopes", 2); }
+  if (!dropped.empty())
+  {
+    std::string t;
+    for (const auto& x : dropped) { t += (t.empty() ? "" : ", ") + x; }
+    OPENMS_LOG_WARN << "WARNING: not carried over into the new INI (removed in 0.2.15): " << t << "." << std::endl;
+  }
+  return out;
+}
+
 class TOPPDIATraceExtractor : public TOPPBase
 {
 public:
@@ -356,6 +397,10 @@ protected:
       else if (d.type == 'i') { registerIntOption_(d.name, "<value>", kUnsetInt, help, false, true); }
       else { registerStringOption_(d.name, "<value>", "", help, false, true); }
     }
+    // TOPPBase (patches/openms-toppbase-deprecated-options.patch): accepted, but not written by -write_ini nor
+    // suggested for a mistyped option; -write_ini -ini <old.ini> moves their values onto the current names
+    for (const auto& d : kDeprecated) { setDeprecated_(d.name); }
+    setDeprecatedMigration_(migrateIni);
   }
 
   // --- 0.2.14 names: values given under an old name, translated onto the current options
