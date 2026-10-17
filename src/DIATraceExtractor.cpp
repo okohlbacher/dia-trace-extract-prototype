@@ -33,6 +33,7 @@
 #include <array>
 #include <iterator>
 #include <map>
+#include <set>
 #include <sstream>
 #include "Platform.h"
 #include <OpenMS/CONCEPT/VersionInfo.h>
@@ -436,8 +437,13 @@ protected:
       if (!(setD(d) || setI(d) || setS(d))) { continue; }
       if (d.replacement[0] != '\0')
       {
-        // renamed: the value moves to the new name; a different value given under the new name is a conflict
+        // renamed: the value moves to the new name; a different value given under the new name is a conflict.
+        // The command line overrides an INI file: an old name from the INI yields to a new name on the command line
+        // (and, at its old default, is only an INI file written by 0.2.14), an old name on the command line wins
+        // over a new name from the INI.
         const std::string nn = d.replacement;
+        const bool old_cli = cli_names_.count(d.name) > 0, new_cli = cli_names_.count(nn) > 0;
+        if (!old_cli && (new_cli || isOldDefault(d))) { if (!isOldDefault(d)) { notes.push_back("-" + std::string(d.name) + " of the INI file overridden by -" + nn); } continue; }
         bool clash = false;
         if (d.type == 'd')
         {
@@ -457,6 +463,7 @@ protected:
           clash = now != d.new_default && now != v;
           str_[nn] = v;
         }
+        if (old_cli && !new_cli) { clash = false; }
         if (clash) { OPENMS_LOG_ERROR << "-" << d.name << " (0.2.14's name of -" << nn << ") and -" << nn << " are given with different values." << std::endl; return ILLEGAL_PARAMETERS; }
         notes.push_back("-" + std::string(d.name) + " -> -" + nn);
         continue;
@@ -521,6 +528,7 @@ protected:
     {
       const std::string a = argv[i];
       if (a == "-threads" || a == "--threads") { threads_given_ = true; }
+      if (a.size() > 1 && a[0] == '-' && std::isalpha(static_cast<unsigned char>(a[a[1] == '-' ? 2 : 1]))) { cli_names_.insert(a.substr(a[1] == '-' ? 2 : 1)); }
       if ((a == "-ini" || a == "--ini") && i + 1 < argc)
       {
         // an INI file sets the thread count only when it has a threads entry (TOPP writes one; hand-written may not)
@@ -540,6 +548,7 @@ protected:
   }
 
   bool threads_given_ = false;
+  std::set<std::string> cli_names_;   ///< options given on the command line (not from an INI file)
 
   int threadCount_()
   {
