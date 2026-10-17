@@ -9,7 +9,9 @@ IN = os.path.join(td, "OpenSwathWorkflow_1_input.mzML")
 LIB = os.path.join(td, "OpenSwathWorkflow_1_input.TraML")
 # whole run, fixed tolerances: no calibration needed on this small file
 FIXED = ["-rt_window", "-1", "-mz_tol_ms2", "20", "-mz_tol_ms1", "20", "-threads", "2"]
-HELP_LINES = 34   # pinned: lines of `--help` (change deliberately)
+# pinned: the options `--help` lists (the tool's 14 + TOPP's 5; change deliberately), not its line count:
+# the framing around them differs between platforms.
+HELP_OPTIONS = 19
 
 
 def run(*args, ok=True):
@@ -44,7 +46,8 @@ def write_yaml(name, text):
 
 if check == "help":
     _, out = run("--help")
-    expect(len(out.splitlines()) == HELP_LINES, f"--help has {HELP_LINES} lines (has {len(out.splitlines())})", out)
+    listed = [l.split()[0] for l in out.splitlines() if re.match(r"^  --?[a-z]", l)]
+    expect(len(listed) == HELP_OPTIONS, f"--help lists {HELP_OPTIONS} options (lists {len(listed)}: {' '.join(listed)})", out)
     expect("-instrument <name>" in out, "--help lists -instrument")
     _, out = run("--helphelp")
     expect("-instrument_file" in out, "--helphelp lists -instrument_file")
