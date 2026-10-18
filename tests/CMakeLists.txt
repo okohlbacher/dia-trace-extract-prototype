@@ -35,3 +35,14 @@ add_test(NAME determinism_t8
           -rt_window -1 -mz_tol_ms2 50 -mz_tol_ms1 50 -top_fragments 0 -mz_calibration off -unit_precursors 1 -out det8.parquet -threads 8)
 add_test(NAME determinism_compare COMMAND ${PY} ${PROJECT_SOURCE_DIR}/scripts/compare_parquet.py det1.parquet det8.parquet)
 set_tests_properties(determinism_compare PROPERTIES DEPENDS "determinism_t1;determinism_t8")
+
+# An RT-dependent window that shrinks faster than the RT grows: a later precursor's span ends before an earlier
+# one's. Each trace must equal the whole-run trace cut to its cycles (the merge join once kept such a precursor
+# active past its end and wrote beyond its trace, into the next one).
+set(SPANS -in ${TD}/OpenSwathWorkflow_1_input.mzML -lib ${CMAKE_CURRENT_SOURCE_DIR}/data/spans.TraML -rt_mode minutes
+          -mz_tol_ms2 50 -mz_tol_ms1 50 -mz_calibration off -top_fragments 0 -no_ms1 -threads 2)
+add_test(NAME spans_whole_run COMMAND DIATraceExtractor ${SPANS} -rt_window -1 -out spans_whole.parquet)
+add_test(NAME spans_rt_dependent COMMAND DIATraceExtractor ${SPANS} -out spans_window.parquet)
+set_tests_properties(spans_rt_dependent PROPERTIES ENVIRONMENT "ODIA_RT_WINDOW_TABLE=30:100,48:10")
+add_test(NAME spans_compare COMMAND ${PY} ${CMAKE_CURRENT_SOURCE_DIR}/check_spans.py spans_window.parquet spans_whole.parquet)
+set_tests_properties(spans_compare PROPERTIES DEPENDS "spans_whole_run;spans_rt_dependent")

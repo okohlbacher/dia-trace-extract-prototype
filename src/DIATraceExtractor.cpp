@@ -723,7 +723,24 @@ protected:
       // 6 x to 98.1%, fixed +-60 s to 79% (results/rtwin/all/).
       std::vector<std::array<double, 3>> pts;   // run RT, residual, FWHM
       if (cal) { for (const auto& a : cal->anchors) { if (a.used) { pts.push_back({a.run_rt, a.run_rt - rt_map(a.library_rt), a.fwhm_s}); } } }
-      if (pts.size() >= 50)
+      if (const char* table = std::getenv("ODIA_RT_WINDOW_TABLE"))
+      {
+        // Tests only (tests/CMakeLists.txt, rt_window_table): the RT-dependent window as "rt:half,rt:half,..." (s),
+        // so that a small file without calibration anchors gets one
+        std::istringstream is(table);
+        std::string item;
+        while (std::getline(is, item, ','))
+        {
+          const auto colon = item.find(':');
+          if (colon == std::string::npos) { OPENMS_LOG_ERROR << "ODIA_RT_WINDOW_TABLE: expected rt:half,... (s)" << std::endl; return ILLEGAL_PARAMETERS; }
+          eopt.rt_window_at.push_back(std::stod(item.substr(0, colon)));
+          eopt.rt_window_half.push_back(std::stod(item.substr(colon + 1)));
+        }
+        eopt.rt_half_window = *std::max_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
+        rt_window_text = std::string("ODIA_RT_WINDOW_TABLE ") + table;
+        OPENMS_LOG_INFO << "RT window: " << rt_window_text << " (test hook)" << std::endl;
+      }
+      else if (pts.size() >= 50)
       {
         std::sort(pts.begin(), pts.end());
         const std::size_t nb = std::clamp<std::size_t>(pts.size() / 150, 1, 8);
