@@ -1,0 +1,16 @@
+Threads: 32
+Library: 82333 rows in 7 parts from 7 source(s), streamed during extraction; open 0.00 s wall, 0.00 s CPU (100%); memory 0.03 GiB (peak so far 0.03 GiB), 0.01 M page faults
+Run grid: 977 cycles x 300 windows, 2928 MS1 / 292883 MS2 spectra, 140986439 peaks, 217 empty cells, 1107.76 MiB; 0.32 s wall, 9.68 s CPU (3011%); memory 1.25 GiB (peak so far 1.29 GiB), 0.38 M page faults
+Instrument: Astral, from the run's metadata ('Orbitrap Astral'); defaults astral.yaml (Astral) over orbitrap.yaml over default.yaml
+Astral defaults: fragment tolerance 9 x the measured width, MS1 4 x (-mz_accuracy_ms2 / -mz_accuracy_ms1 change the multiples, -mz_tol_ms2 / -mz_tol_ms1 fix the tolerances)
+Calibration panel library: every 10. row, 8234 targets; 0.06 s wall, 2.06 s CPU (3264%) (concurrent with ingest; waited 9.67504e-06 s); memory 1.25 GiB (peak so far 1.29 GiB), 0.00 M page faults
+Calibration: stage 1 543 anchors (507 used), stage 2 window +-46.3013 s; 1117 anchors from a panel of 4116, 1078 used; RT residual |p50/p95/p99| 7.9849 / 27.3661 / 32.7693 s; peak FWHM 2 cycles (3.29921 s), co-elution window +-4 cycles; score cut 0 (0 decoys above it, shifted-fragment decoys), strict cut 0; MS2 offset -3.21341 ppm -0.560545 ppm/kTh about 626.28 Th (sigma 0.876886), MS1 offset 1.26479 ppm +1.0732 ppm/kTh about 566.294 Th (sigma 0.358198); accuracy MS2 +-7.89197 / MS1 +-1.43279 ppm (coverage half widths 4.57188 / 2.75484 ppm; = 9 sigma; co-elution by k: 2:0.393 3:0.512 4:0.574 5:0.610 6:0.628 8:0.646; from 579 anchors; 1 search passes, final windows +-22.8824 / +-9.20413 ppm); 0.04 s wall, 0.72 s CPU (1602%)
+RT map: lowess fit to 1078 points
+MS2 tolerance: +-7.89197 ppm (9 x the measured width)
+MS1 tolerance: +-1.43279 ppm (4 x the measured width)
+RT window: +-73.3571 to +-117.522 s, 7 x the RT scatter + 2 x the peak FWHM of 1078 anchors in 7 RT bin(s) (87.7 s at 526 s, 85.9 s at 654 s, 105 s at 732 s, 73.4 s at 803 s, 80.1 s at 866 s, 98.5 s at 948 s, 118 s at 1073 s)
+Scheduler: 32 workers; read+plan 7 tasks, 0.254859 thread-s (avg 0.765356, max 7 workers); extract 2100 tasks, 3.78623 thread-s (avg 11.3702, max 32 workers); encode 2100 tasks, 1.31204 thread-s (avg 3.94011, max 19 workers); write 2100 tasks, 3.99173 thread-s (avg 11.9874, max 28 workers); trace pool 512 MiB, peak 105 of 2048 blocks, 0 units on the heap; library parts resident <= 7, 7 part objects
+Extraction: 82333 precursors (493981 fragments) from 7 library parts; 82333 precursor-window assignments in 2100 units, 0 precursors without window, 0 outside the acquired RT range; 740980 traces, 56206222 MS2 + 84210204 MS1 points, 140416426 lookups; 0.33 s wall, 8.41 s CPU (2527%) with 32 threads; memory 2.77 GiB (peak so far 2.77 GiB), 0.41 M page faults
+Written: 740980 rows, 140416426 points, 32 Parquet part(s) written in parallel into one file (busiest writer 0.147376 s, final drain 0.0380111 s; appending to the file 0.182568 s in total)
+Total: 1.04 s wall, 19.53 s CPU (1879%), peak RSS 2.69598 GiB
+DIATraceExtractor took 1.21 s (wall), 19.72 s (CPU), 6.60 s (system), 13.12 s (user); Peak Memory Usage: 2760 MB.

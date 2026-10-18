@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <utility>
 
 namespace ODIA::platform
@@ -39,6 +40,8 @@ namespace ODIA::platform
   /// Physical cores this process may run on (its CPU affinity on Linux and Windows; hardware threads of one core
   /// count once); at least 1.
   int physicalCores();
+  /// Absolute path of the running executable ("" when it cannot be determined).
+  std::string executablePath();
 
   /// Positional reads of one file from any thread: one shared handle, no per-thread stream state (pread; ReadFile
   /// with an offset on Windows). readAt fails when the range is short. Not copyable.

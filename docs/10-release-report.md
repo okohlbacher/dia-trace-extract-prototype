@@ -1,6 +1,6 @@
-# DIATraceExtractor V0.2.16: release report (2026-10-16)
+# DIATraceExtractor V0.3.0: release report (2026-10-18)
 
-**Versions.** This report accompanies release **V0.2.16** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+**Versions.** This report accompanies release **V0.3.0** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
 The extraction has not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
 `-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
 and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.14 changed no
@@ -9,7 +9,14 @@ platforms with checksums and provenance attestations (Appendix A). V0.2.15 rewor
 review: defaults that need no tuning (RT map, RT window, tolerances measured from the run; all physical cores), one
 Parquet file per run, consistent option names and 13 basic options (Appendix A). V0.2.16: the physical cores by
 default, the RT-window multiple chosen on all benchmark data (7σ + 2 FWHM, §2), the 0.2.14 option names accepted again,
-the peptide-decoy experiment (§5), a macOS installer package (Appendix A).
+the peptide-decoy experiment (§5), a macOS installer package (Appendix A). V0.3.0: instrument defaults as data
+files with `-instrument`, a shorter log, a one-line message for a mistyped option, `-write_ini` on the current names
+(Appendix A, `CHANGELOG.md`), and a fix: since V0.2.15, where the measured RT window shrinks faster than the RT grows,
+the extraction wrote past the end of some traces (timsTOF A01; see below).
+**V0.3.0 changes no measurement here except timsTOF A01:** its traces at the defaults differ from V0.2.16's in 59,948
+of 404,764 (DIA-NN's IDs; the cells V0.2.16 overwrote), with the agreement with DIA-NN unchanged to the fourth decimal;
+B01 and every Astral output are identical to V0.2.16's, and A01's output is now identical across repeats and thread
+counts (V0.2.16: 1-3 traces differed between identical runs).
 **Every cluster measurement was re-run with the V0.2.16 binary** (`results/v0.2.16/`,
 `scripts/cluster_bench_v0211.sh`, on `dax` on 2026-10-16): the thread series, the full libraries, the Astral pair
 table with all four configurations of ours, the diaPASEF comparisons and costs, and the tolerance screens. For the
@@ -400,7 +407,7 @@ costs.
 
 ## 7. Reproduction
 
-- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.2.16` (this report is attached to
+- Code: https://github.com/okohlbacher/dia-trace-extract-prototype, release tag `V0.3.0` (this report is attached to
   the release); build instructions in Appendix A, data sources in Appendix B, command lines in Appendix C.
 - Benchmarks: `scripts/benchmark_refined.sh` (three-way comparison on a shared recalibrated library),
   `scripts/bench_threads.sh` (thread series), `scripts/bench_macos.sh` (laptop), `scripts/plot_machine_scaling.py`, `scripts/compare_traces.py` (pairwise metrics),
@@ -412,9 +419,9 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.2.16`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.3.0`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
-fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files; V0.2.13 the disk image's stapling retried, this report published by the workflow; V0.2.14 the macOS package runs when installed through Homebrew (library validation off, as Homebrew re-signs the bundled libraries; the build's absolute rpaths removed, which had loaded Homebrew's libomp next to the bundled one), checked in CI; V0.2.15 the command line reviewed (adversarially, with two other models): the RT map fitted from the run, all cores up to 64 and an RT window measured along the gradient by default, a warning for a wrong RT scale, one Parquet file per run, consistent option names, 13 basic options, parity switches folded into `-scheme B`, and every cluster measurement re-run. V0.2.16 the physical cores by default, the RT-window multiple from all benchmark data (7σ), the 0.2.14 option names accepted again until 0.4, the peptide-decoy experiment, a macOS `.pkg` built and tested (published once signed), the Homebrew tap updated by the workflow (once its deploy key is set). The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files; V0.2.13 the disk image's stapling retried, this report published by the workflow; V0.2.14 the macOS package runs when installed through Homebrew (library validation off, as Homebrew re-signs the bundled libraries; the build's absolute rpaths removed, which had loaded Homebrew's libomp next to the bundled one), checked in CI; V0.2.15 the command line reviewed (adversarially, with two other models): the RT map fitted from the run, all cores up to 64 and an RT window measured along the gradient by default, a warning for a wrong RT scale, one Parquet file per run, consistent option names, 13 basic options, parity switches folded into `-scheme B`, and every cluster measurement re-run. V0.2.16 the physical cores by default, the RT-window multiple from all benchmark data (7σ), the 0.2.14 option names accepted again until 0.4, the peptide-decoy experiment, a macOS `.pkg` built and tested (published once signed), the Homebrew tap updated by the workflow (once its deploy key is set). V0.3.0 the instrument defaults as data files (`-instrument`, `-instrument_file`), value sources in the output, a shorter log, the TOPPBase patch (one-line unknown-option message, `-write_ini` on the current names), and the fix of the merge join for RT windows that shrink faster than the RT grows. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -427,7 +434,7 @@ The GitHub release carries self-contained folders with the tool, the libraries i
 
 | platform | package | run |
 |---|---|---|
-| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.2.16-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
+| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.3.0-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
 | macOS Apple silicon | `…-macos-arm64.tar.gz`, `.dmg` | `bin/DIATraceExtractor` |
 | Windows x86_64, arm64 | `…-windows-<arch>.zip` | `bin\DIATraceExtractor.exe` |
 
@@ -443,18 +450,20 @@ yet, so SmartScreen warns on first start.
 **Building from source. Requirements.** Linux, GCC ≥ 13, CMake ≥ 3.24, Ninja; an OpenMS develop (≥ 3.7) build tree with its vcpkg
 dependencies, which provide Arrow/Parquet and, with `boost-json` and `boost-program-options` added to the OpenMS
 vcpkg manifest, the Boost ≥ 1.89 the mzPeak library needs (another `BoostConfig.cmake` directory can be given with
-`-DMZPEAK_BOOST_DIR`). Python 3 with pyarrow, pandas, numpy and matplotlib (`tools/pyenv` here) for the scripts;
+`-DMZPEAK_BOOST_DIR`), and from V0.3.0 yaml-cpp (also in that manifest) and one patch to OpenMS's `TOPPBase`
+(`patches/openms-toppbase-deprecated-options.patch`, applied with `git -C OpenMS apply`; the release workflow applies
+it). Python 3 with pyarrow, pandas, numpy and matplotlib (`tools/pyenv` here) for the scripts;
 `markdown` and `weasyprint` for the PDF.
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.2.16
+git checkout V0.3.0
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$O;$O/vcpkg_installed/x64-linux-dynamic"
 cmake --build build -j 16
-ctest --test-dir build        # 7 tests: TraML extraction, OpenSWATH parity, byte-level Parquet compare
+ctest --test-dir build        # 15 tests: TraML extraction, OpenSWATH parity, determinism, RT-window spans, the command line
 ```
 
 **macOS (Apple silicon) from source.** Supported since V0.2.2 (the Linux-only calls are guarded). `scripts/bench_macos.sh`
@@ -469,7 +478,8 @@ DIATraceExtractor -in run.mzML -lib library.parquet -out traces.parquet
 # a library tuned to this run (RT in run minutes): skip fitting the RT map; a JSON summary
 DIATraceExtractor -in run.mzpeak -lib library.parquet -rt_mode minutes -out traces.parquet -out_stats stats.json
 DIATraceExtractor -in run.mzpeak -out_mzml run.mzML      # the loaded run as centroided mzML, for other tools
-DIATraceExtractor --help                                 # the 13 everyday options; --helphelp: all
+DIATraceExtractor -in run.mzML -lib library.parquet -instrument Astral -out traces.parquet   # metadata without the instrument
+DIATraceExtractor --help                                 # the 14 everyday options; --helphelp: all
 ```
 
 From V0.2.15 the defaults need no tuning: `-rt_mode auto` (before: library RT taken as run seconds unless `-rt_mode`
@@ -486,6 +496,15 @@ the benchmark's parity experiments were folded into `-scheme` or removed (`-aggr
 accepted at their old default and are an error otherwise, `-aggregation sum -ms1_isotope_spacing unit` is `-scheme B`,
 `-rt_mode identity` or 0.2.14's default `linear` (0/1) is `seconds`, `-ms1_isotopes -1` is `-no_ms1`; one `WARNING:` line
 lists what was translated.
+
+From V0.3.0 the instrument-dependent defaults are data files (`share/DIATraceExtractor/instruments/*.yaml`):
+`default.yaml` (fragment tolerance 6 × the measured width, MS1 4 ×, RT window 7σ + 2 FWHM), `orbitrap.yaml` and
+`astral.yaml` (9), `tof.yaml` and `timstof.yaml` (4), each value with its source; they reproduce the class rule of
+V0.2.16. `-instrument auto` (default) reads the instrument from the run's metadata; `-instrument <name>` names it,
+`-instrument_file` adds a file of one's own (strictly validated). The Parquet footer and `-out_stats` record each value
+used with its source (`given`, `instrument-default:Astral`, `default`, `measured`). The log has one short line per
+stage (detail with `-debug 1`), every warning starts with `WARNING:`, a mistyped option gets one line with the closest
+name, and `-write_ini` writes the current names only (`-write_ini new.ini -ini old.ini` converts an old INI).
 
 Input formats: mzML (indexed, centroided) and mzPeak; libraries as DIALibGen compact Parquet, DIA-NN/OpenSWATH TSV,
 TraML or PQP.

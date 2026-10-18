@@ -4,6 +4,7 @@
 #include "ArrowPool.h"
 #include "Calibration.h"
 #include "Extractor.h"
+#include "Instruments.h"
 #include "Library.h"
 #include "Pipeline.h"
 #include "Profile.h"
@@ -16,6 +17,7 @@
 #include <OpenMS/FORMAT/DATAACCESS/MSDataWritingConsumer.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -31,6 +33,7 @@
 #include <array>
 #include <iterator>
 #include <map>
+#include <set>
 #include <sstream>
 #include "Platform.h"
 #include <OpenMS/CONCEPT/VersionInfo.h>
@@ -53,8 +56,11 @@ namespace
   double peakRssGiB() { return ODIA::platform::peakRssGiB(); }
   std::pair<double, double> rssGiB() { return ODIA::platform::rssGiB(); }
 
+  bool g_debug = false;   ///< -debug >= 1: the development detail of the log lines
+
   std::string mem()
   {
+    if (!g_debug) { return ""; }
     const auto [rss, hwm] = rssGiB();
     std::ostringstream os;
     os << std::fixed << std::setprecision(2) << "; memory " << rss << " GiB (peak so far " << hwm << " GiB)";
@@ -73,6 +79,12 @@ namespace
     arrow::default_memory_pool()->ReleaseUnused();
     ODIA::arrowPool()->ReleaseUnused();
     ODIA::platform::trimHeap();
+  }
+
+  std::string lowerCase(std::string s)
+  {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
   }
 
   std::string fmt(const ODIA::StageTime& t)
@@ -106,15 +118,29 @@ namespace
   }
 }
 
-/// Instrument class and its MS2 tolerance multiple (docs/00-dossier.md section 7) from the model name.
-std::pair<std::string, double> instrumentClass(std::string name)
+/// The -instrument help line: the names and fragment multiples of the instrument files.
+std::string instrumentHelp()
 {
-  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-  const auto has = [&](const char* w) { return name.find(w) != std::string::npos; };
-  if (has("tims")) { return {"timsTOF", 4.0}; }
-  if (has("orbitrap") || has("astral") || has("exploris") || has("exactive") || has("lumos") || has("fusion") || has("eclipse") || has("velos") || has("elite") || has("tribrid") || has("ascend")) { return {"Orbitrap", 9.0}; }
-  if (has("tof")) { return {"TOF", 4.0}; }
-  return {"unknown", 6.0};
+  std::string t = "Instrument whose defaults apply: auto (from the run's metadata) or its name, for runs whose metadata lack it";
+  try
+  {
+    std::string w, list;
+    const std::string names = ODIA::knownInstruments();
+    std::istringstream is(names);
+    std::string name;
+    while (std::getline(is, name, ','))
+    {
+      while (!name.empty() && name.front() == ' ') { name.erase(0, 1); }
+      const ODIA::InstrumentDefaults d = ODIA::resolveInstrument(name, "", "", w);
+      std::ostringstream o; o << d.value("mz_accuracy_ms2");
+      list += (list.empty() ? "" : ", ") + name + " " + o.str();
+    }
+    const ODIA::InstrumentDefaults d = ODIA::resolveInstrument("auto", "", "", w);
+    std::ostringstream o; o << d.value("mz_accuracy_ms2");
+    t += ". Sets the fragment tolerance as a multiple of the measured mass-error width: " + list + ", others " + o.str();
+  }
+  catch (const std::exception&) {}
+  return t + ".";
 }
 
 /// The run grid as mzML: every MS1 scan and every window cell in acquisition-time order, centroided, each MS2
@@ -175,7 +201,7 @@ constexpr int kUnsetInt = -2147483647;
 const Deprecated kDeprecated[] = {
   {"mz_tol", 'd', "0.0", "mz_tol_ms2", "0.0", ""},
   {"mz_sigma_ms2", 'd', "0.0", "mz_accuracy_ms2", "0.0", ""},
-  {"mz_sigma_ms1", 'd', "4.0", "mz_accuracy_ms1", "4.0", ""},
+  {"mz_sigma_ms1", 'd', "4.0", "mz_accuracy_ms1", "0.0", ""},
   {"mass_calibration", 's', "auto", "mz_calibration", "auto", ""},
   {"mz_offset", 'd', "0.0", "mz_offset_ms2", "0.0", ""},
   {"calibration:mass_model", 's', "linear", "calibration:mz_model", "linear", ""},
@@ -214,6 +240,64 @@ const Deprecated kDeprecated[] = {
   {"calibration:min_reject", 'd', "3.0", "", "", "fixed at 3 s"},
 };
 
+/// -write_ini -ini <0.2.14 INI>: the values given under the old names, on the current names (the translations of
+/// resolveCompatibility_(); what cannot be translated is reported and left out).
+Param migrateIni(const Param& p)
+{
+  Param out;
+  std::vector<std::string> dropped;
+  const auto has = [&](const std::string& k) { return p.exists(k); };
+  const auto setD = [&](const Deprecated& d) { return d.type == 'd' && has(d.name) && double(p.getValue(d.name)) > kUnsetDouble / 2; };
+  const auto setI = [&](const Deprecated& d) { return d.type == 'i' && has(d.name) && int(p.getValue(d.name)) != kUnsetInt; };
+  const auto setS = [&](const Deprecated& d) { return d.type == 's' && has(d.name) && !p.getValue(d.name).toString().empty(); };
+  for (const auto& d : kDeprecated)
+  {
+    if (!(setD(d) || setI(d) || setS(d))) { continue; }
+    if (d.replacement[0] != '\0')
+    {
+      // a different value under the current name in the same INI is a conflict: the current name is kept
+      const std::string nn = d.replacement;
+      bool clash = false;
+      if (p.exists(nn))
+      {
+        if (d.type == 's') { const std::string now = p.getValue(nn).toString(); clash = now != d.new_default && now != p.getValue(d.name).toString(); }
+        else
+        {
+          const double now = double(p.getValue(nn)), v = double(p.getValue(d.name));
+          clash = std::fabs(now - std::atof(d.new_default)) > 1e-12 && std::fabs(now - v) > 1e-12;
+        }
+      }
+      if (clash) { dropped.push_back(std::string(d.name) + " (its current name " + nn + " has another value, kept)"); continue; }
+      out.setValue(nn, p.getValue(d.name));
+      continue;
+    }
+    const bool at_default = d.type == 's' ? p.getValue(d.name).toString() == d.old_default
+                          : std::fabs(double(p.getValue(d.name)) - std::atof(d.old_default)) < 1e-12;
+    const std::string n = d.name;
+    if (at_default || n == "aggregation" || n == "ms1_isotope_spacing" || n == "rt_intercept" || n == "rt_slope") { continue; }
+    dropped.push_back(n + " (removed in 0.2.15)");
+  }
+  if (has("aggregation") && has("ms1_isotope_spacing") && p.getValue("aggregation").toString() == "sum" && p.getValue("ms1_isotope_spacing").toString() == "unit") { out.setValue("scheme", "B"); }
+  if (has("rt_mode"))
+  {
+    const std::string m = p.getValue("rt_mode").toString();
+    const double ic = has("rt_intercept") && double(p.getValue("rt_intercept")) > kUnsetDouble / 2 ? double(p.getValue("rt_intercept")) : 0.0;
+    const double sl = has("rt_slope") && double(p.getValue("rt_slope")) > kUnsetDouble / 2 ? double(p.getValue("rt_slope")) : 1.0;
+    if (m == "identity" || (m == "linear" && ic == 0.0 && sl == 1.0)) { out.setValue("rt_mode", "seconds"); }
+    else if (m == "linear" && ic == 0.0 && sl == 60.0) { out.setValue("rt_mode", "minutes"); }
+    else if (m == "linear") { out.setValue("rt_mode", "auto"); dropped.push_back("rt_mode linear (give the map as -rt_anchors)"); }
+    else if (m == "anchors" || m == "trafo") { out.setValue("rt_mode", "auto"); }
+  }
+  if (has("ms1_isotopes") && int(p.getValue("ms1_isotopes")) < 0) { out.setValue("no_ms1", "true"); out.setValue("ms1_isotopes", 2); }
+  if (!dropped.empty())
+  {
+    std::string t;
+    for (const auto& x : dropped) { t += (t.empty() ? "" : ", ") + x; }
+    OPENMS_LOG_WARN << "WARNING: not carried over into the new INI: " << t << "." << std::endl;
+  }
+  return out;
+}
+
 class TOPPDIATraceExtractor : public TOPPBase
 {
 public:
@@ -239,7 +323,9 @@ protected:
     registerOutputFile_("out", "<file>", "", "Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet "
                         "next to it.", false);
     registerOutputFile_("out_tsv", "<file>", "", "Traces as a long TSV, one row per point (large).", false);
-    registerOutputFile_("out_stats", "<file>", "", "Run statistics (JSON): calibration, stage times, memory.", false);
+    registerOutputFile_("out_stats", "<file>", "", "Run statistics (JSON): calibration, the values used and their sources, stage "
+                        "times, memory.", false);
+    registerStringOption_("instrument", "<name>", "auto", instrumentHelp(), false);
     registerInputFile_("ids", "<file>", "", "Extract only these precursors (ids, one per line).", false);
     registerIntOption_("top_fragments", "<n>", 6, "Most intense library fragments per precursor (0 = all).", false);
     setMinInt_("top_fragments", 0);
@@ -250,7 +336,8 @@ protected:
                           "-rt_anchors or -rt_trafo select a given map instead.", false);
     registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
                           "0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration "
-                          "anchors about the RT map + 2 x their peak width (FWHM). Negative: the whole run.", false);
+                          "anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). "
+                          "Negative: the whole run.", false);
     registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
                           "(-mz_accuracy_ms2 x the fragment mass-error width).", false);
     registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm. 0 (default): measured from the run "
@@ -281,10 +368,15 @@ protected:
     registerInputFile_("rt_trafo", "<file>", "", "Use this RT map instead: trafoXML, library RT -> run RT (s).", false, true);
     setValidFormats_("rt_trafo", {"trafoXML"});
     registerFlag_("rt_trafo_invert", "The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).", true);
+    registerInputFile_("instrument_file", "<yaml>", "", "Instrument defaults for this run from this file (keys: name, extends, "
+                       "mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), over the shipped files in "
+                       "<prefix>/share/DIATraceExtractor/instruments.", false, true);
+    setValidFormats_("instrument_file", {"yaml"}, false);
     registerDoubleOption_("mz_accuracy_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
-                          "errors. 0 (default): by instrument class from the run's metadata (Orbitrap/Astral 9, TOF 4, unknown 6).", false, true);
-    registerDoubleOption_("mz_accuracy_ms1", "<k>", 4.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors.", false, true);
-    setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.1);
+                          "errors. 0 (default): the instrument's (see -instrument).", false, true);
+    registerDoubleOption_("mz_accuracy_ms1", "<k>", 0.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors. "
+                          "0 (default): the instrument's (4 for every shipped instrument).", false, true);
+    setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.0);
     registerStringOption_("mz_calibration", "<mode>", "auto", "auto: correct the m/z by the offsets measured from the run. "
                           "off: use -mz_offset_ms2 and -mz_offset_ms1 instead (needs -mz_tol_ms2 and -mz_tol_ms1).", false, true);
     setValidStrings_("mz_calibration", {"auto", "off"});
@@ -323,6 +415,10 @@ protected:
       else if (d.type == 'i') { registerIntOption_(d.name, "<value>", kUnsetInt, help, false, true); }
       else { registerStringOption_(d.name, "<value>", "", help, false, true); }
     }
+    // TOPPBase (patches/openms-toppbase-deprecated-options.patch): accepted, but not written by -write_ini nor
+    // suggested for a mistyped option; -write_ini -ini <old.ini> moves their values onto the current names
+    for (const auto& d : kDeprecated) { setDeprecated_(d.name); }
+    setDeprecatedMigration_(migrateIni);
   }
 
   // --- 0.2.14 names: values given under an old name, translated onto the current options
@@ -358,8 +454,13 @@ protected:
       if (!(setD(d) || setI(d) || setS(d))) { continue; }
       if (d.replacement[0] != '\0')
       {
-        // renamed: the value moves to the new name; a different value given under the new name is a conflict
+        // renamed: the value moves to the new name (also at its old default: an INI value counts as given); a
+        // different value given under the new name is a conflict. The command line overrides an INI file: an old
+        // name from the INI yields to a new name on the command line, an old name on the command line wins over a
+        // new name from the INI.
         const std::string nn = d.replacement;
+        const bool old_cli = cli_names_.count(d.name) > 0, new_cli = cli_names_.count(nn) > 0;
+        if (!old_cli && new_cli) { notes.push_back("-" + std::string(d.name) + " of the INI file overridden by -" + nn); continue; }
         bool clash = false;
         if (d.type == 'd')
         {
@@ -379,6 +480,7 @@ protected:
           clash = now != d.new_default && now != v;
           str_[nn] = v;
         }
+        if (old_cli && !new_cli) { clash = false; }
         if (clash) { OPENMS_LOG_ERROR << "-" << d.name << " (0.2.14's name of -" << nn << ") and -" << nn << " are given with different values." << std::endl; return ILLEGAL_PARAMETERS; }
         notes.push_back("-" + std::string(d.name) + " -> -" + nn);
         continue;
@@ -443,6 +545,7 @@ protected:
     {
       const std::string a = argv[i];
       if (a == "-threads" || a == "--threads") { threads_given_ = true; }
+      if (a.size() > 1 && a[0] == '-' && std::isalpha(static_cast<unsigned char>(a[a[1] == '-' ? 2 : 1]))) { cli_names_.insert(a.substr(a[1] == '-' ? 2 : 1)); }
       if ((a == "-ini" || a == "--ini") && i + 1 < argc)
       {
         // an INI file sets the thread count only when it has a threads entry (TOPP writes one; hand-written may not)
@@ -462,6 +565,7 @@ protected:
   }
 
   bool threads_given_ = false;
+  std::set<std::string> cli_names_;   ///< options given on the command line (not from an INI file)
 
   int threadCount_()
   {
@@ -473,6 +577,7 @@ protected:
 
   ExitCodes run_(int, const char**)
   {
+    g_debug = debug_level_ > 0;
     if (const ExitCodes c = resolveCompatibility_(); c != EXECUTION_OK) { return c; }
     const ODIA::StageTime t_start = ODIA::stageClock();
     const std::string in = S("in"), lib_file = S("lib");
@@ -509,6 +614,15 @@ protected:
       std::filesystem::path p(out);
       out_axes = (p.parent_path() / (p.stem().string() + ".axes.parquet")).string();
     }
+    // the instrument files: checked before the run is read (a wrong name or file fails at once)
+    const std::string instrument_spec = S("instrument"), instrument_file = S("instrument_file");
+    if (instrument_file.size() && lowerCase(instrument_spec) != "auto")
+    {
+      OPENMS_LOG_ERROR << "Give either -instrument or -instrument_file, not both." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    try { std::string w; ODIA::resolveInstrument(instrument_spec, "", instrument_file, w); }
+    catch (const std::exception& e) { OPENMS_LOG_ERROR << "Error: " << e.what() << std::endl; return ILLEGAL_PARAMETERS; }
     const int threads = threadCount_();
     omp_set_num_threads(threads);
     OPENMS_LOG_INFO << "Threads: " << threads << (threads_given_ ? "" : " (the physical cores; -threads sets the number)") << std::endl;
@@ -522,8 +636,9 @@ protected:
     if (!S("ids").empty()) { lopt.keep_ids = ODIA::readIdList(S("ids")); }
     ODIA::LibraryReader library(lib_file, lopt, 65536);   // rows per streamed part; fixed, so the output does not depend on -threads
     const ODIA::StageTime t_lib = ODIA::stageClock() - t_lib0;
-    OPENMS_LOG_INFO << "Library: " << library.rows() << " rows in " << library.parts() << " parts from "
-                    << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem() << std::endl;
+    OPENMS_LOG_INFO << "Library: " << library.rows() << " rows";
+    if (g_debug) { OPENMS_LOG_INFO << " in " << library.parts() << " parts from " << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem(); }
+    OPENMS_LOG_INFO << std::endl;
     if (library.rows() == 0) { OPENMS_LOG_ERROR << "Library is empty." << std::endl; return INPUT_FILE_EMPTY; }
 
     // --- calibration panel (needs only the library), loaded on its own thread while the run is ingested
@@ -596,10 +711,14 @@ protected:
     releaseFreedMemory();
     const auto& gs = grid.stats;
     OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, "
-                    << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra, "
-                    << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
-                    << (gs.overlapping_windows ? std::to_string(gs.overlapping_windows) + " overlapping window pairs, " : std::string()) << ""
-                    << grid.bytes() / double(1u << 20) << " MiB; " << fmt(gs.ingest) << mem() << std::endl;
+                    << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra";
+    if (g_debug)
+    {
+      OPENMS_LOG_INFO << ", " << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
+                      << (gs.overlapping_windows ? std::to_string(gs.overlapping_windows) + " overlapping window pairs, " : std::string())
+                      << grid.bytes() / double(1u << 20) << " MiB";
+    }
+    OPENMS_LOG_INFO << "; " << fmt(gs.ingest) << mem() << std::endl;
 
     if (!out_mzml.empty())
     {
@@ -607,18 +726,36 @@ protected:
       if (out.empty() && out_tsv.empty()) { return EXECUTION_OK; }
     }
 
-    // --- tolerance multiples: given, or by instrument class
-    double sigma_ms2 = D("mz_accuracy_ms2");
+    // --- instrument defaults: the option given > the instrument's file > default.yaml, per value
+    std::string instrument_warning;
+    const ODIA::InstrumentDefaults inst = ODIA::resolveInstrument(instrument_spec, grid.instrument, instrument_file, instrument_warning);
+    std::vector<std::array<std::string, 3>> sources;   // value name, value, source (logged, footer, -out_stats)
+    const auto num = [](double x) { std::ostringstream o; o << x; return o.str(); };
+    const auto multiple = [&](const char* key) {
+      const double given = D(key);
+      const double v = given > 0.0 ? given : inst.value(key);
+      sources.push_back({key, num(v), given > 0.0 ? "given" : inst.source(key)});
+      return v;
+    };
+    const double sigma_ms2 = multiple("mz_accuracy_ms2");
+    const double sigma_ms1 = multiple("mz_accuracy_ms1");
+    const double rt_window_sigma = inst.value("rt_window_sigma"), rt_window_fwhm = inst.value("rt_window_fwhm");
+    sources.push_back({"rt_window_sigma", num(rt_window_sigma), inst.source("rt_window_sigma")});
+    sources.push_back({"rt_window_fwhm", num(rt_window_fwhm), inst.source("rt_window_fwhm")});
+    OPENMS_LOG_INFO << "Instrument: " << inst.instrument << ", " << inst.how << "; defaults " << inst.filesText() << std::endl;
     {
-      const auto cls = instrumentClass(grid.instrument);
-      if (sigma_ms2 <= 0.0) { sigma_ms2 = cls.second; }
-      OPENMS_LOG_INFO << "Instrument: " << (grid.instrument.empty() ? std::string("(none in the run's metadata)") : "'" + grid.instrument + "'")
-                      << " -> " << cls.first << "; tolerances " << sigma_ms2 << " sigma (MS2), " << D("mz_accuracy_ms1") << " sigma (MS1)"
-                      << (D("mz_accuracy_ms2") > 0 ? " [MS2 given]" : "") << std::endl;
-      if (grid.instrument.empty() || cls.first == "unknown")
-      {
-        OPENMS_LOG_WARN << "Instrument class unknown: MS2 tolerance " << sigma_ms2 << " sigma; set -mz_accuracy_ms2 (Orbitrap 9, TOF 4)." << std::endl;
-      }
+      // the values an instrument file implied, and how to change them
+      std::string implied;
+      if (D("mz_accuracy_ms2") <= 0.0 && mz_tol <= 0.0) { implied += "fragment tolerance " + num(sigma_ms2) + " x the measured width"; }
+      if (D("mz_accuracy_ms1") <= 0.0 && mz_tol_ms1 <= 0.0 && ms1_enabled) { implied += (implied.empty() ? "" : ", ") + std::string("MS1 ") + num(sigma_ms1) + " x"; }
+      if (!implied.empty()) { OPENMS_LOG_INFO << inst.instrument << " defaults: " << implied << " (-mz_accuracy_ms2 / -mz_accuracy_ms1 change the multiples, -mz_tol_ms2 / -mz_tol_ms1 fix the tolerances)" << std::endl; }
+    }
+    if (!instrument_warning.empty()) { OPENMS_LOG_WARN << "WARNING: " << instrument_warning << std::endl; }
+    if (debug_level_ > 0)
+    {
+      OPENMS_LOG_INFO << "Instrument files: " << inst.directory << " (searched:";
+      for (const auto& d : ODIA::instrumentDirectories()) { OPENMS_LOG_INFO << " " << d; }
+      OPENMS_LOG_INFO << "); " << inst.filesProvenance() << std::endl;
     }
 
     // --- calibration (from the run itself) and RT map
@@ -628,9 +765,12 @@ protected:
       const ODIA::StageTime t_wait0 = ODIA::stageClock();
       Panel panel = panel_future.get();
       ODIA::Library& panel_lib = panel.lib;
-      OPENMS_LOG_INFO << "Calibration panel library: every " << panel.keep_every << ". row, " << panel_lib.size()
-                      << " targets; " << fmt(panel.time) << " (concurrent with ingest; waited "
-                      << ODIA::stageClock().wall - t_wait0.wall << " s)" << mem() << std::endl;
+      if (g_debug)
+      {
+        OPENMS_LOG_INFO << "Calibration panel library: every " << panel.keep_every << ". row, " << panel_lib.size()
+                        << " targets; " << fmt(panel.time) << " (concurrent with ingest; waited "
+                        << ODIA::stageClock().wall - t_wait0.wall << " s)" << mem() << std::endl;
+      }
       const ODIA::Library* cal_lib = &panel_lib;
       ODIA::CalibrationOptions copt;
       // The absolute panel size (calibration:panel, else panel_fraction of the whole library): the panel library
@@ -640,7 +780,7 @@ protected:
           : std::max(1.0, copt.panel_fraction * static_cast<double>(all_rows)));
       copt.search_ppm = D("calibration:search_ppm");
       copt.accuracy_sigma = sigma_ms2;
-      copt.ms1_sigma = D("mz_accuracy_ms1");
+      copt.ms1_sigma = sigma_ms1;
       copt.linear_mass_model = S("calibration:mz_model") == "linear";
       copt.lowess_span = D("calibration:lowess_span");
       if (const char* fdr = std::getenv("ODIA_ANCHOR_FDR")) { copt.anchor_fdr = std::atof(fdr); }   // experiment, see above
@@ -655,29 +795,36 @@ protected:
         if (mz_tol <= 0) { missing += std::string(missing.empty() ? "" : ";") + " the fragment tolerance (give -mz_tol_ms2)"; }
         if (ms1_enabled && mz_tol_ms1 <= 0) { missing += std::string(missing.empty() ? "" : ";") + " the MS1 tolerance (give -mz_tol_ms1)"; }
         if (!missing.empty()) { OPENMS_LOG_ERROR << "Calibration failed: " << e.what() << ". Needed for:" << missing << "." << std::endl; return UNEXPECTED_RESULT; }
-        OPENMS_LOG_WARN << "Calibration failed: " << e.what() << "; no mass correction, the given tolerances." << std::endl;
+        OPENMS_LOG_WARN << "WARNING: calibration failed (" << e.what() << "): no mass correction; the given tolerances apply." << std::endl;
       }
       if (cal)
       {
       releaseFreedMemory();   // the per-window calibration tiles go back before extraction
-      OPENMS_LOG_INFO << "Calibration: stage 1 " << cal->stage1_anchors << " anchors (" << cal->stage1_used
-                      << " used), stage 2 window +-" << cal->stage2_window_s << " s; "
-                      << cal->anchors.size() << " anchors from a panel of " << cal->panel << ", "
-                      << cal->used << " used; RT residual |p50/p95/p99| " << cal->rt_residual_p50 << " / "
-                      << cal->rt_residual_p95 << " / " << cal->rt_residual_p99 << " s; peak FWHM " << cal->peak_fwhm_cycles << " cycles ("
-                      << cal->peak_fwhm_s << " s), co-elution window +-" << cal->half_window_cycles << " cycles; score cut " << cal->score_cut
-                      << " (" << cal->decoy_anchors << " decoys above it, " << (cal->decoy_panel ? std::to_string(cal->decoy_panel) + " library decoys" : std::string("shifted-fragment decoys")) << "), strict cut " << cal->strict_score_cut << "; MS2 offset "
-                      << cal->ms2_offset_ppm << " ppm" << slopeText(cal->ms2_slope_ppm_per_th, cal->ms2_mz_ref) << " (sigma " << cal->ms2_sigma_ppm << "), MS1 offset "
-                      << cal->ms1_offset_ppm << " ppm" << slopeText(cal->ms1_slope_ppm_per_th, cal->ms1_mz_ref) << " (sigma " << cal->ms1_sigma_ppm << "); accuracy MS2 +-" << cal->ms2_accuracy_ppm
-                      << " / MS1 +-" << cal->ms1_accuracy_ppm << " ppm (coverage half widths " << cal->ms2_coverage_ppm << " / " << cal->ms1_coverage_ppm << " ppm; = " << cal->accuracy_sigma << " sigma; co-elution by k:"
-                      << [&] { std::string t; for (const auto& [k, r] : cal->coelution_by_sigma) { t += " " + std::to_string(static_cast<int>(k)) + ":" + (r < 0 ? std::string("-") : std::to_string(r).substr(0, 5)); } return t; }()
-                      << "; from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
-                      << cal->ms2_search_ppm << " / +-" << cal->ms1_search_ppm << " ppm); " << fmt(cal->time) << std::endl;
+      // one line at the default level (the timing last: analysis scripts read it), the search detail with -debug 1
+      OPENMS_LOG_INFO << "Calibration: " << cal->anchors.size() << " anchors (" << cal->used << " used); RT residual p50/p95 "
+                      << cal->rt_residual_p50 << " / " << cal->rt_residual_p95 << " s; peak FWHM " << cal->peak_fwhm_s << " s; MS2 offset "
+                      << cal->ms2_offset_ppm << " ppm" << slopeText(cal->ms2_slope_ppm_per_th, cal->ms2_mz_ref) << " (width " << cal->ms2_sigma_ppm
+                      << "), MS1 offset " << cal->ms1_offset_ppm << " ppm" << slopeText(cal->ms1_slope_ppm_per_th, cal->ms1_mz_ref)
+                      << " (width " << cal->ms1_sigma_ppm << "); " << fmt(cal->time) << std::endl;
+      if (g_debug)
+      {
+        OPENMS_LOG_INFO << "Calibration detail: stage 1 " << cal->stage1_anchors << " anchors (" << cal->stage1_used
+                        << " used), stage 2 window +-" << cal->stage2_window_s << " s; panel " << cal->panel << "; RT residual |p99| "
+                        << cal->rt_residual_p99 << " s; peak FWHM " << cal->peak_fwhm_cycles << " cycles, co-elution window +-"
+                        << cal->half_window_cycles << " cycles; score cut " << cal->score_cut << " (" << cal->decoy_anchors << " decoys above it, "
+                        << (cal->decoy_panel ? std::to_string(cal->decoy_panel) + " library decoys" : std::string("shifted-fragment decoys"))
+                        << "), strict cut " << cal->strict_score_cut << "; accuracy MS2 +-" << cal->ms2_accuracy_ppm << " / MS1 +-"
+                        << cal->ms1_accuracy_ppm << " ppm (coverage half widths " << cal->ms2_coverage_ppm << " / " << cal->ms1_coverage_ppm
+                        << " ppm; = " << cal->accuracy_sigma << " sigma; co-elution by k:"
+                        << [&] { std::string t; for (const auto& [k, r] : cal->coelution_by_sigma) { t += " " + std::to_string(static_cast<int>(k)) + ":" + (r < 0 ? std::string("-") : std::to_string(r).substr(0, 5)); } return t; }()
+                        << "; from " << cal->strict_mass_anchors << " anchors; " << cal->search_rounds << " search passes, final windows +-"
+                        << cal->ms2_search_ppm << " / +-" << cal->ms1_search_ppm << " ppm)" << std::endl;
+      }
       if (!S("out_calibration").empty()) { ODIA::writeAnchors(S("out_calibration"), *cal_lib, *cal); }
 
       }
     }
-    if (!cal && !S("out_calibration").empty()) { OPENMS_LOG_WARN << "No calibration ran: -out_calibration not written." << std::endl; }
+    if (!cal && !S("out_calibration").empty()) { OPENMS_LOG_WARN << "WARNING: no calibration ran, so -out_calibration is not written." << std::endl; }
     ODIA::RtMap rt_map;
     if (mode == "seconds" || !rt_needed) { rt_map = ODIA::RtMap::identity(); }
     else if (mode == "minutes") { rt_map = ODIA::RtMap::identity(60.0); }
@@ -702,7 +849,7 @@ protected:
       if (!cal) { OPENMS_LOG_ERROR << "The MS1 tolerance is measured by the calibration, which is off (-mz_calibration off): give -mz_tol_ms1 <ppm> (or -no_ms1 for no MS1 traces)." << std::endl; return ILLEGAL_PARAMETERS; }
       eopt.ms1_ppm = cal->ms1_accuracy_ppm;
       if (eopt.ms1_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS1 accuracy could not be measured (too few MS1 centroids); give -mz_tol_ms1 <ppm>." << std::endl; return UNEXPECTED_RESULT; }
-      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << D("mz_accuracy_ms1") << " x the measured width)" << std::endl;
+      OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << sigma_ms1 << " x the measured width)" << std::endl;
     }
     eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : D("mz_offset_ms2");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : D("mz_offset_ms1");
@@ -723,7 +870,24 @@ protected:
       // 6 x to 98.1%, fixed +-60 s to 79% (results/rtwin/all/).
       std::vector<std::array<double, 3>> pts;   // run RT, residual, FWHM
       if (cal) { for (const auto& a : cal->anchors) { if (a.used) { pts.push_back({a.run_rt, a.run_rt - rt_map(a.library_rt), a.fwhm_s}); } } }
-      if (pts.size() >= 50)
+      if (const char* table = std::getenv("ODIA_RT_WINDOW_TABLE"))
+      {
+        // Tests only (tests/CMakeLists.txt, rt_window_table): the RT-dependent window as "rt:half,rt:half,..." (s),
+        // so that a small file without calibration anchors gets one
+        std::istringstream is(table);
+        std::string item;
+        while (std::getline(is, item, ','))
+        {
+          const auto colon = item.find(':');
+          if (colon == std::string::npos) { OPENMS_LOG_ERROR << "ODIA_RT_WINDOW_TABLE: expected rt:half,... (s)" << std::endl; return ILLEGAL_PARAMETERS; }
+          eopt.rt_window_at.push_back(std::stod(item.substr(0, colon)));
+          eopt.rt_window_half.push_back(std::stod(item.substr(colon + 1)));
+        }
+        eopt.rt_half_window = *std::max_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
+        rt_window_text = std::string("ODIA_RT_WINDOW_TABLE ") + table;
+        OPENMS_LOG_INFO << "RT window: " << rt_window_text << " (test hook)" << std::endl;
+      }
+      else if (pts.size() >= 50)
       {
         std::sort(pts.begin(), pts.end());
         const std::size_t nb = std::clamp<std::size_t>(pts.size() / 150, 1, 8);
@@ -736,22 +900,37 @@ protected:
           const double rm = median(r);
           std::vector<double> dev; for (double x : r) { dev.push_back(std::fabs(x - rm)); }
           eopt.rt_window_at.push_back(median(t));
-          eopt.rt_window_half.push_back(7.0 * 1.4826 * median(dev) + 2.0 * median(f));
+          eopt.rt_window_half.push_back(rt_window_sigma * 1.4826 * median(dev) + rt_window_fwhm * median(f));
         }
         const auto [mn, mx] = std::minmax_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
         eopt.rt_half_window = *mx;   // > 0: not a whole-run extraction
         std::ostringstream os; os.precision(3);
         for (std::size_t b = 0; b < nb; ++b) { os << (b ? ", " : "") << eopt.rt_window_half[b] << " s at " << std::lround(eopt.rt_window_at[b]) << " s"; }
         rt_window_text = "measured: " + os.str();
-        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, 7 x the RT scatter + 2 x the peak FWHM of " << pts.size()
+        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, " << rt_window_sigma << " x the RT scatter + " << rt_window_fwhm << " x the peak FWHM of " << pts.size()
                         << " anchors in " << nb << " RT bin(s) (" << os.str() << ")" << std::endl;
       }
       else
       {
         eopt.rt_half_window = 60.0;
         rt_window_text = "60 (no calibration anchors to measure it)";
-        OPENMS_LOG_WARN << "RT window: +-60 s (too few calibration anchors to measure the RT scatter; -rt_window sets it)." << std::endl;
+        OPENMS_LOG_WARN << "WARNING: RT window +-60 s: too few calibration anchors to measure the RT scatter (-rt_window sets it)." << std::endl;
       }
+    }
+    // where each resolved value came from (logged with -debug 1, in the footer and in -out_stats)
+    sources.push_back({"mz_tol_ms2", num(eopt.ms2_ppm), mz_tol > 0.0 ? "given" : "measured"});
+    sources.push_back({"mz_tol_ms1", ms1_enabled ? num(eopt.ms1_ppm) : "-", !ms1_enabled ? "unused (-no_ms1)" : mz_tol_ms1 > 0.0 ? "given" : "measured"});
+    const std::string offset_source = scheme_b ? "none (-scheme B)" : mass_auto ? (cal ? "measured" : "none (no calibration)") : "given";
+    sources.push_back({"mz_offset_ms2", num(eopt.ms2_ppm_offset), offset_source});
+    sources.push_back({"mz_offset_ms1", num(eopt.ms1_ppm_offset), offset_source});
+    sources.push_back({"rt_window", rt_window_opt != 0.0 ? num(rt_window_opt) : rt_window_text, rt_window_opt > 0.0 ? "given" : rt_window_opt < 0.0 ? "given (whole run)"
+                                                     : eopt.rt_window_half.empty() ? "default (too few anchors to measure it)" : "measured"});
+    sources.push_back({"rt_map", rt_map.describe(), mode == "auto" ? (rt_needed ? "measured" : "unused (whole run)") : "given (" + (mode == "anchors" || mode == "trafo" ? "-rt_" + mode : "-rt_mode " + mode) + ")"});
+    if (debug_level_ > 0)
+    {
+      std::string t;
+      for (const auto& v : sources) { t += (t.empty() ? "" : "; ") + v[0] + " " + v[1] + " (" + v[2] + ")"; }
+      OPENMS_LOG_INFO << "Values used: " << t << std::endl;
     }
     eopt.aggregate_sum = scheme_b;
     eopt.extract_ms1 = ms1_enabled;
@@ -789,7 +968,9 @@ protected:
                      {"mz_offset_ms1_slope_ppm_per_th", std::to_string(eopt.ms1_ppm_slope)}, {"mz_offset_ms1_mz_ref", std::to_string(eopt.ms1_mz_ref)},
                      {"scheme", S("scheme")}, {"aggregation", eopt.aggregate_sum ? "sum" : "max"},
                      {"rt_window_half_s", rt_window_text},
-                     {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"}};
+                     {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"},
+                     {"instrument", inst.instrument}, {"instrument_run", grid.instrument}, {"instrument_files", inst.filesProvenance()},
+                     {"value_sources", [&] { std::string t; for (const auto& v : sources) { t += (t.empty() ? "" : "; ") + v[0] + "=" + v[1] + " (" + v[2] + ")"; } return t; }()}};
     ODIA::TraceWriter writer(grid, wcfg);
 
     // One pool of workers, centrally scheduled (ODIA::ExtractionScheduler): read + plan library parts,
@@ -820,7 +1001,7 @@ protected:
       os << " trace pool " << buffers.bytes() / double(1u << 20) << " MiB, peak " << buffers.peakInUse() << " of "
          << buffers.capacity() << " blocks, " << ss.heap_units << " units on the heap; library parts resident <= "
          << ss.peak_parts << ", " << ss.part_objects << " part objects";
-      OPENMS_LOG_INFO << os.str() << std::endl;
+      if (g_debug) { OPENMS_LOG_INFO << os.str() << std::endl; }
     }
     const ODIA::StageTime t_close0 = ODIA::stageClock();
     writer.close();
@@ -828,12 +1009,15 @@ protected:
     const ODIA::StageTime t_total = ODIA::stageClock() - t_start;
 
     const auto& es = extractor.stats();
-    OPENMS_LOG_INFO << "Extraction: " << es.precursors << " precursors (" << library_fragments << " fragments) from "
-                    << library.parts() << " library parts; " << es.assignments << " precursor-window assignments in " << es.units
-                    << " units, " << es.without_window << " precursors without window, " << es.empty_range
-                    << " outside the acquired RT range; " << es.traces << " traces, " << es.ms2_points << " MS2 + "
-                    << es.ms1_points << " MS1 points, " << es.peak_lookups << " lookups; " << fmt(es.time)
-                    << " with " << threads << " threads" << mem() << std::endl;
+    OPENMS_LOG_INFO << "Extraction: " << es.precursors << " precursors, " << es.traces << " traces";
+    if (es.without_window > 0) { OPENMS_LOG_INFO << " (" << es.without_window << " precursors in no isolation window)"; }
+    if (g_debug)
+    {
+      OPENMS_LOG_INFO << "; " << library_fragments << " fragments from " << library.parts() << " library parts; " << es.assignments
+                      << " precursor-window assignments in " << es.units << " units, " << es.empty_range << " outside the acquired RT range; "
+                      << es.ms2_points << " MS2 + " << es.ms1_points << " MS1 points, " << es.peak_lookups << " lookups";
+    }
+    OPENMS_LOG_INFO << "; " << fmt(es.time) << " with " << threads << " threads" << mem() << std::endl;
     // A wrong RT scale (minutes read as seconds, iRT as minutes) extracts the wrong place without failing: the mapped
     // RTs then fall outside the run or bunch into a small part of it.
     {
@@ -841,14 +1025,19 @@ protected:
       const double lib_span = es.rt_center_max - es.rt_center_min;
       if (es.precursors > 0 && (es.empty_range * 2 > es.precursors || (es.precursors >= 1000 && rt_needed && run_span > 0 && lib_span < 0.25 * run_span)))
       {
-        OPENMS_LOG_WARN << "The library's RTs map onto " << std::max(0.0, es.rt_center_min) << "-" << std::max(0.0, es.rt_center_max) << " s of a run spanning "
+        OPENMS_LOG_WARN << "WARNING: the library's RTs map onto " << std::max(0.0, es.rt_center_min) << "-" << std::max(0.0, es.rt_center_max) << " s of a run spanning "
                         << grid.cycle_rt.front() << "-" << grid.cycle_rt.back() << " s (" << es.empty_range << " of " << es.precursors
                         << " precursors outside it): check -rt_mode (the library's RT scale); -rt_mode auto fits the map from the run." << std::endl;
       }
     }
-    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows, " << writer.points() << " points, " << writer.shardCount() << " Parquet part(s) written in parallel"
-                    << (writer.shardCount() > 1 ? " into one file" : "") << " (busiest writer " << writer.busySeconds() << " s, final drain "
-                    << t_close.wall << " s; appending to the file " << writer.mergeSeconds() << " s in total)" << std::endl;
+    OPENMS_LOG_INFO << "Written: " << writer.rows() << " rows" << (out.empty() ? "" : " -> " + out);
+    if (g_debug)
+    {
+      OPENMS_LOG_INFO << "; " << writer.points() << " points, " << writer.shardCount() << " Parquet part(s) written in parallel"
+                      << (writer.shardCount() > 1 ? " into one file" : "") << " (busiest writer " << writer.busySeconds() << " s, final drain "
+                      << t_close.wall << " s; appending to the file " << writer.mergeSeconds() << " s in total)";
+    }
+    OPENMS_LOG_INFO << std::endl;
     if (ODIA::prof::enabled()) { ODIA::prof::report(stderr); }
     if (std::getenv("ODIA_PROFILE") != nullptr)
     {
@@ -905,7 +1094,15 @@ protected:
          << "  \"ms2_offset_slope_ppm_per_th\": " << eopt.ms2_ppm_slope << ", \"ms2_offset_mz_ref\": " << eopt.ms2_mz_ref << ",\n"
          << "  \"ms1_offset_slope_ppm_per_th\": " << eopt.ms1_ppm_slope << ", \"ms1_offset_mz_ref\": " << eopt.ms1_mz_ref << ",\n"
          << "  \"mz_tol_ppm\": " << eopt.ms2_ppm << ",\n"
-         << "  \"mz_tol_ms1_ppm\": " << eopt.ms1_ppm << ",\n";
+         << "  \"mz_tol_ms1_ppm\": " << eopt.ms1_ppm << ",\n"
+         << "  \"instrument\": {\"name\": \"" << escape(inst.instrument) << "\", \"run_metadata\": \"" << escape(grid.instrument)
+         << "\", \"chosen\": \"" << escape(inst.how) << "\", \"files\": \"" << escape(inst.filesProvenance()) << "\"},\n"
+         << "  \"values\": {";
+      for (std::size_t i = 0; i < sources.size(); ++i)
+      {
+        js << (i ? ", " : "") << "\"" << sources[i][0] << "\": {\"value\": \"" << escape(sources[i][1]) << "\", \"source\": \"" << escape(sources[i][2]) << "\"}";
+      }
+      js << "},\n";
       if (cal)
       {
         js << "  \"calibration\": {\"panel\": " << cal->panel << ", \"anchors\": " << cal->anchors.size()

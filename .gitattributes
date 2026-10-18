@@ -1,0 +1,2 @@
+data/instruments/*.yaml text eol=lf
+patches/*.patch -text

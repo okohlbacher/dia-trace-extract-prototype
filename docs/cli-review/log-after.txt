@@ -1,0 +1,14 @@
+Threads: 32
+Library: 82333 rows
+Run grid: 977 cycles x 300 windows, 2928 MS1 / 292883 MS2 spectra; 0.31 s wall, 9.22 s CPU (2945%)
+Instrument: Astral, from the run's metadata ('Orbitrap Astral'); defaults astral.yaml (Astral) over orbitrap.yaml over default.yaml
+Astral defaults: fragment tolerance 9 x the measured width, MS1 4 x (-mz_accuracy_ms2 / -mz_accuracy_ms1 change the multiples, -mz_tol_ms2 / -mz_tol_ms1 fix the tolerances)
+Calibration: 1117 anchors (1078 used); RT residual p50/p95 7.9849 / 27.3661 s; peak FWHM 3.29921 s; MS2 offset -3.21341 ppm -0.560545 ppm/kTh about 626.28 Th (width 0.876886), MS1 offset 1.26479 ppm +1.0732 ppm/kTh about 566.294 Th (width 0.358198); 0.04 s wall, 0.68 s CPU (1682%)
+RT map: lowess fit to 1078 points
+MS2 tolerance: +-7.89197 ppm (9 x the measured width)
+MS1 tolerance: +-1.43279 ppm (4 x the measured width)
+RT window: +-73.3571 to +-117.522 s, 7 x the RT scatter + 2 x the peak FWHM of 1078 anchors in 7 RT bin(s) (87.7 s at 526 s, 85.9 s at 654 s, 105 s at 732 s, 73.4 s at 803 s, 80.1 s at 866 s, 98.5 s at 948 s, 118 s at 1073 s)
+Extraction: 82333 precursors, 740980 traces; 0.34 s wall, 8.62 s CPU (2515%) with 32 threads
+Written: 740980 rows -> /scratch/kohlbach/odia-bench/out/cli03/after.parquet
+Total: 1.07 s wall, 19.32 s CPU (1807%), peak RSS 2.69878 GiB
+DIATraceExtractor took 1.26 s (wall), 19.51 s (CPU), 6.97 s (system), 12.54 s (user); Peak Memory Usage: 2763 MB.

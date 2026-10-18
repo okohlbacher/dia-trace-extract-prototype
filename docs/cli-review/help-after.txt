@@ -1,0 +1,34 @@
+stty: 'standard input': Inappropriate ioctl for device
+
+DIATraceExtractor -- Extract fragment and MS1 isotope traces (XICs) of a spectral library from a DIA run. RT map, RT window, mass offsets and tolerances are measured from the run; uses all physical cores unless -threads is given.
+Full documentation: http://www.openms.de/doxygen/nightly/html/TOPP_DIATraceExtractor.html
+Version: 0.3.0 (OpenMS 3.7.0-pre-develop-2026-10-09)
+To cite OpenMS:
+ + Pfeuffer, J., Bielow, C., Wein, S. et al.. OpenMS 3 enables reproducible analysis of large-scale mass spectrometry data. Nat Methods (2024). doi:10.1038/s41592-024-02197-7.
+
+Usage:
+  DIATraceExtractor <options>
+
+Options (mandatory options marked with '*'):
+  -in <file>*         DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.
+  -lib <file>         Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.
+  -out <file>         Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet next to it.
+  -out_tsv <file>     Traces as a long TSV, one row per point (large).
+  -out_stats <file>   Run statistics (JSON): calibration, the values used and their sources, stage times, memory.
+  -instrument <name>  Instrument whose defaults apply: auto (from the run's metadata) or its name, for runs whose metadata lack it. Sets the fragment tolerance as a multiple of the measured mass-error width: Astral 9, Orbitrap 9, timsTOF 4, TOF 4, others 6. (default: 'auto')
+  -ids <file>         Extract only these precursors (ids, one per line).
+  -top_fragments <n>  Most intense library fragments per precursor (0 = all). (default: '6') (min: '0')
+  -rt_mode <mode>     How library RT maps to the run: auto (fitted from the run itself; any library RT scale), minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). -rt_anchors or -rt_trafo select a given map instead. (default: 'auto')
+  -rt_window <s>      Extract +- this many seconds around each precursor's mapped RT. 0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). Negative: the whole run. (default: '0.0')
+  -mz_tol_ms2 <ppm>   Fragment tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms2 x the fragment mass-error width). (default: '0.0') (min: '0.0')
+  -mz_tol_ms1 <ppm>   MS1 tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms1 x the MS1 mass-error width). (default: '0.0') (min: '0.0')
+  -scheme <name>      A (default): DIA-NN's extraction rules (max of the centroids in the window) with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and -mz_tol_ms1. (default: 'A') (valid: 'A', 'B')
+  -out_mzml <file>    Also write the run as a centroided mzML, one spectrum per isolation window (diaPASEF frames split by window, scans collapsed), for tools that do not read mzPeak. Without -out and -out_tsv only this is done and -lib is not needed. (valid formats: 'mzML')
+                      
+Common UTIL options:
+  -ini <file>         Use the given TOPP INI file
+  -threads <n>        Sets the number of threads allowed to be used by the TOPP tool (0 = all available cores) (default: '1')
+  -write_ini <file>   Writes the default configuration file
+  --help              Shows options
+  --helphelp          Shows all options (including advanced)
+

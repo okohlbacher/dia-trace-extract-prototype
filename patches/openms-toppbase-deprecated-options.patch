@@ -1,0 +1,184 @@
+diff --git a/src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h b/src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h
+index e0c38fec86..98a5196ce2 100644
+--- a/src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h
++++ b/src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h
+@@ -21,6 +21,7 @@
+ 
+ #include <OpenMS/KERNEL/StandardTypes.h>
+ 
++#include <functional>
+ #include <iosfwd>
+ #include <map>
+ #include <memory>
+@@ -647,6 +648,23 @@ protected:
+     */
+     void registerTOPPSubsection_(const std::string& name, const std::string& description);
+ 
++    /**
++      @brief Marks a registered parameter as deprecated.
++
++      It is still accepted on the command line and in INI files (so old command lines and INI files keep working),
++      but '-write_ini' and the tool descriptions ('-write_ctd', '-write_cwl', '-write_json') leave it out, and it is
++      never suggested for a mistyped option. Call it in registerOptionsAndFlags_(), after registering the name.
++    */
++    void setDeprecated_(const std::string& name);
++
++    /**
++      @brief Sets how '-write_ini' moves the values of deprecated parameters onto their replacements.
++
++      When '-write_ini' rewrites an INI file given with '-ini', @p migrate receives the tool's parameters (names
++      without the tool prefix, deprecated ones included) and returns the values to set on the current names.
++    */
++    void setDeprecatedMigration_(std::function<Param(const Param&)> migrate);
++
+ 
+     /// Adds an empty line between registered variables in the documentation.
+     void addEmptyLine_();
+diff --git a/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp b/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
+index c3ea09e4f5..b83bcb4b71 100755
+--- a/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
++++ b/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
+@@ -47,6 +47,7 @@
+ 
+ #include <OpenMS/SYSTEM/PathUtils.h>
+ 
++#include <algorithm>
+ #include <cctype>
+ #include <filesystem>
+ #include <fstream>
+@@ -56,6 +57,7 @@
+ #include <memory>
+ #include <optional>
+ #include <sstream>
++#include <set>
+ #include <unordered_set>
+ 
+ // OpenMP support
+@@ -77,6 +79,37 @@ namespace OpenMS
+ 
+   namespace
+   {
++    /// Deprecated parameters per tool instance (setDeprecated_()): kept here, not in TOPPBase, so that the class
++    /// layout stays the same for tools built against an older OpenMS_CLI.
++    struct Deprecations
++    {
++      std::set<std::string> names;
++      std::function<Param(const Param&)> migrate;
++    };
++    std::map<const TOPPBase*, Deprecations>& deprecations()
++    {
++      static std::map<const TOPPBase*, Deprecations> d;
++      return d;
++    }
++
++    /// Edit distance (insertions, deletions, substitutions), ignoring case.
++    std::size_t editDistance(const std::string& a, const std::string& b)
++    {
++      std::vector<std::size_t> prev(b.size() + 1), cur(b.size() + 1);
++      for (std::size_t j = 0; j <= b.size(); ++j) { prev[j] = j; }
++      for (std::size_t i = 1; i <= a.size(); ++i)
++      {
++        cur[0] = i;
++        for (std::size_t j = 1; j <= b.size(); ++j)
++        {
++          const bool same = std::tolower(static_cast<unsigned char>(a[i - 1])) == std::tolower(static_cast<unsigned char>(b[j - 1]));
++          cur[j] = std::min({prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (same ? 0 : 1)});
++        }
++        std::swap(prev, cur);
++      }
++      return prev[b.size()];
++    }
++
+     /// Does any entry of @p valid_strings denote the same format as @p type?
+     /// Compared by type, so a tool declaring 'fasta' accepts 'db.fa' and one declaring 'fa' accepts 'db.fasta'.
+     /// Entries that are not known formats keep their exact spelling, so a custom extension only matches itself.
+@@ -258,6 +291,7 @@ namespace OpenMS
+ 
+   TOPPBase::~TOPPBase()
+   {
++    deprecations().erase(this);
+     // delete log file if empty
+     const std::string& topplog = getParam_("log").toString();
+     if (!topplog.empty() && File::empty(topplog))
+@@ -266,6 +300,16 @@ namespace OpenMS
+     }
+   }
+ 
++  void TOPPBase::setDeprecated_(const std::string& name)
++  {
++    deprecations()[this].names.insert(name);
++  }
++
++  void TOPPBase::setDeprecatedMigration_(std::function<Param(const Param&)> migrate)
++  {
++    deprecations()[this].migrate = std::move(migrate);
++  }
++
+   TOPPBase::ExitCodes TOPPBase::main(int argc, const char** argv)
+   {
+     //----------------------------------------------------------
+@@ -353,11 +397,31 @@ namespace OpenMS
+       return EXECUTION_OK;
+     }
+ 
+-    // test if unknown options were given
++    // test if unknown options were given: one line each, with the closest current name; no usage text, which would
++    // scroll the message away
+     if (param_cmdline_.exists("unknown"))
+     {
+-      writeLogError_(std::string("Unknown option(s) '") + getParamAsString_("unknown") + "' given. Aborting!");
+-      printUsage_();
++      const auto dep = deprecations().find(this);
++      std::vector<std::string> unknown = param_cmdline_.getValue("unknown").toStringVector();
++      std::reverse(unknown.begin(), unknown.end());   // parseCommandLine_() collects them last to first
++      for (const std::string& given : unknown)
++      {
++        std::string name = given;
++        while (!name.empty() && name.front() == '-') { name.erase(0, 1); }
++        std::string best;
++        std::size_t best_d = std::numeric_limits<std::size_t>::max();
++        for (const ParameterInformation& p : parameters_)
++        {
++          if (p.name.empty() || p.name.front() == '-' || p.type == ParameterInformation::TEXT || p.type == ParameterInformation::NEWLINE) { continue; }
++          if (dep != deprecations().end() && dep->second.names.count(p.name) > 0) { continue; }
++          // also against the name's start, so that a truncated or extended name finds it ('-mz_tolx' -> '-mz_tol_ms2')
++          const std::size_t d = std::min(editDistance(name, p.name), editDistance(name, p.name.substr(0, name.size())) + 1);
++          if (d < best_d) { best_d = d; best = p.name; }
++        }
++        const bool close = !best.empty() && best_d <= std::max<std::size_t>(1, name.size() / 3);
++        writeLogError_("Unknown option '" + given + "'" + (close ? " (did you mean -" + best + "?)" : std::string()) + ".");
++      }
++      writeLogError_("'--help' lists the options, '--helphelp' all of them.");
+       return ILLEGAL_PARAMETERS;
+     }
+ 
+@@ -2748,6 +2812,10 @@ namespace OpenMS
+           if (!type_list[i].empty())
+             param_cmdline_.setValue("type", type_list[i]);
+           Param default_params = getDefaultParameters_();
++          if (const auto dep = deprecations().find(this); dep != deprecations().end())
++          {
++            for (const auto& n : dep->second.names) { default_params.remove(this->ini_location_ + n); }
++          }
+ 
+           // add type to ini file
+           if (!type_list[i].empty())
+@@ -2815,6 +2883,18 @@ namespace OpenMS
+           // update default params with outdated params given in -ini and be verbose
+           default_params.update(ini_params, false);
+         }
++        if (const auto dep = deprecations().find(this); dep != deprecations().end())
++        {
++          // move the values of deprecated parameters onto their replacements, then leave the deprecated ones out
++          if (dep->second.migrate)
++          {
++            Param moved = dep->second.migrate(default_params.copy(ini_location_, true));
++            Param prefixed;
++            prefixed.insert(ini_location_, moved);
++            default_params.update(prefixed, false);
++          }
++          for (const auto& n : dep->second.names) { default_params.remove(ini_location_ + n); }
++        }
+         ParamXMLFile paramFile{};
+         paramFile.store(write_ini_file, default_params);
+         return EXECUTION_OK;

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Adjust an OpenMS checkout's vcpkg.json for the release build, idempotently:
-  - add the ports the mzPeak reader needs (Boost.JSON, Boost.ProgramOptions);
+  - add the ports the mzPeak reader needs (Boost.JSON, Boost.ProgramOptions) and yaml-cpp (the instrument files);
   - build Arrow without S3 (aws-sdk-cpp: unused here, an hour of build, long-path failures on Windows);
   - with --no-coin: drop the COIN-OR ports (they pull lapack and openblas, whose arm64-windows host build is
     broken); OpenMS then takes its LP solver from the lp-glpk feature (-DLP_SOLVER=GLPK).
@@ -13,7 +13,7 @@ m = json.load(open(p))
 deps = m["dependencies"]
 names = [d if isinstance(d, str) else d["name"] for d in deps]
 changes = []
-for d in ("boost-json", "boost-program-options"):
+for d in ("boost-json", "boost-program-options", "yaml-cpp"):
     if d not in names:
         deps.append(d); changes.append("+" + d)
 for d in deps:

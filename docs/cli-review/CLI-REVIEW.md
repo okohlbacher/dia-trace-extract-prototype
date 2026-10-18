@@ -205,3 +205,33 @@ are used only with the experimental `ODIA_ANCHOR_FDR`.
    recommended; or let them appear at their unset default.
 9. **Parser for the instrument files:** yaml-cpp (the guideline; one-time CI cache rebuild) -- recommended; or
    OpenMS's Param XML.
+
+## Phase 2 (implementation, branch cli-0.3, for 0.3.0)
+
+Decision 1 and 7a shipped in V0.2.16 (aliases, threads). The remaining decisions were taken as recommended (2-6, 8, 9).
+One commit per change:
+
+1. **Instrument files** (decisions 2-4, 9): `data/instruments/` with `default.yaml` (6, MS1 4, RT window 7 sigma +
+   2 FWHM), `orbitrap.yaml` (9, the class keywords of `instrumentClass()`), `astral.yaml` (extends orbitrap),
+   `tof.yaml` (4), `timstof.yaml` (extends tof); yaml-cpp with strict validation; `-instrument` (basic),
+   `-instrument_file` (advanced); the most specific keyword match wins (timsTOF over TOF); `.gitattributes` forces LF.
+   Provenance: `odia.instrument`, `odia.instrument_run`, `odia.instrument_files` (SHA-1), `odia.value_sources`, and
+   `instrument`/`values` in `-out_stats`. The environment variable and user directory are left for later.
+2. **Messages** (decision 6): short lines under the stable prefixes, detail behind `-debug 1`, `WARNING:` everywhere;
+   `docs/messages-review.md`, `log-before.txt`, `log-after.txt`, `log-after-debug.txt`.
+3. **TOPPBase patch** (decisions 5, 8): `patches/openms-toppbase-deprecated-options.patch`, ABI-neutral; one line
+   per unknown option with the closest current name; deprecated names out of `-write_ini` and the tool descriptions;
+   `-write_ini -ini <old>` migrates. Applied in CI; offered upstream later.
+4. **Tests, docs:** `tests/cli_checks.py` (ctest `cli_*`: pinned `--help` length, unknown options, instrument files
+   with every validation error and the per-value precedence, old and new names identical, the old/new conflict, a
+   0.2.14 INI, the `-write_ini` round trip and migration), `CHANGELOG.md`, README, `help-after.txt`,
+   `helphelp-after.txt`, `defaults-after.ini`.
+
+Found on the way: an old name in a 0.2.14 INI (at its old default) clashed with the new name given on the command
+line; the command line now wins over the INI, as everywhere in TOPP. Separately, V0.2.16 is not run-to-run
+deterministic on timsTOF A01 (1-3 of 404,764 traces differ between identical runs); unrelated to this change, filed as
+its own task.
+
+Identity: Astral run 01 and timsTOF A01 (DIA-NN's IDs) at the defaults give the traces of V0.2.16; only the new footer
+keys differ (`scripts/same_traces.py`). `--help`: 34 lines (14 options of the tool + TOPP's), `--helphelp` 118 (the 39
+deprecated names are listed there, as the guideline asks).
