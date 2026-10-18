@@ -78,15 +78,9 @@
 - Second data set from another instrument for the data-driven criteria (ProteoBench timsTOF DIA).
 
 ## Open
-- **0.3.0: command line and instrument defaults, phase 2** (`docs/cli-review/CLI-REVIEW.md`, following
-  `docs/HANDOFF-instrument-defaults-and-cli.md`; phase 1 done 2026-10-16 with Codex, Kimi and Vibe). Taken over from
-  the recommendations: instrument defaults as YAML data files (yaml-cpp; `orbitrap.yaml` 9, `tof.yaml` 4 as today's
-  classes, `astral.yaml` 9 and `timstof.yaml` 4 with their measured sources, `default.yaml` 6 and the RT-window rule),
-  `-instrument` (basic) and `-instrument_file`, provenance of every resolved value (sources, raw instrument string,
-  file hashes outside any fingerprint), the one-line unknown-option message and skipping the deprecated names in
-  `-write_ini` through a TOPPBase patch (offered upstream), short log lines under the stable prefixes with the detail
-  behind `-debug 1`, `docs/messages-review.md`, CHANGELOG. Done in 0.2.16: the 0.2.14 names accepted again (until 0.4),
-  the INI threads rule.
+- **Later (from the 0.3.0 cleanup):** the instrument directory from `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` and a user
+  config directory; offering the TOPPBase patch upstream; files for further instruments once measured (Exploris,
+  other TOFs); removing the 0.2.14 names in 0.4.
 - **DIALibGen on OpenMS develop:** 0.11.5's search module subclasses OpenSWATH's calibration workflow and sets its
   estimated windows, which develop made private (no setters); a port is needed before a develop build (the
   version-neutral fixes: local branch `openms-develop-build` in tools/DIALibGen). DIALibGen's own CI builds against
