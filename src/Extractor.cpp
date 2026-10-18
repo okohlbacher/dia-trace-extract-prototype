@@ -64,9 +64,9 @@ namespace ODIA
       assignments.push_back({p, static_cast<std::uint32_t>(best), rt});
     }
     // Deterministic order: window, then RT, then library index. Units never straddle a window (a unit touches
-    // one lane of the grid) and hold RT-sorted precursors: their cell ranges then rise monotonically, so the
-    // precursors active in a spectrum are a sliding, contiguous range (the merge join in extract() keeps only
-    // their targets).
+    // one lane of the grid) and hold RT-sorted precursors, so the precursors active in a spectrum change little
+    // from one cell to the next (the merge join in extract() keeps only their targets). Their cell ranges need not
+    // rise monotonically: the RT window depends on the RT.
     std::stable_sort(assignments.begin(), assignments.end(), [](const Assignment& a, const Assignment& b) {
       if (a.window != b.window) { return a.window < b.window; }
       if (a.rt_center != b.rt_center) { return a.rt_center < b.rt_center; }
@@ -148,12 +148,15 @@ namespace ODIA
 
     /// Merge join of a unit's targets with the cells [c0, c1) of one peak arena.
     ///
-    /// `targets` are grouped by record (record r owns [seg[r], seg[r+1]), sorted by lo within the group);
-    /// records are in RT order, so their spans [begin, end) rise monotonically and the records active in a cell
-    /// form a sliding range. `act` holds the active targets sorted by lo: a record's targets are merged in when
-    /// its span opens and dropped when it closes. Each cell's peaks are then walked once, forward, together
-    /// with the active targets; the bucket index jumps over m/z gaps. Same result as a lower_bound per target
-    /// and cell (first peak >= lo, then every peak <= hi aggregated by max or sum).
+    /// `targets` are grouped by record (record r owns [seg[r], seg[r+1]), sorted by lo within the group). The
+    /// records active in a cell form a sliding set: a record's targets are merged into `act` (sorted by lo) when
+    /// its span [begin, end) opens and dropped when it closes. Records open in the order of their begin and close
+    /// whenever the earliest end among the active ones is reached, so neither begins nor ends need to rise with the
+    /// record order (they do not with an RT-dependent window: where the window shrinks faster than the RT grows,
+    /// a later record's span ends earlier). Each cell's peaks are then walked once, forward, together with the
+    /// active targets; the bucket index jumps over m/z gaps. Same result as a lower_bound per target and cell
+    /// (first peak >= lo, then every peak <= hi aggregated by max or sum), and only cells inside each span are
+    /// written.
     template <bool Sum>
     std::uint64_t join(const PeakArena& P, const std::vector<Target>& targets, const std::vector<std::uint32_t>& seg,
                        const std::vector<Span>& spans, std::size_t c0, std::size_t c1,
@@ -165,28 +168,35 @@ namespace ODIA
         return a.lo != b.lo ? a.lo < b.lo : (a.rec != b.rec ? a.rec < b.rec : a.row < b.row);
       };
       const std::size_t n_rec = spans.size();
-      std::size_t r_in = 0, r_out = 0;
+      // records in the order their spans open (stable: equal begins keep the record order)
+      thread_local std::vector<std::uint32_t> opening;
+      opening.resize(n_rec);
+      for (std::size_t r = 0; r < n_rec; ++r) { opening[r] = static_cast<std::uint32_t>(r); }
+      std::stable_sort(opening.begin(), opening.end(), [&](std::uint32_t a, std::uint32_t b) { return spans[a].begin < spans[b].begin; });
+      std::size_t next_open = 0;
+      std::size_t next_close = std::numeric_limits<std::size_t>::max();   // the earliest end among the active records
       std::uint64_t visited = 0;
       act.clear();
       for (std::size_t c = c0; c < c1; ++c)
       {
-        // records whose span opens at or before c
-        while (r_in < n_rec && spans[r_in].begin <= c)
-        {
-          if (spans[r_in].end > c && seg[r_in + 1] > seg[r_in])
-          {
-            tmp.resize(act.size() + (seg[r_in + 1] - seg[r_in]));
-            std::merge(act.begin(), act.end(), targets.begin() + seg[r_in], targets.begin() + seg[r_in + 1], tmp.begin(), by_lo);
-            act.swap(tmp);
-          }
-          ++r_in;
-        }
-        // records whose span has closed
-        bool closed = false;
-        while (r_out < r_in && spans[r_out].end <= c) { ++r_out; closed = true; }
-        if (closed)
+        // records whose span closes at or before c
+        if (c >= next_close)
         {
           act.erase(std::remove_if(act.begin(), act.end(), [&](const Target& t) { return spans[t.rec].end <= c; }), act.end());
+          next_close = std::numeric_limits<std::size_t>::max();
+          for (const Target& t : act) { next_close = std::min<std::size_t>(next_close, spans[t.rec].end); }
+        }
+        // records whose span opens at or before c
+        while (next_open < n_rec && spans[opening[next_open]].begin <= c)
+        {
+          const std::uint32_t r = opening[next_open++];
+          if (spans[r].end > c && seg[r + 1] > seg[r])
+          {
+            tmp.resize(act.size() + (seg[r + 1] - seg[r]));
+            std::merge(act.begin(), act.end(), targets.begin() + seg[r], targets.begin() + seg[r + 1], tmp.begin(), by_lo);
+            act.swap(tmp);
+            next_close = std::min<std::size_t>(next_close, spans[r].end);
+          }
         }
         if (act.empty()) { continue; }
         const std::size_t a = P.cellBegin(c), b = P.cellEnd(c);

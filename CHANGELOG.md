@@ -8,6 +8,12 @@ Behaviour changes a user must know about, in plain words. Releases before 0.3.0 
 The command line and instrument defaults cleanup (phase 2 of `docs/cli-review/CLI-REVIEW.md`). The traces are the
 same as with 0.2.16 for every input tried (Astral run 01 and timsTOF A01 at the defaults; only new footer keys differ).
 
+- **Fixed: traces written past their end (V0.2.15-V0.2.16).** With the measured, RT-dependent window, where the
+  window shrinks faster than the RT grows (timsTOF A01), a precursor's window could end before an earlier one's; the
+  extraction then wrote beyond that trace, into the next fragment's trace and sometimes into another precursor's, so
+  1-3 traces also differed between identical runs. On A01 with DIA-NN's IDs 59,948 of 404,764 traces change
+  (agreement with DIA-NN unchanged to the 4th decimal); B01 and Astral are unchanged. Output is now identical across
+  repeats and thread counts.
 - **Instrument defaults are data files.** `share/DIATraceExtractor/instruments/` (source: `data/instruments/`) holds
   `default.yaml` (fragment multiple 6, MS1 multiple 4, RT window 7 sigma + 2 FWHM) and one file per instrument or
   class with only what differs: `orbitrap.yaml` and `astral.yaml` (fragment multiple 9), `tof.yaml` and `timstof.yaml`
