@@ -99,7 +99,10 @@ for output files.
   multiple of the measured width; each value with its source). `-instrument auto` (default) picks the file from the
   run's metadata, the most specific match (`timsTOF` over `TOF`); `-instrument <name>` names it (a file name or alias,
   e.g. `Astral`, `timsTOF SCP`, or any instrument name classified like the metadata, e.g. `Exploris 480` → Orbitrap);
-  `-instrument_file my.yaml` uses a file of your own for one run (keys `name`, `extends`, `aliases`, `keywords`,
+  `-instrument_file my.yaml` uses a file of your own for one run; for every run, put it into
+  `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` or the user directory (`~/.config/DIATraceExtractor/instruments`, macOS
+  `~/Library/Application Support/DIATraceExtractor/instruments`, Windows `%APPDATA%\DIATraceExtractor\instruments`),
+  where it replaces the shipped file of the same name or adds an instrument (keys `name`, `extends`, `aliases`, `keywords`,
   `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`, `priority` for overlapping keywords; unknown or repeated keys, wrong types and
   values out of range are errors). Per value: the option given > the instrument's file > the files it extends >
   `default.yaml`. The log names the files used; the Parquet footer (`odia.instrument*`, `odia.value_sources`) and
@@ -111,7 +114,8 @@ for output files.
   preset (sum of the centroids, MS1 isotopes at unit spacing, every window containing the precursor, no mass
   correction). `-no_ms1` extracts fragments only; `-ms1_isotopes` (default 2) after the monoisotopic peak.
 - **Log:** one short line per stage (`Library:`, `Run grid:`, `Instrument:`, `Calibration:`, `Extraction:`,
-  `Written:`, `Total:`); every warning starts with `WARNING:`; `-debug 1` adds the development detail (memory, the
+  `Written:`, `Total:`); every warning starts with `WARNING:`; options without effect in the given combination are
+  named in one `WARNING: without effect here:` line; `-debug 1` adds the development detail (memory, the
   calibration search, the scheduler, the files searched, every value with its source).
 - **Output:** `-out` is one Parquet file with one row per trace (MS2 rows on the global cycle axis, MS1 rows on the
   MS1 scans), written by 32 writers in parallel; the axes go to `<out stem>.axes.parquet`. `-out_tsv` writes a long

@@ -642,7 +642,7 @@ namespace ODIA
     {
       if (std::count_if(anchors.begin(), anchors.end(), [](const Anchor& a) { return a.used; }) < 10)
       {
-        throw std::runtime_error("calibration: fewer than 10 usable anchors; supply -rt_anchors instead");
+        throw std::runtime_error("calibration: fewer than 10 usable anchors");
       }
       RtMap map;
       for (int round = 0; ; ++round)
@@ -716,7 +716,7 @@ namespace ODIA
     if (stage1.size() < 50)
     {
       throw std::runtime_error("calibration: only " + std::to_string(stage1.size()) + " stage-1 anchors from a panel of " +
-                               std::to_string(res.panel) + "; supply -rt_anchors instead");
+                               std::to_string(res.panel) + "");
     }
     std::vector<Anchor> a1;
     for (const auto& x : stage1) { a1.push_back(x.anchor); }
@@ -726,7 +726,7 @@ namespace ODIA
     if (kept.size() < 20)
     {
       throw std::runtime_error("calibration: only " + std::to_string(kept.size()) + " of " + std::to_string(a1.size()) +
-                               " stage-1 anchors agree on an RT curve; supply -rt_anchors instead");
+                               " stage-1 anchors agree on an RT curve");
     }
     for (auto& a : a1) { a.used = std::binary_search(kept.begin(), kept.end(), std::make_pair(a.library_rt, a.run_rt)); }
     double sigma1 = 0;

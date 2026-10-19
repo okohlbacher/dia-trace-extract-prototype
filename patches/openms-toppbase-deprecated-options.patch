@@ -35,7 +35,7 @@ index e0c38fec86..98a5196ce2 100644
      /// Adds an empty line between registered variables in the documentation.
      void addEmptyLine_();
 diff --git a/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp b/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
-index c3ea09e4f5..b83bcb4b71 100755
+index c3ea09e4f5..001cb08c45 100755
 --- a/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
 +++ b/src/openms_cli/source/APPLICATIONS/TOPPBase.cpp
 @@ -47,6 +47,7 @@
@@ -152,7 +152,49 @@ index c3ea09e4f5..b83bcb4b71 100755
        return ILLEGAL_PARAMETERS;
      }
  
-@@ -2748,6 +2812,10 @@ namespace OpenMS
+@@ -788,11 +852,16 @@ namespace OpenMS
+ 
+     is << bright("Options") << " (" << green("mandatory options marked with '*'") << "):\n";
+ 
++    // deprecated names (setDeprecated_()) are named once at the end of --helphelp instead of listed
++    const auto dep = deprecations().find(this);
++    const auto deprecated = [&](const std::string& name) { return dep != deprecations().end() && dep->second.names.count(name) > 0; };
++    StringList deprecated_names;
++
+     // determine max length of parameters (including argument) for indentation
+     UInt max_size = 0;
+     for (const auto& par : parameters_)
+     {
+-      if (!par.advanced || verbose)
++      if ((!par.advanced || verbose) && !deprecated(par.name))
+       {
+         max_size = max((UInt)max_size, (UInt)(par.name.size() + par.argument.size() + par.required));
+       }
+@@ -806,6 +875,11 @@ namespace OpenMS
+     // PRINT parameters && description, restrictions and default
+     for (vector<ParameterInformation>::const_iterator it = parameters_.begin(); it != parameters_.end(); ++it)
+     {
++      if (deprecated(it->name))
++      {
++        if (verbose) { deprecated_names.push_back("-" + it->name); }
++        continue;
++      }
+       if (it->advanced && !verbose)
+       {
+         continue;
+@@ -972,6 +1046,11 @@ namespace OpenMS
+       is << "\n";
+     }
+ 
++    if (!deprecated_names.empty())
++    {
++      is << "\n" << "Deprecated names, still accepted ('-write_ini new.ini -ini old.ini' converts an INI file): "
++         << ListUtils::concatenate(deprecated_names, ", ") << "\n";
++    }
+ 
+     // SUBSECTION's at the end
+     if (!subsections_.empty() && !verbose)
+@@ -2748,6 +2827,10 @@ namespace OpenMS
            if (!type_list[i].empty())
              param_cmdline_.setValue("type", type_list[i]);
            Param default_params = getDefaultParameters_();
@@ -163,7 +205,7 @@ index c3ea09e4f5..b83bcb4b71 100755
  
            // add type to ini file
            if (!type_list[i].empty())
-@@ -2815,6 +2883,18 @@ namespace OpenMS
+@@ -2815,6 +2898,18 @@ namespace OpenMS
            // update default params with outdated params given in -ini and be verbose
            default_params.update(ini_params, false);
          }

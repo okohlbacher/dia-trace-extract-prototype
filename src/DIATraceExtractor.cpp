@@ -137,7 +137,8 @@ std::string instrumentHelp()
     }
     const ODIA::InstrumentDefaults d = ODIA::resolveInstrument("auto", "", "", w);
     std::ostringstream o; o << d.value("mz_accuracy_ms2");
-    t += ". Sets the fragment tolerance as a multiple of the measured mass-error width: " + list + ", others " + o.str();
+    t += ". Sets the fragment tolerance as a multiple of the measured mass-error width: " + list + ", others " + o.str()
+       + " (measured for Astral and timsTOF; the Orbitrap and TOF classes follow them)";
   }
   catch (const std::exception&) {}
   return t + ".";
@@ -317,7 +318,8 @@ protected:
     // Basic options first (--help); everything marked advanced (last argument true) appears with --helphelp only.
     // A plain string, not registerInputFile_: for unregistered extensions OpenMS (develop) sniffs the
     // content, takes the mzPeak ZIP container for a single-file .zip and fails; -in is checked below.
-    registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.");
+    registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak; MS1 centroided in the file) or "
+                          "Thermo .raw.");
     registerInputFile_("lib", "<file>", "",
                        "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.", false);
     registerOutputFile_("out", "<file>", "", "Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet "
@@ -326,7 +328,9 @@ protected:
     registerOutputFile_("out_stats", "<file>", "", "Run statistics (JSON): calibration, the values used and their sources, stage "
                         "times, memory.", false);
     registerStringOption_("instrument", "<name>", "auto", instrumentHelp(), false);
-    registerInputFile_("ids", "<file>", "", "Extract only these precursors (ids, one per line).", false);
+    registerInputFile_("ids", "<file>", "", "Extract only these precursors: the library's precursor ids, one per line "
+                       "(DIA-NN: modified sequence + charge, e.g. AAAFEGELIPASQIDR2; the first column of a TSV with a "
+                       "Precursor.Id header also works). Ids not in the library are counted in the log.", false);
     registerIntOption_("top_fragments", "<n>", 6, "Most intense library fragments per precursor (0 = all).", false);
     setMinInt_("top_fragments", 0);
 
@@ -335,18 +339,18 @@ protected:
                           "minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). "
                           "-rt_anchors or -rt_trafo select a given map instead.", false);
     registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
-                          "0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration "
-                          "anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). "
-                          "Negative: the whole run.", false);
-    registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
-                          "(-mz_accuracy_ms2 x the fragment mass-error width).", false);
-    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm. 0 (default): measured from the run "
-                          "(-mz_accuracy_ms1 x the MS1 mass-error width).", false);
+                          "0: measured from the run, along the gradient (7 x the RT scatter of the calibration anchors about "
+                          "the RT map + 2 x their peak width; +-60 s with a warning when no calibration runs). Negative: "
+                          "the whole run.", false);
+    registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0: measured from the run (the "
+                          "instrument's multiple of the fragment mass-error width, see -instrument).", false);
+    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm. 0: measured from the run (4 x the MS1 "
+                          "mass-error width).", false);
     setMinFloat_("mz_tol_ms2", 0.0); setMinFloat_("mz_tol_ms1", 0.0);
     registerStringOption_("scheme", "<name>", "A", "A (default): DIA-NN's extraction rules (max of the centroids in the window) "
                           "with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit "
-                          "spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and "
-                          "-mz_tol_ms1.", false);
+                          "spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 (and "
+                          "-mz_tol_ms1 unless -no_ms1).", false);
     setValidStrings_("scheme", {"A", "B"});
     registerOutputFile_("out_mzml", "<file>", "", "Also write the run as a centroided mzML, one spectrum per isolation window "
                         "(diaPASEF frames split by window, scans collapsed), for tools that do not read mzPeak. Without -out "
@@ -355,30 +359,39 @@ protected:
 
     // ---- advanced
     registerOutputFile_("out_axes", "<file>", "", "RT axes (Parquet) to join with the traces; default <out stem>.axes.parquet.", false, true);
-    registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV), usable as -rt_anchors.", false, true);
-    registerStringOption_("run_name", "<name>", "", "Run name in the output (default: the input file name without extension).", false, true);
+    registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV); its first two columns are the RT map, "
+                        "for -rt_anchors in a later run.", false, true);
+    registerStringOption_("run_name", "<name>", "", "The traces' run column (default: the input file name without "
+                          "extension).", false, true);
     registerFlag_("targets_only", "Skip library decoys.", true);
     registerFlag_("no_ms1", "No MS1 traces (fragments only).", true);
-    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only).", false, true);
+    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only; -1: "
+                       "0.2.14's spelling of -no_ms1, accepted until 0.4).", false, true);
     setMinInt_("ms1_isotopes", -1); setMaxInt_("ms1_isotopes", 200);   // -1: 0.2.14's "no MS1" (now -no_ms1)
     registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (their own times, in the axes file) or "
                           "interpolated onto the MS2 cycle axis (cycles).", false, true);
     setValidStrings_("ms1_axis", {"scans", "cycles"});
-    registerInputFile_("rt_anchors", "<file>", "", "Use this RT map instead: two columns, library RT and run RT (s); fitted with LOWESS.", false, true);
+    registerInputFile_("rt_anchors", "<file>", "", "Use this RT map instead: two columns, library RT and run RT (s), fitted "
+                       "with LOWESS (e.g. -out_calibration of another run).", false, true);
     registerInputFile_("rt_trafo", "<file>", "", "Use this RT map instead: trafoXML, library RT -> run RT (s).", false, true);
     setValidFormats_("rt_trafo", {"trafoXML"});
     registerFlag_("rt_trafo_invert", "The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).", true);
     registerInputFile_("instrument_file", "<yaml>", "", "Instrument defaults for this run from this file (keys: name, extends, "
-                       "mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), over the shipped files in "
-                       "<prefix>/share/DIATraceExtractor/instruments.", false, true);
+                       "aliases, keywords, priority, mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), "
+                       "over the shipped files in "
+                       "<prefix>/share/DIATraceExtractor/instruments. Files of your own for every run: "
+                       "$DIATRACEEXTRACTOR_INSTRUMENT_DIR or the user directory (~/.config/DIATraceExtractor/instruments; "
+                       "macOS ~/Library/Application Support/..., Windows %APPDATA%\\...), where a file replaces the shipped "
+                       "one of the same name.", false, true);
     setValidFormats_("instrument_file", {"yaml"}, false);
     registerDoubleOption_("mz_accuracy_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
-                          "errors. 0 (default): the instrument's (see -instrument).", false, true);
+                          "errors. 0: the instrument's (see -instrument). Not used with a fixed -mz_tol_ms2.", false, true);
     registerDoubleOption_("mz_accuracy_ms1", "<k>", 0.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors. "
-                          "0 (default): the instrument's (4 for every shipped instrument).", false, true);
+                          "0: the instrument's (4 for every shipped instrument). Not used with a fixed -mz_tol_ms1.", false, true);
     setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.0);
-    registerStringOption_("mz_calibration", "<mode>", "auto", "auto: correct the m/z by the offsets measured from the run. "
-                          "off: use -mz_offset_ms2 and -mz_offset_ms1 instead (needs -mz_tol_ms2 and -mz_tol_ms1).", false, true);
+    registerStringOption_("mz_calibration", "<mode>", "auto", "Mass correction: auto corrects the m/z by the offsets "
+                          "measured from the run; off uses -mz_offset_ms2 and -mz_offset_ms1 instead and needs -mz_tol_ms2 "
+                          "(and -mz_tol_ms1 unless -no_ms1).", false, true);
     setValidStrings_("mz_calibration", {"auto", "off"});
     registerDoubleOption_("mz_offset_ms2", "<ppm>", 0.0, "Fragment m/z correction with -mz_calibration off (ppm added to the target).", false, true);
     registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 m/z correction with -mz_calibration off (ppm added to the target).", false, true);
@@ -575,6 +588,122 @@ protected:
     return threads_given_ ? std::max(1, omp_get_num_procs()) : ODIA::platform::physicalCores();
   }
 
+  /// Two outputs on one path, or an output over an input, is an error (before any work).
+  ExitCodes checkPaths_(const std::string& in, const std::string& out_axes)
+  {
+    namespace fs = std::filesystem;
+    const auto norm = [](const std::string& p) { std::error_code ec; const fs::path a = fs::weakly_canonical(fs::absolute(p), ec); return ec ? fs::absolute(p).lexically_normal() : a; };
+    std::vector<std::pair<std::string, std::string>> outputs, inputs;
+    for (const char* o : {"out", "out_tsv", "out_stats", "out_calibration", "out_mzml"}) { if (!S(o).empty()) { outputs.emplace_back(std::string("-") + o, S(o)); } }
+    if (!out_axes.empty()) { outputs.emplace_back(S("out_axes").empty() ? "the axes file of -out (" + out_axes + ")" : "-out_axes", out_axes); }
+    inputs.emplace_back("-in", in);
+    for (const char* i : {"lib", "ids", "rt_anchors", "rt_trafo", "instrument_file"}) { if (!S(i).empty()) { inputs.emplace_back(std::string("-") + i, S(i)); } }
+    for (std::size_t a = 0; a < outputs.size(); ++a)
+    {
+      for (std::size_t b = a + 1; b < outputs.size(); ++b)
+      {
+        if (norm(outputs[a].second) == norm(outputs[b].second))
+        {
+          OPENMS_LOG_ERROR << outputs[a].first << " and " << outputs[b].first << " name the same file: " << outputs[a].second << std::endl;
+          return ILLEGAL_PARAMETERS;
+        }
+      }
+      for (const auto& i : inputs)
+      {
+        if (norm(outputs[a].second) == norm(i.second))
+        {
+          OPENMS_LOG_ERROR << outputs[a].first << " would overwrite the input " << i.first << ": " << i.second << std::endl;
+          return ILLEGAL_PARAMETERS;
+        }
+      }
+    }
+    return EXECUTION_OK;
+  }
+
+  /// Options that cannot work together are errors; options without effect in the given combination are named in one
+  /// WARNING line (an option counts as given when its value differs from its default, on the command line or in an INI).
+  ExitCodes checkCombinations_(bool export_only)
+  {
+    if (F("rt_trafo_invert") && S("rt_trafo").empty()) { OPENMS_LOG_ERROR << "-rt_trafo_invert needs -rt_trafo." << std::endl; return ILLEGAL_PARAMETERS; }
+    const auto num = [&](const char* n, double def) { return std::fabs(D(n) - def) > 1e-12; };
+    const auto str = [&](const char* n, const char* def) { return S(n) != def; };
+    std::vector<std::pair<std::string, std::string>> ignored;   // option, why
+    const auto add = [&](bool given, const char* n, const std::string& why) { if (given) { ignored.emplace_back(std::string("-") + n, why); } };
+    if (export_only)
+    {
+      const std::string why = "only -out_mzml is written";
+      add(!S("lib").empty(), "lib", why);
+      for (const char* n : {"ids", "rt_anchors", "rt_trafo", "out_axes", "out_stats", "out_calibration", "instrument_file"}) { add(!S(n).empty(), n, why); }
+      add(str("instrument", "auto"), "instrument", why);
+      add(str("rt_mode", "auto"), "rt_mode", why);
+      add(num("rt_window", 0.0), "rt_window", why);
+      add(num("mz_tol_ms2", 0.0), "mz_tol_ms2", why);
+      add(num("mz_tol_ms1", 0.0), "mz_tol_ms1", why);
+      add(str("scheme", "A"), "scheme", why);
+      add(I("top_fragments") != 6, "top_fragments", why);
+    }
+    else
+    {
+      const bool scheme_b = S("scheme") == "B";
+      const bool ms1 = !F("no_ms1");
+      const bool whole_run = D("rt_window") < 0.0;
+      const bool rt_auto = S("rt_mode") == "auto" && S("rt_anchors").empty() && S("rt_trafo").empty() && !whole_run;
+      const bool mass_auto = !scheme_b && S("mz_calibration") == "auto";
+      if (!ms1)
+      {
+        const std::string why = "-no_ms1";
+        add(I("ms1_isotopes") != 2 && I("ms1_isotopes") >= 0, "ms1_isotopes", why);
+        add(str("ms1_axis", "scans"), "ms1_axis", why);
+        add(num("mz_tol_ms1", 0.0), "mz_tol_ms1", why);
+        add(num("mz_accuracy_ms1", 0.0), "mz_accuracy_ms1", why);
+        add(num("mz_offset_ms1", 0.0) && !scheme_b, "mz_offset_ms1", why);
+      }
+      if (scheme_b)
+      {
+        const std::string why = "-scheme B: no mass correction, fixed tolerances";
+        add(num("mz_accuracy_ms2", 0.0), "mz_accuracy_ms2", why);
+        add(num("mz_accuracy_ms1", 0.0) && ms1, "mz_accuracy_ms1", why);
+        add(str("mz_calibration", "auto"), "mz_calibration", why);
+        add(str("calibration:mz_model", "linear"), "calibration:mz_model", why);
+      }
+      else
+      {
+        add(num("mz_tol_ms2", 0.0) && num("mz_accuracy_ms2", 0.0), "mz_accuracy_ms2", "-mz_tol_ms2 fixes the fragment tolerance");
+        add(ms1 && num("mz_tol_ms1", 0.0) && num("mz_accuracy_ms1", 0.0), "mz_accuracy_ms1", "-mz_tol_ms1 fixes the MS1 tolerance");
+      }
+      if (whole_run)
+      {
+        const std::string why = "a negative -rt_window extracts the whole run";
+        add(str("rt_mode", "auto"), "rt_mode", why);
+        add(!S("rt_anchors").empty(), "rt_anchors", why);
+        add(!S("rt_trafo").empty(), "rt_trafo", why);
+      }
+      if (!rt_auto && !mass_auto)
+      {
+        const std::string why = "no calibration runs (neither the RT map nor the mass correction is measured)";
+        add(I("calibration:panel") != 0, "calibration:panel", why);
+        add(num("calibration:search_ppm", 50.0), "calibration:search_ppm", why);
+        add(str("calibration:mz_model", "linear") && !scheme_b, "calibration:mz_model", why);
+        add(num("calibration:lowess_span", 0.15), "calibration:lowess_span", why);
+      }
+      else if (!rt_auto)
+      {
+        add(num("calibration:lowess_span", 0.15), "calibration:lowess_span", "the RT map is given (-rt_mode, -rt_anchors or -rt_trafo)");
+      }
+    }
+    if (!ignored.empty())
+    {
+      std::string t;
+      for (std::size_t i = 0; i < ignored.size(); ++i)
+      {
+        const bool same_why = i + 1 < ignored.size() && ignored[i + 1].second == ignored[i].second;
+        t += ignored[i].first + (same_why ? ", " : " (" + ignored[i].second + ")" + (i + 1 < ignored.size() ? "; " : ""));
+      }
+      OPENMS_LOG_WARN << "WARNING: without effect here: " << t << "." << std::endl;
+    }
+    return EXECUTION_OK;
+  }
+
   ExitCodes run_(int, const char**)
   {
     g_debug = debug_level_ > 0;
@@ -594,12 +723,20 @@ protected:
       OPENMS_LOG_ERROR << "Nothing to do: give -out, -out_tsv and/or -out_mzml." << std::endl;
       return ILLEGAL_PARAMETERS;
     }
-    if (lib_file.empty() && (out_mzml.empty() || !out.empty() || !out_tsv.empty()))
+    const bool export_only = out.empty() && out_tsv.empty();   // only -out_mzml: no library, no calibration
+    if (lib_file.empty() && !export_only)
     {
       OPENMS_LOG_ERROR << "-lib is required for an extraction (only -out_mzml works without a library)." << std::endl;
       return ILLEGAL_PARAMETERS;
     }
-    if (lib_file.empty())
+    if (out_axes.empty() && !out.empty())
+    {
+      std::filesystem::path p(out);
+      out_axes = (p.parent_path() / (p.stem().string() + ".axes.parquet")).string();
+    }
+    if (const ExitCodes c = checkPaths_(in, out_axes); c != EXECUTION_OK) { return c; }
+    if (const ExitCodes c = checkCombinations_(export_only); c != EXECUTION_OK) { return c; }
+    if (export_only)
     {
       // export only: no library, no calibration
       // the parse is memory-bandwidth bound: flat beyond ~32 threads while its CPU time keeps growing
@@ -608,11 +745,6 @@ protected:
                       << grid.stats.ms2_spectra << " MS2 spectra, " << grid.stats.ms1_peaks + grid.stats.ms2_peaks << " peaks; " << fmt(grid.stats.ingest) << mem() << std::endl;
       writeRunAsMzML(grid, in, out_mzml);
       return EXECUTION_OK;
-    }
-    if (out_axes.empty() && !out.empty())
-    {
-      std::filesystem::path p(out);
-      out_axes = (p.parent_path() / (p.stem().string() + ".axes.parquet")).string();
     }
     // the instrument files: checked before the run is read (a wrong name or file fails at once)
     const std::string instrument_spec = S("instrument"), instrument_file = S("instrument_file");
@@ -639,6 +771,22 @@ protected:
     OPENMS_LOG_INFO << "Library: " << library.rows() << " rows";
     if (g_debug) { OPENMS_LOG_INFO << " in " << library.parts() << " parts from " << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem(); }
     OPENMS_LOG_INFO << std::endl;
+    if (!lopt.keep_ids.empty())
+    {
+      // the rows a precursor list kept (a library holds each precursor once)
+      const std::size_t n_ids = lopt.keep_ids.size();
+      if (library.rows() == 0)
+      {
+        OPENMS_LOG_ERROR << "None of the " << n_ids << " ids of -ids is in the library (ids are the library's precursor ids, "
+                            "e.g. AAAFEGELIPASQIDR2 for DIA-NN)." << std::endl;
+        return INPUT_FILE_EMPTY;
+      }
+      if (library.rows() < n_ids)
+      {
+        OPENMS_LOG_WARN << "WARNING: " << n_ids - library.rows() << " of the " << n_ids << " ids of -ids are not in the library"
+                        << (F("targets_only") ? " (or are decoys, skipped by -targets_only)" : "") << "." << std::endl;
+      }
+    }
     if (library.rows() == 0) { OPENMS_LOG_ERROR << "Library is empty." << std::endl; return INPUT_FILE_EMPTY; }
 
     // --- calibration panel (needs only the library), loaded on its own thread while the run is ingested
@@ -651,7 +799,6 @@ protected:
       if (mode != "auto") { OPENMS_LOG_ERROR << "-rt_anchors / -rt_trafo give the RT map; they cannot be combined with -rt_mode " << mode << "." << std::endl; return ILLEGAL_PARAMETERS; }
       mode = rt_anchors.empty() ? "trafo" : "anchors";
     }
-    else if (F("rt_trafo_invert")) { OPENMS_LOG_ERROR << "-rt_trafo_invert needs -rt_trafo." << std::endl; return ILLEGAL_PARAMETERS; }
     const double rt_window_opt = D("rt_window");
     const bool rt_needed = rt_window_opt >= 0.0;   // a whole-run extraction needs no RT map
     const bool ms1_enabled = !F("no_ms1");
@@ -666,6 +813,12 @@ protected:
     }
     if (scheme_b && offsets_given) { OPENMS_LOG_ERROR << "-scheme B extracts without mass correction; -mz_offset_ms2/-mz_offset_ms1 do not apply." << std::endl; return ILLEGAL_PARAMETERS; }
     const bool mass_auto = !scheme_b && S("mz_calibration") == "auto";
+    if (!scheme_b && !mass_auto && (mz_tol <= 0 || (ms1_enabled && mz_tol_ms1 <= 0)))
+    {
+      OPENMS_LOG_ERROR << "-mz_calibration off needs fixed tolerances (measured widths assume the measured correction): give "
+                          "-mz_tol_ms2" << (ms1_enabled ? " and -mz_tol_ms1" : "") << " (ppm)." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
     if (mass_auto && offsets_given) { OPENMS_LOG_ERROR << "-mz_offset_ms2/-mz_offset_ms1 replace the measured correction: give them with -mz_calibration off." << std::endl; return ILLEGAL_PARAMETERS; }
     if (scheme_b) { OPENMS_LOG_INFO << "Scheme B: sum of the centroids in the window, MS1 isotopes at unit spacing, every window containing the precursor, no mass correction." << std::endl; }
     const bool rt_auto = mode == "auto" && rt_needed;
@@ -755,6 +908,7 @@ protected:
     {
       OPENMS_LOG_INFO << "Instrument files: " << inst.directory << " (searched:";
       for (const auto& d : ODIA::instrumentDirectories()) { OPENMS_LOG_INFO << " " << d; }
+      for (const auto& [label, d] : ODIA::userInstrumentDirectories()) { OPENMS_LOG_INFO << "; " << label << " " << d; }
       OPENMS_LOG_INFO << "); " << inst.filesProvenance() << std::endl;
     }
 
