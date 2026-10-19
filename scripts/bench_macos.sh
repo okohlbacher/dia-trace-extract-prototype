@@ -8,10 +8,11 @@
 # Settings (environment): WORK=~/odia-bench (everything lives here), CLUSTER=kohlbach@data (rsync source, reached
 # through -J kohlbach@hive.cs.uni-tuebingen.de; CLUSTER= to skip and place the inputs by hand), THREADS="1 2 4 8 ..."
 # (default: 1, 2, 4, ... up to the physical core count, plus the performance-core count), RUN_OSW=1 adds one
-# OpenSwathWorkflow run at the maximum thread count (10-30 min).
+# OpenSwathWorkflow run at the maximum thread count (10-30 min), X=<binary> benchmarks that binary instead of the one
+# built here (e.g. the signed release from Homebrew: X=$(brew --prefix)/bin/DIATraceExtractor bash bench_macos.sh bench).
 set -euo pipefail
 WORK=${WORK:-$HOME/odia-bench}; CLUSTER=${CLUSTER-kohlbach@data}; JUMP=${JUMP:-kohlbach@hive.cs.uni-tuebingen.de}
-REPO=https://github.com/okohlbacher/dia-trace-extract-prototype.git; TAG=${TAG:-V0.2.2}
+REPO=https://github.com/okohlbacher/dia-trace-extract-prototype.git; TAG=${TAG:-V0.3.0}
 OPENMS_COMMIT=${OPENMS_COMMIT:-10b0a7af09}   # the OpenMS develop commit the cluster benchmarks were built against
 REMOTE_INPUTS=/ceph/ibmi/abi/oliver/Claude/ODIA-V3/benchmark-data/laptop-inputs/
 mkdir -p $WORK; cd $WORK
@@ -38,12 +39,17 @@ openms() {
   git fetch -q origin && git checkout -q $OPENMS_COMMIT
   git submodule update --init --depth 1 vcpkg
   [ -x vcpkg/vcpkg ] || ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-  # the mzPeak reader needs Boost.JSON and Boost.ProgramOptions from the same vcpkg tree
-  grep -q boost-json vcpkg.json || python3 - <<'EOF'
+  # the mzPeak reader needs Boost.JSON and Boost.ProgramOptions, the instrument files yaml-cpp (from 0.3.0), all from
+  # the same vcpkg tree
+  grep -q yaml-cpp vcpkg.json || python3 - <<'EOF'
 import json; m = json.load(open("vcpkg.json"))
-deps = m["dependencies"]; deps += [d for d in ("boost-json", "boost-program-options") if d not in deps]
+deps = m["dependencies"]; deps += [d for d in ("boost-json", "boost-program-options", "yaml-cpp") if d not in deps]
 json.dump(m, open("vcpkg.json", "w"), indent=2)
 EOF
+  # from 0.3.0 the tool needs the TOPPBase patch (patches/README.md of the tool)
+  if ! grep -q setDeprecated_ src/openms_cli/include/OpenMS/APPLICATIONS/TOPPBase.h; then
+    curl -fsSL https://raw.githubusercontent.com/okohlbacher/dia-trace-extract-prototype/$TAG/patches/openms-toppbase-deprecated-options.patch | git apply
+  fi
   bash tools/ci/deps-macos.sh --skip-doc-deps --skip-gui-deps || true
   cmake --preset macos-arm64-release $(toolchain) -DOpenMP_ROOT=$(brew --prefix libomp) -DWITH_GUI=OFF -DOPENMS_BUILD_TESTS=OFF 2>&1 | tail -3
   cmake --build build/macos-arm64-release -j $(sysctl -n hw.physicalcpu) --target OpenMS OpenMS_CLI OpenSwathWorkflow TextExporter FileConverter > build/macos-arm64-release/build.log 2>&1 \
@@ -80,7 +86,7 @@ inputs() {
 }
 
 bench() {
-  X=$WORK/dia-trace-extract-prototype/build/DIATraceExtractor; OUT=$WORK/results; mkdir -p $OUT; cd $OUT
+  X=${X:-$WORK/dia-trace-extract-prototype/build/DIATraceExtractor}; OUT=$WORK/results; mkdir -p $OUT; cd $OUT
   M=$WORK/input/LFQ_Astral_DIA_15min_50ng_Human_01.mzML
   LIB=$WORK/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01_ids_run01.parquet
   FULL=$WORK/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.parquet
@@ -88,7 +94,7 @@ bench() {
   if [ -z "${THREADS:-}" ]; then THREADS=""; t=1; while [ $t -lt $PHYS ]; do THREADS="$THREADS $t"; t=$((t * 2)); done
     THREADS="$THREADS $PHYS"; [ $PERF -ne $PHYS ] && THREADS="$THREADS $PERF"; THREADS=$(echo $THREADS | tr ' ' '\n' | sort -nu | tr '\n' ' '); fi
   { echo "date $(date "+%Y-%m-%dT%H:%M:%S%z")"; pmset -g batt | tail -1; sw_vers; sysctl -n machdep.cpu.brand_string; sysctl hw.physicalcpu hw.logicalcpu hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu hw.memsize 2> /dev/null
-    echo "tool $(git -C $WORK/dia-trace-extract-prototype describe --tags) openms $(git -C $WORK/OpenMS rev-parse --short HEAD)"; echo "threads: $THREADS"; } | tee machine.txt
+    echo "tool $X: $($X --help 2>&1 | grep -m1 '^Version')"; echo "threads: $THREADS"; } | tee machine.txt
   export OMP_WAIT_POLICY=PASSIVE
   for rep in 1 2; do for t in $THREADS; do
     log "shared library, $t threads, repeat $rep"
