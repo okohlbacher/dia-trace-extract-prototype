@@ -370,7 +370,10 @@ protected:
     registerFlag_("rt_trafo_invert", "The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).", true);
     registerInputFile_("instrument_file", "<yaml>", "", "Instrument defaults for this run from this file (keys: name, extends, "
                        "mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), over the shipped files in "
-                       "<prefix>/share/DIATraceExtractor/instruments.", false, true);
+                       "<prefix>/share/DIATraceExtractor/instruments. Files of your own for every run: "
+                       "$DIATRACEEXTRACTOR_INSTRUMENT_DIR or the user directory (~/.config/DIATraceExtractor/instruments; "
+                       "macOS ~/Library/Application Support/..., Windows %APPDATA%\\...), where a file replaces the shipped "
+                       "one of the same name.", false, true);
     setValidFormats_("instrument_file", {"yaml"}, false);
     registerDoubleOption_("mz_accuracy_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
                           "errors. 0 (default): the instrument's (see -instrument).", false, true);
@@ -755,6 +758,7 @@ protected:
     {
       OPENMS_LOG_INFO << "Instrument files: " << inst.directory << " (searched:";
       for (const auto& d : ODIA::instrumentDirectories()) { OPENMS_LOG_INFO << " " << d; }
+      for (const auto& [label, d] : ODIA::userInstrumentDirectories()) { OPENMS_LOG_INFO << "; " << label << " " << d; }
       OPENMS_LOG_INFO << "); " << inst.filesProvenance() << std::endl;
     }
 

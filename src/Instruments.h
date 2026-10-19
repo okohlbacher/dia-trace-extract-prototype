@@ -5,6 +5,7 @@
 // extends > default.yaml.
 #include <filesystem>
 #include <map>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@ namespace ODIA
     std::vector<std::string> keywords;      ///< matched in the run's instrument name (ignoring case)
     std::map<std::string, double> values;   ///< mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm, priority
     std::string sha1;                       ///< content hash (provenance only)
+    std::string origin;                     ///< "" for a shipped file, else the user directory it came from
   };
 
   /// The defaults that apply to one run.
@@ -45,6 +47,11 @@ namespace ODIA
   /// The directories searched for the instrument files, in order: next to the executable
   /// (<prefix>/share/DIATraceExtractor/instruments), then the source tree's data/instruments.
   std::vector<std::string> instrumentDirectories();
+
+  /// The user's directories, highest precedence first, as (label, path): $DIATRACEEXTRACTOR_INSTRUMENT_DIR, then the
+  /// user directory (Linux: $XDG_CONFIG_HOME or ~/.config, macOS: ~/Library/Application Support, Windows: %APPDATA%;
+  /// each /DIATraceExtractor/instruments). A file there replaces the shipped file of the same name.
+  std::vector<std::pair<std::string, std::string>> userInstrumentDirectories();
 
   /// Reads and validates one file (throws std::runtime_error naming the file and the key).
   InstrumentFile readInstrumentFile(const std::filesystem::path& file, bool is_default);

@@ -181,6 +181,32 @@ namespace ODIA
       return best;
     }
 
+    /// The shipped files, then the user's directories over them: a file of the same name replaces the shipped one
+    /// (the environment variable's directory over the user directory).
+    std::vector<InstrumentFile> loadShipped(std::string& dir);
+    std::vector<InstrumentFile> loadAll(std::string& dir)
+    {
+      std::vector<InstrumentFile> files = loadShipped(dir);
+      auto user = userInstrumentDirectories();
+      std::reverse(user.begin(), user.end());   // lowest precedence first: later ones replace
+      for (const auto& [origin, d] : user)
+      {
+        std::error_code ec;
+        if (!fs::is_directory(fromUtf8(d), ec))
+        {
+          if (origin.front() == '$') { throw std::runtime_error(origin + " is set but " + d + " is not a directory"); }
+          continue;   // the user directory is optional
+        }
+        for (InstrumentFile& f : loadDirectory(d))
+        {
+          f.origin = origin;
+          const auto same = std::find_if(files.begin(), files.end(), [&](const InstrumentFile& g) { return g.file == f.file; });
+          if (same != files.end()) { *same = std::move(f); } else { files.push_back(std::move(f)); }
+        }
+      }
+      return files;
+    }
+
     std::vector<InstrumentFile> loadShipped(std::string& dir)
     {
       for (const auto& d : instrumentDirectories())
@@ -198,6 +224,28 @@ namespace ODIA
   {
     static const std::vector<std::string> keys = {"mz_accuracy_ms2", "mz_accuracy_ms1", "rt_window_sigma", "rt_window_fwhm"};
     return keys;
+  }
+
+  std::vector<std::pair<std::string, std::string>> userInstrumentDirectories()
+  {
+    std::vector<std::pair<std::string, std::string>> dirs;
+    if (const char* e = std::getenv("DIATRACEEXTRACTOR_INSTRUMENT_DIR"); e != nullptr && *e != '\0')
+    {
+      dirs.emplace_back("$DIATRACEEXTRACTOR_INSTRUMENT_DIR", toUtf8(fs::path(e)));
+    }
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    if (base != nullptr && *base != '\0') { dirs.emplace_back("the user directory", toUtf8(fs::path(base) / "DIATraceExtractor" / "instruments")); }
+#elif defined(__APPLE__)
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') { dirs.emplace_back("the user directory", toUtf8(fs::path(home) / "Library" / "Application Support" / "DIATraceExtractor" / "instruments")); }
+#else
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    const char* home = std::getenv("HOME");
+    if (xdg != nullptr && *xdg != '\0') { dirs.emplace_back("the user directory", toUtf8(fs::path(xdg) / "DIATraceExtractor" / "instruments")); }
+    else if (home != nullptr && *home != '\0') { dirs.emplace_back("the user directory", toUtf8(fs::path(home) / ".config" / "DIATraceExtractor" / "instruments")); }
+#endif
+    return dirs;
   }
 
   std::vector<std::string> instrumentDirectories()
@@ -283,7 +331,7 @@ namespace ODIA
   {
     warning.clear();
     InstrumentDefaults d;
-    std::vector<InstrumentFile> files = loadShipped(d.directory);
+    std::vector<InstrumentFile> files = loadAll(d.directory);
     // names must be unambiguous
     {
       std::map<std::string, std::string> owner;
@@ -359,7 +407,7 @@ namespace ODIA
   {
     std::string dir;
     std::string out;
-    for (const auto& f : loadShipped(dir)) { if (stem(f) != "default") { out += (out.empty() ? "" : ", ") + f.name; } }
+    for (const auto& f : loadAll(dir)) { if (stem(f) != "default") { out += (out.empty() ? "" : ", ") + f.name; } }
     return out;
   }
 
@@ -373,7 +421,12 @@ namespace ODIA
   {
     for (const auto& f : chain)
     {
-      if (f.values.count(key) != 0) { return f.file == "default.yaml" ? std::string("default") : "instrument-default:" + f.name; }
+      if (f.values.count(key) != 0)
+      {
+        // a user's file is recorded as such: the value is the user's, not the shipped default
+        if (!f.origin.empty()) { return "user-file:" + f.file; }
+        return f.file == "default.yaml" ? std::string("default") : "instrument-default:" + f.name;
+      }
     }
     return "default";
   }
@@ -385,6 +438,7 @@ namespace ODIA
     {
       t += (i ? " over " : "") + chain[i].file;
       if (i == 0 && chain[i].file != "default.yaml") { t += " (" + chain[i].name + ")"; }
+      if (!chain[i].origin.empty()) { t += " from " + chain[i].origin; }
     }
     return t;
   }
@@ -392,7 +446,7 @@ namespace ODIA
   std::string InstrumentDefaults::filesProvenance() const
   {
     std::string t;
-    for (const auto& f : chain) { t += (t.empty() ? "" : "; ") + f.file + " sha1:" + f.sha1; }
+    for (const auto& f : chain) { t += (t.empty() ? "" : "; ") + (f.origin.empty() ? f.file : f.path) + " sha1:" + f.sha1; }
     return t;
   }
 }

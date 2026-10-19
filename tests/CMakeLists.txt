@@ -38,7 +38,7 @@ set_tests_properties(determinism_compare PROPERTIES DEPENDS "determinism_t1;dete
 
 # The command line (docs/HANDOFF-instrument-defaults-and-cli.md section 6): --help (line count pinned), unknown
 # options, instrument files and value sources, the 0.2.14 names, -write_ini.
-foreach(check help unknown_option instruments compatibility write_ini)
+foreach(check help unknown_option instruments user_instruments compatibility write_ini)
   add_test(NAME cli_${check}
     COMMAND ${PY} ${CMAKE_CURRENT_SOURCE_DIR}/cli_checks.py ${check} $<TARGET_FILE:DIATraceExtractor> ${TD} ${PROJECT_SOURCE_DIR})
   set_property(TEST cli_${check} PROPERTY WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/cli_${check})

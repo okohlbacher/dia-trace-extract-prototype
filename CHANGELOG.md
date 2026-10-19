@@ -3,7 +3,15 @@
 Behaviour changes a user must know about, in plain words. Releases before 0.3.0 are summarised in
 `docs/10-release-report.md` (Appendix A and the repository paragraph).
 
-## 0.3.0 (unreleased)
+## 0.3.1 (unreleased)
+
+- **Instrument files of your own for every run:** `$DIATRACEEXTRACTOR_INSTRUMENT_DIR`, then the user directory
+  (`~/.config/DIATraceExtractor/instruments`, or `$XDG_CONFIG_HOME/...`; macOS `~/Library/Application Support/...`;
+  Windows `%APPDATA%\...`), then the shipped files: a file replaces the shipped one of the same name or adds an
+  instrument. The log names where a file came from; its values are recorded as `user-file:<file>` with its path and
+  hash. A `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` that is not a directory is an error.
+
+## 0.3.0 (2026-10-18)
 
 The command line and instrument defaults cleanup (phase 2 of `docs/cli-review/CLI-REVIEW.md`). The traces are the
 same as with 0.2.16 for every input tried (Astral run 01 and timsTOF A01 at the defaults; only new footer keys differ).

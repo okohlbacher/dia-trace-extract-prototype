@@ -12,10 +12,15 @@ FIXED = ["-rt_window", "-1", "-mz_tol_ms2", "20", "-mz_tol_ms1", "20", "-threads
 # pinned: the options `--help` lists (the tool's 14 + TOPP's 5; change deliberately), not its line count:
 # the framing around them differs between platforms.
 HELP_OPTIONS = 19
+# the tool must not see the tester's own instrument files: an empty user directory unless a check sets one
+os.makedirs("no-user-config", exist_ok=True)
+os.environ.pop("DIATRACEEXTRACTOR_INSTRUMENT_DIR", None)
+for v in ("XDG_CONFIG_HOME", "APPDATA") + (("HOME",) if sys.platform == "darwin" else ()):
+    os.environ[v] = os.path.abspath("no-user-config")
 
 
-def run(*args, ok=True):
-    p = subprocess.run([exe, *args], capture_output=True, text=True)
+def run(*args, ok=True, env=None):
+    p = subprocess.run([exe, *args], capture_output=True, text=True, env=None if env is None else {**os.environ, **env})
     out = p.stdout + p.stderr
     if ok and p.returncode != 0:
         sys.exit(f"exit {p.returncode} for {' '.join(args)}:\n{out}")
@@ -28,8 +33,8 @@ def expect(cond, what, out=""):
     print("ok:", what)
 
 
-def extract(name, *extra):
-    run("-in", IN, "-lib", LIB, *FIXED, "-out", f"{name}.parquet", "-out_stats", f"{name}.json", *extra)
+def extract(name, *extra, env=None):
+    run("-in", IN, "-lib", LIB, *FIXED, "-out", f"{name}.parquet", "-out_stats", f"{name}.json", *extra, env=env)
     return json.load(open(f"{name}.json"))
 
 
@@ -96,6 +101,31 @@ elif check == "instruments":
         f = write_yaml("bad.yaml", text)
         rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", "-instrument_file", f, ok=False)
         expect(rc == 6 and msg in out and "bad.yaml" in out, f"instrument file error: {what}", out)
+
+elif check == "user_instruments":
+    # $DIATRACEEXTRACTOR_INSTRUMENT_DIR over the user directory over the shipped files, per file name
+    os.makedirs("env", exist_ok=True)
+    os.makedirs(os.path.join("cfg", "DIATraceExtractor", "instruments"), exist_ok=True)
+    write_yaml(os.path.join("env", "astral.yaml"), "name: Astral\nextends: orbitrap\naliases: [Orbitrap Astral]\nkeywords: [astral]\npriority: 1\nmz_accuracy_ms2: 8\n")
+    write_yaml(os.path.join("cfg", "DIATraceExtractor", "instruments", "astral.yaml"), "name: Astral\nextends: orbitrap\nkeywords: [astral]\npriority: 1\nmz_accuracy_ms2: 7\n")
+    write_yaml(os.path.join("cfg", "DIATraceExtractor", "instruments", "exploris.yaml"), "name: Exploris\nextends: orbitrap\nkeywords: [exploris]\npriority: 1\nmz_accuracy_ms2: 7\n")
+    cfg = os.path.abspath("cfg")
+    user = {"XDG_CONFIG_HOME": cfg, "HOME": cfg, "APPDATA": os.path.join(cfg)}
+    if sys.platform == "darwin":
+        os.makedirs(os.path.join(cfg, "Library", "Application Support"), exist_ok=True)
+        if not os.path.exists(os.path.join(cfg, "Library", "Application Support", "DIATraceExtractor")):
+            os.symlink(os.path.join(cfg, "DIATraceExtractor"), os.path.join(cfg, "Library", "Application Support", "DIATraceExtractor"))
+    s = extract("user", "-instrument", "Astral", env=user)
+    expect(s["values"]["mz_accuracy_ms2"] == {"value": "7", "source": "user-file:astral.yaml"}, "the user directory replaces the shipped astral.yaml", json.dumps(s["values"]))
+    s = extract("envdir", "-instrument", "Astral", env={**user, "DIATRACEEXTRACTOR_INSTRUMENT_DIR": os.path.abspath("env")})
+    expect(s["values"]["mz_accuracy_ms2"]["value"] == "8", "$DIATRACEEXTRACTOR_INSTRUMENT_DIR over the user directory", json.dumps(s["values"]))
+    expect("astral.yaml" in s["instrument"]["files"] and "env" in s["instrument"]["files"], "a user's file is recorded with its path", s["instrument"]["files"])
+    s = extract("added", "-instrument", "Exploris 480", env=user)
+    expect(s["instrument"]["name"] == "Exploris" and s["values"]["mz_accuracy_ms2"]["value"] == "7", "a user's file adds an instrument", json.dumps(s["instrument"]))
+    s = extract("noenv", "-instrument", "Astral")
+    expect(s["values"]["mz_accuracy_ms2"] == {"value": "9", "source": "instrument-default:Astral"}, "without them the shipped file", json.dumps(s["values"]))
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", ok=False, env={"DIATRACEEXTRACTOR_INSTRUMENT_DIR": os.path.abspath("missing")})
+    expect(rc == 6 and "is not a directory" in out, "a missing $DIATRACEEXTRACTOR_INSTRUMENT_DIR is an error", out)
 
 elif check == "compatibility":
     # the 0.2.14 names give the same traces as the current ones
