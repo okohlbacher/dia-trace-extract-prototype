@@ -65,6 +65,8 @@ The TSV path did have a problem: the human library (3.5 M precursors) to `-out_t
 library at 23 GiB). Each unit's text (about 25 MB) grew as a `std::string`, whose doubling copies left 3.5 GiB of
 freed blocks in glibc's per-thread arenas, and up to 2.3 GiB of encoded text queued for the one TSV writer (the queue
 was bounded by units, not bytes). Now the text is one buffer of the recycling Arrow pool, sized from the unit's
-points, and the bytes waiting for the writers are bounded (1 GiB) for extraction and encoding (encoding proceeds
-when no writer can write, so the order of the writers cannot stall it). Human library: 11.2 → 6.3 GiB, 85 → 66 s;
+points, and the encoded bytes waiting for the writers are bounded (1 GiB, a soft bound: the encodes in progress come on top)
+for extraction and encoding (encoding proceeds
+when no writer can write, so the order of the writers cannot stall it; a Codex review of the scheduler change found
+no lost wake-up or deadlock). Human library: 11.2 → 6.3 GiB, 85 → 66 s;
 the TSV is byte-identical (10.4 GB checked).

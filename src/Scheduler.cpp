@@ -204,7 +204,7 @@ namespace ODIA
     }
     if (unissued_ > 0)
     {
-      if (unwritten_ >= opt_.max_unwritten || unwritten_bytes_ >= opt_.max_unwritten_bytes) { return queued && !queued_free ? "unwritten_cap(sinks_busy)" : "unwritten_cap(awaiting_encode)"; }
+      if (unwritten_ >= opt_.max_unwritten || (opt_.max_unwritten_bytes > 0 && unwritten_bytes_ >= opt_.max_unwritten_bytes)) { return queued && !queued_free ? "unwritten_cap(sinks_busy)" : "unwritten_cap(awaiting_encode)"; }
       if (outstanding_ >= opt_.ahead) { return "ordered_window_full"; }
       if (loaded_.empty() || loaded_.begin()->first != commit_part_) { return "next_part_not_loaded"; }
       return "buffer_pool_empty";
@@ -310,7 +310,7 @@ namespace ODIA
   bool ExtractionScheduler::tryEncode_(Lock& lock)
   {
     if (encode_queue_.empty()) { return false; }
-    if (unwritten_bytes_ >= opt_.max_unwritten_bytes)
+    if ((opt_.max_unwritten_bytes > 0 && unwritten_bytes_ >= opt_.max_unwritten_bytes))
     {
       // encoded bytes wait for the sinks: write first, unless no sink can (its next unit is not encoded yet)
       bool writable = false;
@@ -407,7 +407,7 @@ namespace ODIA
       const std::size_t unit = part->issued;
       const bool next_commit = seq == commit_part_ && unit == commit_unit_;
       if (outstanding_ >= opt_.ahead && !next_commit) { return false; }
-      if (unwritten_ >= opt_.max_unwritten || unwritten_bytes_ >= opt_.max_unwritten_bytes) { return false; }   // the sinks are behind: write first
+      if (unwritten_ >= opt_.max_unwritten || (opt_.max_unwritten_bytes > 0 && unwritten_bytes_ >= opt_.max_unwritten_bytes)) { return false; }   // the sinks are behind: write first
       std::vector<float*> blocks;
       if (!pool_.tryAcquire(part->plan.units[unit].blocks, blocks))
       {

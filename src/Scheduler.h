@@ -24,7 +24,8 @@ namespace ODIA
     std::size_t ahead = 64;        ///< units extracted but not yet committed (results parked or running)
     std::size_t parts_ahead = 4;   ///< library parts loaded ahead of the part being committed
     std::size_t max_unwritten = 256;  ///< committed units not yet written (encoded batches waiting for sinks)
-    std::size_t max_unwritten_bytes = std::size_t(1) << 30;   ///< and their encoded bytes (a TSV unit is ~25 MB of text)
+    std::size_t max_unwritten_bytes = std::size_t(1) << 30;   ///< and their encoded bytes (a TSV unit is ~25 MB of text;
+                                                              ///< a soft bound: encodes in progress add to it; 0: none)
   };
 
   struct SchedulerStats
