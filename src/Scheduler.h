@@ -86,6 +86,7 @@ namespace ODIA
     using Lock = std::unique_lock<std::mutex>;
 
     void worker_();
+    void wakeOne_();                // wake one sleeping worker (lock held)
     void relock_(Lock& lock);       // lock.lock(), timed under ODIA_PROFILE (contention on the central lock)
     const char* whyIdle_() const;   // why a worker found nothing to do (ODIA_PROFILE), lock held
     bool tryWrite_(Lock& lock);

@@ -154,9 +154,18 @@ namespace ODIA
         prof::counter(std::string("sched.idle.") + why).add(prof::nowNs() - t0);
         --waiting_;
       }
-      else { cv_.wait(lock); }
+      else { ++waiting_; cv_.wait(lock); --waiting_; }
     }
     cv_.notify_all();
+  }
+
+  // A state change wakes one sleeping worker, not all: with many more workers than runnable tasks a broadcast woke
+  // every idle worker on every task end, and they queued for the central lock only to sleep again (3.6 M context
+  // switches at 192 threads, twice the time per task). A worker that takes a task wakes the next sleeper, so new
+  // work spreads in a cascade that ends at the first worker finding nothing.
+  void ExtractionScheduler::wakeOne_()
+  {
+    if (waiting_ > 0) { cv_.notify_one(); }
   }
 
   void ExtractionScheduler::relock_(Lock& lock)
@@ -258,6 +267,7 @@ namespace ODIA
     sink_busy_[best] = true;
     begin_(SchedulerStats::Write);
     const auto t0 = clk::now();
+    wakeOne_();   // more work may be waiting: wake the next sleeper (it wakes another if it finds some)
     lock.unlock();
     try
     {
@@ -277,7 +287,7 @@ namespace ODIA
     if (--item->sinks_left == 0) { --unwritten_; }
     sink_busy_[best] = false;
     end_(SchedulerStats::Write, t0);
-    cv_.notify_all();
+    wakeOne_();
     return true;
   }
 
@@ -289,6 +299,7 @@ namespace ODIA
     ++encoding_;
     begin_(SchedulerStats::Encode);
     const auto t0 = clk::now();
+    wakeOne_();   // more work may be waiting: wake the next sleeper (it wakes another if it finds some)
     lock.unlock();
     try
     {
@@ -311,7 +322,7 @@ namespace ODIA
     --encoding_;
     end_(SchedulerStats::Encode, t0);
     item->ready = true;
-    cv_.notify_all();
+    wakeOne_();
     return true;
   }
 
@@ -326,6 +337,7 @@ namespace ODIA
       source_busy_[src] = true;
       begin_(SchedulerStats::Read);
       const auto t0 = clk::now();
+      wakeOne_();   // more work may be waiting: wake the next sleeper (it wakes another if it finds some)
       lock.unlock();
       std::shared_ptr<Part> part;
       try
@@ -351,7 +363,7 @@ namespace ODIA
       loaded_.emplace(part->seq, std::move(part));
       stats_.peak_parts = std::max(stats_.peak_parts, loaded_.size());
       tryCommit_(lock);   // a part without units commits at once
-      cv_.notify_all();
+      wakeOne_();
       return true;
     }
     return false;
@@ -383,6 +395,7 @@ namespace ODIA
       std::shared_ptr<Part> keep = part;
       begin_(SchedulerStats::Extract);
       const auto t0 = clk::now();
+      wakeOne_();   // more work may be waiting: wake the next sleeper (it wakes another if it finds some)
       lock.unlock();
       std::unique_ptr<TraceBlock> block;
       try
@@ -406,7 +419,7 @@ namespace ODIA
       // tryCommit_ may erase nodes of loaded_, the map this loop iterates: nothing after it touches the loop's
       // iterator, the function returns at once.
       tryCommit_(lock);
-      cv_.notify_all();
+      wakeOne_();
       return true;
     }
     return false;
@@ -462,6 +475,6 @@ namespace ODIA
       }
     }
     committing_ = false;
-    cv_.notify_all();
+    wakeOne_();
   }
 }

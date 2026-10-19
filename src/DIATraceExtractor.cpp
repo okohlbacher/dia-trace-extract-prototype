@@ -977,7 +977,10 @@ protected:
     std::uint64_t library_fragments = 0;
     ODIA::SchedulerOptions sopt;
     sopt.threads = threads;
-    sopt.ahead = std::min<std::size_t>(4 * static_cast<std::size_t>(threads), 64);
+    // units in flight (extracted, not yet committed): 4 per worker up to 64, and 2 per worker beyond, so that more
+    // than 64 workers find units to extract (192 threads on 2 x EPYC 9654: 13.6 -> 11.8 s, as fast as 64 threads;
+    // the trace pool still bounds their memory; results/scaling64/)
+    sopt.ahead = std::max(std::min<std::size_t>(4 * static_cast<std::size_t>(threads), 64), 2 * static_cast<std::size_t>(threads));
     sopt.parts_ahead = std::max<std::size_t>(4, 2 * library.sources());
     ODIA::ExtractionScheduler scheduler(library, extractor, writer, buffers, sopt);
     scheduler.on_part = [&](const ODIA::Library& lib, const ODIA::Extractor::Plan& plan) {
