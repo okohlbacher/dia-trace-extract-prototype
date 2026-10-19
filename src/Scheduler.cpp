@@ -1,6 +1,13 @@
 // ODIA-V3 trace extractor -- central scheduling of library reading, extraction and writing.
 #include "Scheduler.h"
+
+#include <arrow/util/byte_size.h>
+#include <arrow/memory_pool.h>
+#include "ArrowPool.h"
 #include "Profile.h"
+#ifdef __linux__
+#include <malloc.h>
+#endif
 
 #include <algorithm>
 #include <ctime>
@@ -47,7 +54,8 @@ namespace ODIA
         if (tl)
         {
           std::fprintf(tl, "t\tread\textract\tencode\twrite\tidle\toutstanding\tunissued\tloaded_parts\tunwritten\t"
-                           "encode_queue\tpool_free\tcommit_part\tprocess_cpu\trunning_threads\tmhz_mean\tmhz_min\n");
+                           "encode_queue\tpool_free\tcommit_part\tprocess_cpu\trunning_threads\tmhz_mean\tmhz_min\t"
+                           "rss_gib\tmalloc_used_gib\tmalloc_free_gib\tarrow_gib\tunwritten_mib\n");
         }
         const auto cpu_now = [] { return platform::processCpuSeconds(); };
         double cpu_last = cpu_now(), t_last = 0;
@@ -98,10 +106,18 @@ namespace ODIA
               ::closedir(d);
             }
 #endif
-            std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\t%d\t%.0f\t%.0f\n", t, active_[0], active_[1],
+            // memory: resident, glibc (in use / held free), the Arrow pools, encoded bytes waiting for the sinks
+            double used = -1, held_free = -1;
+#ifdef __linux__
+            const struct mallinfo2 mi = ::mallinfo2();   // takes the arena locks briefly: profiling only
+            used = (mi.uordblks + mi.hblkhd) / 1073741824.0; held_free = mi.fordblks / 1073741824.0;
+#endif
+            const double arrow = (arrow::default_memory_pool()->bytes_allocated() + arrowPool()->bytes_allocated()) / 1073741824.0;
+            std::fprintf(tl, "%.2f\t%d\t%d\t%d\t%d\t%d\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%.2f\t%d\t%.0f\t%.0f\t%.3f\t%.3f\t%.3f\t%.3f\t%.1f\n", t, active_[0], active_[1],
                          active_[2], active_[3], waiting_, outstanding_, unissued_, loaded_.size(), unwritten_,
                          encode_queue_.size(), pool_.available(), commit_part_, (cpu - cpu_last) / std::max(1e-9, t - t_last),
-                         running, mhz_n ? mhz_sum / mhz_n : 0.0, mhz_n ? mhz_min : 0.0);
+                         running, mhz_n ? mhz_sum / mhz_n : 0.0, mhz_n ? mhz_min : 0.0, platform::rssGiB().first, used, held_free, arrow,
+                         unwritten_bytes_ / 1048576.0);
           }
           cpu_last = cpu; t_last = t;
           if (tl && ++ticks % 5 != 0) { continue; }
@@ -188,7 +204,7 @@ namespace ODIA
     }
     if (unissued_ > 0)
     {
-      if (unwritten_ >= opt_.max_unwritten) { return queued && !queued_free ? "unwritten_cap(sinks_busy)" : "unwritten_cap(awaiting_encode)"; }
+      if (unwritten_ >= opt_.max_unwritten || unwritten_bytes_ >= opt_.max_unwritten_bytes) { return queued && !queued_free ? "unwritten_cap(sinks_busy)" : "unwritten_cap(awaiting_encode)"; }
       if (outstanding_ >= opt_.ahead) { return "ordered_window_full"; }
       if (loaded_.empty() || loaded_.begin()->first != commit_part_) { return "next_part_not_loaded"; }
       return "buffer_pool_empty";
@@ -284,7 +300,7 @@ namespace ODIA
       return true;
     }
     relock_(lock);
-    if (--item->sinks_left == 0) { --unwritten_; }
+    if (--item->sinks_left == 0) { --unwritten_; unwritten_bytes_ -= item->bytes; }
     sink_busy_[best] = false;
     end_(SchedulerStats::Write, t0);
     wakeOne_();
@@ -294,6 +310,13 @@ namespace ODIA
   bool ExtractionScheduler::tryEncode_(Lock& lock)
   {
     if (encode_queue_.empty()) { return false; }
+    if (unwritten_bytes_ >= opt_.max_unwritten_bytes)
+    {
+      // encoded bytes wait for the sinks: write first, unless no sink can (its next unit is not encoded yet)
+      bool writable = false;
+      for (const auto& q : sink_queue_) { if (!q.empty() && q.front()->ready) { writable = true; break; } }
+      if (writable) { return false; }
+    }
     std::shared_ptr<Item> item = std::move(encode_queue_.front());
     encode_queue_.pop_front();
     ++encoding_;
@@ -321,6 +344,8 @@ namespace ODIA
     relock_(lock);
     --encoding_;
     end_(SchedulerStats::Encode, t0);
+    item->bytes = item->encoded.tsv.size() + (item->encoded.batch ? static_cast<std::size_t>(arrow::util::TotalBufferSize(*item->encoded.batch)) : 0);
+    if (item->sinks_left > 0) { unwritten_bytes_ += item->bytes; }
     item->ready = true;
     wakeOne_();
     return true;
@@ -382,7 +407,7 @@ namespace ODIA
       const std::size_t unit = part->issued;
       const bool next_commit = seq == commit_part_ && unit == commit_unit_;
       if (outstanding_ >= opt_.ahead && !next_commit) { return false; }
-      if (unwritten_ >= opt_.max_unwritten) { return false; }   // the sinks are behind: write first
+      if (unwritten_ >= opt_.max_unwritten || unwritten_bytes_ >= opt_.max_unwritten_bytes) { return false; }   // the sinks are behind: write first
       std::vector<float*> blocks;
       if (!pool_.tryAcquire(part->plan.units[unit].blocks, blocks))
       {

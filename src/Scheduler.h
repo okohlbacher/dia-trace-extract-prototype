@@ -24,6 +24,7 @@ namespace ODIA
     std::size_t ahead = 64;        ///< units extracted but not yet committed (results parked or running)
     std::size_t parts_ahead = 4;   ///< library parts loaded ahead of the part being committed
     std::size_t max_unwritten = 256;  ///< committed units not yet written (encoded batches waiting for sinks)
+    std::size_t max_unwritten_bytes = std::size_t(1) << 30;   ///< and their encoded bytes (a TSV unit is ~25 MB of text)
   };
 
   struct SchedulerStats
@@ -82,6 +83,7 @@ namespace ODIA
       TraceWriter::Encoded encoded;
       bool ready = false;           // encoded
       std::size_t sinks_left = 0;   // sinks still to write it
+      std::size_t bytes = 0;        // encoded size (counted in unwritten_bytes_ until written)
     };
     using Lock = std::unique_lock<std::mutex>;
 
@@ -123,6 +125,7 @@ namespace ODIA
     std::deque<std::shared_ptr<Item>> encode_queue_;
     std::size_t encoding_ = 0;
     std::size_t unwritten_ = 0;   // committed units not yet written to every sink (bounded: back-pressure)
+    std::size_t unwritten_bytes_ = 0;   // their encoded bytes (bounded too)
     std::size_t commit_part_ = 0, commit_unit_ = 0, outstanding_ = 0, unissued_ = 0;
     std::uint64_t unit_seq_ = 0;
     bool committing_ = false, begun_ = false;
