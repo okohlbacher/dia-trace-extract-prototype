@@ -10,9 +10,10 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-namespace arrow { class RecordBatch; class Schema; }
+namespace arrow { class RecordBatch; class Schema; class ResizableBuffer; }
 
 namespace ODIA
 {
@@ -59,11 +60,28 @@ namespace ODIA
     bool hasTsv() const { return tsv_ != nullptr; }
     /// Sinks a unit (commit sequence number) goes to.
     void sinksOf(std::uint64_t unit, std::vector<std::size_t>& out) const;
+    /// A unit's TSV text (tens of MB) in one buffer of the recycling Arrow pool: grown as a std::string, its
+    /// doubling copies scattered freed blocks over glibc's per-thread arenas (10 GiB peak for the human library).
+    class TsvText
+    {
+    public:
+      void reserve(std::size_t n);
+      void append(const char* first, const char* last) { put(first, static_cast<std::size_t>(last - first)); }
+      TsvText& operator+=(std::string_view s) { put(s.data(), s.size()); return *this; }
+      TsvText& operator+=(char c) { put(&c, 1); return *this; }
+      const char* data() const;
+      std::size_t size() const { return size_; }
+      bool empty() const { return size_ == 0; }
+    private:
+      void put(const char* p, std::size_t n);
+      std::shared_ptr<arrow::ResizableBuffer> buf_;
+      std::size_t size_ = 0;
+    };
     /// A unit encoded for output: the Arrow batch (Parquet) and/or the TSV text.
     struct Encoded
     {
       std::shared_ptr<arrow::RecordBatch> batch;
-      std::string tsv;
+      TsvText tsv;
       std::uint64_t rows = 0, points = 0;
     };
     /// Encode `block` (extracted from library part `lib`). Const and thread-safe: any worker, in parallel.

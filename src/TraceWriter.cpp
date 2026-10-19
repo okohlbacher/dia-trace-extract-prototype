@@ -1,5 +1,7 @@
 // ODIA-V3 trace extractor -- trace export.
 #include "TraceWriter.h"
+#include <cstring>
+#include <arrow/buffer.h>
 #include "ParquetMerge.h"
 #include "ArrowPool.h"
 #include "ArrowCheck.h"
@@ -219,6 +221,22 @@ namespace ODIA
     return b;
   }
 
+  void TraceWriter::TsvText::reserve(std::size_t n)
+  {
+    if (buf_ && static_cast<std::size_t>(buf_->capacity()) >= n) { return; }
+    if (!buf_) { buf_ = check(arrow::AllocateResizableBuffer(static_cast<std::int64_t>(n), arrowPool())); }
+    else { check(buf_->Reserve(static_cast<std::int64_t>(n))); }
+  }
+
+  void TraceWriter::TsvText::put(const char* p, std::size_t n)
+  {
+    if (!buf_ || size_ + n > static_cast<std::size_t>(buf_->capacity())) { reserve(std::max<std::size_t>(2 * size_, size_ + n + (1u << 20))); }
+    std::memcpy(buf_->mutable_data() + size_, p, n);
+    size_ += n;
+  }
+
+  const char* TraceWriter::TsvText::data() const { return buf_ ? reinterpret_cast<const char*>(buf_->data()) : ""; }
+
   TraceWriter::Encoded TraceWriter::encode(const TraceBlock& block, const Library& lib) const
   {
     const bool pq = !shards_.empty(), tsv = tsv_ != nullptr;
@@ -353,6 +371,17 @@ namespace ODIA
         if (tsv)
         {
           auto& b = e.tsv;
+          if (b.empty())
+          {
+            // one buffer for the unit: an upper bound of its lines (the strings, plus the numbers and tabs)
+            std::size_t bound = 0;
+            for (const auto& r2 : block.records)
+            {
+              const std::size_t n = static_cast<std::size_t>(r2.fragments) * r2.cycles + static_cast<std::size_t>(r2.isotopes) * r2.ms1_count;
+              bound += n * (cfg_.run_name.size() + lib.precursor_id[r2.precursor].size() + lib.modified_sequence[r2.precursor].size() + 140);
+            }
+            b.reserve(bound);
+          }
           for (std::size_t i = 0; i < T; ++i)
           {
             b += cfg_.run_name; b += '\t'; b += lib.precursor_id[p]; b += '\t';

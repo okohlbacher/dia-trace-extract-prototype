@@ -84,17 +84,17 @@
   once MACOS_INSTALLER_CERTIFICATE_BASE64/_PASSWORD (Developer ID Installer) are set; the tap is updated from the
   workflow once HOMEBREW_TAP_DEPLOY_KEY is set (until then `ci/publish_formula.sh TAG`); Windows code signing needs a
   SignPath project and SIGNPATH_API_TOKEN/SIGNPATH_ORG_ID.
-- **Scheduler beyond 64 threads** (lock + look-ahead window): 384 threads were 4.5x slower than 64 on the 7 M
-  library (2 × EPYC 9654, 2026-10-15). The default is the physical cores (no cap), so `-threads 64` is advisable on
-  such nodes.
-- **Library loading:** lower the transient memory peak (decoded row groups + parts + joined copy coexist; ~4.3 GiB);
-  optional compact-v2 layout (uint32 m/z, uint16 intensity; docs/03).
-- **0.4:** remove the 0.2.14 option names (accepted with a warning since 0.2.16).
 - Linux packages need glibc ≥ 2.39 (Ubuntu 24.04 runners); an older-glibc build (manylinux) if users need it.
+- Optional compact-v2 library layout (uint32 m/z, uint16 intensity; docs/03).
 - 50K shared library (Justin).
 - Share the trace export (`benchmark-data/traces-v0.2.1`, 179 GB) and the results with the group.
 
 ## Done (recent)
+- **0.4.0 (2026-10-19; `docs/13-scaling-and-memory.md`):** the scheduler beyond 64 threads (wake one worker instead
+  of all; 192 threads 22.0 → 11.8 s, 384 threads 40.6 → 12.7 s); memory: no library-loading transient remains (the
+  library is streamed; the 5.2 GiB peak of the 7 M library is working memory: run grid 1.1, Arrow pool with its 1 GiB
+  reuse cache, trace pool 0.5, glibc ~1.5 GiB in use; smaller caches or fewer arenas save 0.3–0.6 GiB for 10–500%
+  more time, not taken); the TSV path 11.2 → 6.3 GiB; the 0.2.14 option names removed.
 - **Laptop benchmark with V0.3.0** (2026-10-19, M4 Max, the Homebrew release, on battery; report §6,
   `results/macos-benchmark/v0.3.0/`): 6.6 s at 1 thread, 0.88 s at 16 (V0.2.7: 6.2 / 0.70 s; same CPU time, second
   repeats within 10%); the full 7 M library 26.7 s in 4.4 GiB with the measured window (V0.2.7's fixed ±60 s: 14.7 s).
