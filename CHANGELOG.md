@@ -11,6 +11,18 @@ Behaviour changes a user must know about, in plain words. Releases before 0.3.0 
   instrument. The log names where a file came from; its values are recorded as `user-file:<file>` with its path and
   hash. A `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` that is not a directory is an error.
 
+- **Command-line review of 0.3.0** (`docs/cli-review-0.3/REVIEW.md`; Codex, Kimi and the binary):
+  - options without effect in the given combination are named in one `WARNING: without effect here:` line (e.g.
+    `-ms1_isotopes` with `-no_ms1`, `-mz_accuracy_ms2` with a fixed `-mz_tol_ms2`, `-rt_mode` with a whole-run window);
+  - errors before any work: two outputs on one path or an output over an input; `-rt_trafo_invert` without
+    `-rt_trafo` (it was accepted with `-rt_anchors`); `-mz_calibration off` without fixed tolerances (as its help said;
+    before, measured tolerances were centred on the uncorrected m/z when the RT calibration ran);
+  - `-out_mzml` alone no longer opens `-lib`;
+  - `-ids` counts the ids not in the library; none matching is an error that says so (was "Library is empty.");
+  - `--helphelp` names the deprecated options once at the end instead of listing them (118 → 75 lines); help texts
+    self-contained and complete (the id format, the RT window's fallback, the instrument files' keys, mzPeak's
+    centroided MS1, the measured instruments).
+
 ## 0.3.0 (2026-10-18)
 
 The command line and instrument defaults cleanup (phase 2 of `docs/cli-review/CLI-REVIEW.md`). The traces are the

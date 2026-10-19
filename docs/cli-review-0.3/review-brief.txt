@@ -1,0 +1,485 @@
+Adversarial review of a command-line interface. Tool: DIATraceExtractor 0.3.0, an OpenMS TOPP tool that extracts
+fragment and MS1 traces (XICs) of a spectral library from a DIA mass-spectrometry run (Orbitrap Astral and timsTOF
+diaPASEF are the only two target instruments). Its CLI was just reworked (guidelines: a user names the inputs and gets
+the right result; defaults are measured or inferred; --help shows only what a typical user needs, about 15 options;
+advanced options with --helphelp; every option documented with unit, default and what auto resolves to; no silent
+behaviour; old names accepted until 0.4; TOPP owns -threads/-ini/-debug).
+
+Review the CLI as it is NOW, adversarially. Find: wrong or misleading help text; defaults that are unsafe or force
+users to spell out what the tool could infer; options that are redundant, inert, dev-only or conflicting; missing
+validation of combinations (silently ignored options); naming inconsistencies; help-text clutter (--helphelp
+included); output-file conventions; anything a first-time user would trip over. For each finding: the option(s), the
+concrete problem (with an example command), severity (high/medium/low), and a concrete fix. Mark what you verified
+in the code below versus inferred. Then list the 5 changes you would make first. Be concise; no praise.
+
+Files below: --help, --helphelp, the option registration and the run-time validation code, README usage.
+
+===== --help =====
+Usage:
+  DIATraceExtractor <options>
+
+Options (mandatory options marked with '*'):
+  -in <file>*         DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.
+  -lib <file>         Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.
+  -out <file>         Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet next to it.
+  -out_tsv <file>     Traces as a long TSV, one row per point (large).
+  -out_stats <file>   Run statistics (JSON): calibration, the values used and their sources, stage times, memory.
+  -instrument <name>  Instrument whose defaults apply: auto (from the run's metadata) or its name, for runs whose metadata lack it. Sets the fragment tolerance as a multiple of the measured mass-error width: Astral 9, Orbitrap 9, timsTOF 4, TOF 4, others 6. (default: 'auto')
+  -ids <file>         Extract only these precursors (ids, one per line).
+  -top_fragments <n>  Most intense library fragments per precursor (0 = all). (default: '6') (min: '0')
+  -rt_mode <mode>     How library RT maps to the run: auto (fitted from the run itself; any library RT scale), minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). -rt_anchors or -rt_trafo select a given map instead. (default: 'auto')
+  -rt_window <s>      Extract +- this many seconds around each precursor's mapped RT. 0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). Negative: the whole run. (default: '0.0')
+  -mz_tol_ms2 <ppm>   Fragment tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms2 x the fragment mass-error width). (default: '0.0') (min: '0.0')
+  -mz_tol_ms1 <ppm>   MS1 tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms1 x the MS1 mass-error width). (default: '0.0') (min: '0.0')
+  -scheme <name>      A (default): DIA-NN's extraction rules (max of the centroids in the window) with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and -mz_tol_ms1. (default: 'A') (valid: 'A', 'B')
+  -out_mzml <file>    Also write the run as a centroided mzML, one spectrum per isolation window (diaPASEF frames split by window, scans collapsed), for tools that do not read mzPeak. Without -out and -out_tsv only this is done and -lib is not needed. (valid formats: 'mzML')
+                      
+Common UTIL options:
+  -ini <file>         Use the given TOPP INI file
+  -threads <n>        Sets the number of threads allowed to be used by the TOPP tool (0 = all available cores) (default: '1')
+  -write_ini <file>   Writes the default configuration file
+  --help              Shows options
+  --helphelp          Shows all options (including advanced)
+
+===== --helphelp (39 deprecated 0.2.14 names omitted here; they are listed hidden-advanced with 'Deprecated (0.2.15, removed in 0.4)' / 'Removed in 0.2.15' texts) =====
+Options (mandatory options marked with '*'):
+  -in <file>*                                  DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.
+  -lib <file>                                  Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.
+  -out <file>                                  Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet next to it.
+  -out_tsv <file>                              Traces as a long TSV, one row per point (large).
+  -out_stats <file>                            Run statistics (JSON): calibration, the values used and their sources, stage times, memory.
+  -instrument <name>                           Instrument whose defaults apply: auto (from the run's metadata) or its name, for runs whose metadata lack it. Sets the fragment tolerance as a multiple of the measured mass-error width: Astral 9, Orbitrap 9, timsTOF 4, TOF 4, others 6. (default: 'auto')
+  -ids <file>                                  Extract only these precursors (ids, one per line).
+  -top_fragments <n>                           Most intense library fragments per precursor (0 = all). (default: '6') (min: '0')
+  -rt_mode <mode>                              How library RT maps to the run: auto (fitted from the run itself; any library RT scale), minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). -rt_anchors or -rt_trafo select a given map instead. (default: 'auto')
+  -rt_window <s>                               Extract +- this many seconds around each precursor's mapped RT. 0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). Negative: the whole run. (default: '0.0')
+  -mz_tol_ms2 <ppm>                            Fragment tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms2 x the fragment mass-error width). (default: '0.0') (min: '0.0')
+  -mz_tol_ms1 <ppm>                            MS1 tolerance, +- ppm. 0 (default): measured from the run (-mz_accuracy_ms1 x the MS1 mass-error width). (default: '0.0') (min: '0.0')
+  -scheme <name>                               A (default): DIA-NN's extraction rules (max of the centroids in the window) with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and -mz_tol_ms1. (default: 'A') (valid: 'A', 'B')
+  -out_mzml <file>                             Also write the run as a centroided mzML, one spectrum per isolation window (diaPASEF frames split by window, scans collapsed), for tools that do not read mzPeak. Without -out and -out_tsv only this is done and -lib is not needed. (valid formats: 'mzML')
+  -out_axes <file>                             RT axes (Parquet) to join with the traces; default <out stem>.axes.parquet.
+  -out_calibration <file>                      Calibration anchors (TSV), usable as -rt_anchors.
+  -run_name <name>                             Run name in the output (default: the input file name without extension).
+  -targets_only                                Skip library decoys.
+  -no_ms1                                      No MS1 traces (fragments only).
+  -ms1_isotopes <n>                            MS1 isotope peaks after the monoisotopic one (0: monoisotopic only). (default: '2') (min: '-1' max: '200')
+  -ms1_axis <axis>                             MS1 traces on the MS1 scans (their own times, in the axes file) or interpolated onto the MS2 cycle axis (cycles). (default: 'scans') (valid: 'scans', 'cycles')
+  -rt_anchors <file>                           Use this RT map instead: two columns, library RT and run RT (s); fitted with LOWESS.
+  -rt_trafo <file>                             Use this RT map instead: trafoXML, library RT -> run RT (s). (valid formats: 'trafoXML')
+  -rt_trafo_invert                             The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).
+  -instrument_file <yaml>                      Instrument defaults for this run from this file (keys: name, extends, mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), over the shipped files in <prefix>/share/DIATraceExtractor/instruments. Files of your own for every run: $DIATRACEEXTRACTOR_INSTRUMENT_DIR or the user directory (~/.config/DIATraceExtractor/instruments; macOS ~/Library/Application Support/..., Windows %APPDATA%\...), where a file replaces the shipped one of the same name. (valid formats: 'yaml')
+  -mz_accuracy_ms2 <k>                         Measured fragment tolerance = k x the robust width of the fragment mass errors. 0 (default): the instrument's (see -instrument). (default: '0.0') (min: '0.0')
+  -mz_accuracy_ms1 <k>                         Measured MS1 tolerance = k x the robust width of the MS1 mass errors. 0 (default): the instrument's (4 for every shipped instrument). (default: '0.0') (min: '0.0')
+  -mz_calibration <mode>                       Auto: correct the m/z by the offsets measured from the run. off: use -mz_offset_ms2 and -mz_offset_ms1 instead (needs -mz_tol_ms2 and -mz_tol_ms1). (default: 'auto') (valid: 'auto', 'off')
+  -mz_offset_ms2 <ppm>                         Fragment m/z correction with -mz_calibration off (ppm added to the target). (default: '0.0')
+  -mz_offset_ms1 <ppm>                         MS1 m/z correction with -mz_calibration off (ppm added to the target). (default: '0.0')
+  -encoding <enc>                              Trace intensities: float32, or log8 (1 byte per point, log-spaced over 6 decades below each trace's maximum). (default: 'float32') (valid: 'float32', 'log8')
+  -expand_rt                                   Also write each trace's RT values in its row (larger file).
+  -skip_empty                                  Do not write traces that are all zero.
+  -write_parts <n>                             Parquet writers working in parallel on the one -out file (1: a single writer, slower for large libraries). Fixed, so that the output does not depend on -threads. (default: '32') (min: '1')
+  -unit_precursors <n>                         Precursors per parallel work unit. (default: '256') (min: '1')
+  -buffer_mb <MiB>                             Memory for extracted traces waiting to be written. (default: '512') (min: '16')
+
+Calibration from the run itself:
+  -calibration:mz_model <model>                Mass correction: linear (offset + slope x m/z, kept only where the m/z dependence is material, else constant) or constant. (default: 'linear') (valid: 'constant', 'linear')
+  -calibration:panel <n>                       Precursors sampled for calibration (0: 5% of the library). (default: '0') (min: '0')
+  -calibration:search_ppm <ppm>                First-pass mass search half width, before calibration. (default: '50.0') (min: '0.1')
+  -calibration:lowess_span <f>                 LOWESS span of the fitted RT map. (default: '0.15') (min: '0.01' max: '1.0')
+
+
+Calibration from the run itself:
+
+
+Calibration from the run itself:
+
+                                               
+Common UTIL options:
+  -ini <file>                                  Use the given TOPP INI file
+  -log <file>                                  Name of log file (created only when specified)
+  -debug <n>                                   Sets the debug level (default: '0')
+  -threads <n>                                 Sets the number of threads allowed to be used by the TOPP tool (0 = all available cores) (default: '1')
+  -write_ini <file>                            Writes the default configuration file
+  -write_ctd <out_dir>                         Writes the common tool description file(s) (Toolname(s).ctd) to <out_dir>
+  -write_nested_cwl <out_dir>                  Writes the Common Workflow Language file(s) (Toolname(s).cwl) to <out_dir>
+  -write_cwl <out_dir>                         Writes the Common Workflow Language file(s) (Toolname(s).cwl) to <out_dir>, but enforce a flat parameter hierarchy
+  -write_nested_json <out_dir>                 Writes the default configuration file
+  -write_json <out_dir>                        Writes the default configuration file, but compatible to the flat hierarchy
+  -no_progress                                 Disables progress logging to command line
+  -force                                       Overrides tool-specific checks
+  -test                                        Enables the test mode (needed for internal use only)
+  --help                                       Shows options
+  --helphelp                                   Shows all options (including advanced)
+
+===== src/DIATraceExtractor.cpp: option registration =====
+  void registerOptionsAndFlags_() override
+  {
+    // Basic options first (--help); everything marked advanced (last argument true) appears with --helphelp only.
+    // A plain string, not registerInputFile_: for unregistered extensions OpenMS (develop) sniffs the
+    // content, takes the mzPeak ZIP container for a single-file .zip and fails; -in is checked below.
+    registerStringOption_("in", "<file>", "", "DIA run: centroided mzML, mzPeak (.mzpeak) or Thermo .raw.");
+    registerInputFile_("lib", "<file>", "",
+                       "Spectral library: DIA-NN/DIALibGen .parquet or .tsv, OpenSWATH .tsv/.pqp/.TraML.", false);
+    registerOutputFile_("out", "<file>", "", "Traces (Parquet), one row per trace. The RT axes go to <out stem>.axes.parquet "
+                        "next to it.", false);
+    registerOutputFile_("out_tsv", "<file>", "", "Traces as a long TSV, one row per point (large).", false);
+    registerOutputFile_("out_stats", "<file>", "", "Run statistics (JSON): calibration, the values used and their sources, stage "
+                        "times, memory.", false);
+    registerStringOption_("instrument", "<name>", "auto", instrumentHelp(), false);
+    registerInputFile_("ids", "<file>", "", "Extract only these precursors (ids, one per line).", false);
+    registerIntOption_("top_fragments", "<n>", 6, "Most intense library fragments per precursor (0 = all).", false);
+    setMinInt_("top_fragments", 0);
+
+    registerStringOption_("rt_mode", "<mode>", "auto",
+                          "How library RT maps to the run: auto (fitted from the run itself; any library RT scale), "
+                          "minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). "
+                          "-rt_anchors or -rt_trafo select a given map instead.", false);
+    registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
+                          "0 (default): measured from the run, along the gradient: 7 x the RT scatter of the calibration "
+                          "anchors about the RT map + 2 x their peak width (FWHM; both multiples from the instrument files). "
+                          "Negative: the whole run.", false);
+    registerDoubleOption_("mz_tol_ms2", "<ppm>", 0.0, "Fragment tolerance, +- ppm. 0 (default): measured from the run "
+                          "(-mz_accuracy_ms2 x the fragment mass-error width).", false);
+    registerDoubleOption_("mz_tol_ms1", "<ppm>", 0.0, "MS1 tolerance, +- ppm. 0 (default): measured from the run "
+                          "(-mz_accuracy_ms1 x the MS1 mass-error width).", false);
+    setMinFloat_("mz_tol_ms2", 0.0); setMinFloat_("mz_tol_ms1", 0.0);
+    registerStringOption_("scheme", "<name>", "A", "A (default): DIA-NN's extraction rules (max of the centroids in the window) "
+                          "with the measured mass correction. B: OpenSWATH's rules (sum of the centroids, MS1 isotopes at unit "
+                          "spacing, every isolation window containing the precursor, no mass correction); needs -mz_tol_ms2 and "
+                          "-mz_tol_ms1.", false);
+    setValidStrings_("scheme", {"A", "B"});
+    registerOutputFile_("out_mzml", "<file>", "", "Also write the run as a centroided mzML, one spectrum per isolation window "
+                        "(diaPASEF frames split by window, scans collapsed), for tools that do not read mzPeak. Without -out "
+                        "and -out_tsv only this is done and -lib is not needed.", false);
+    setValidFormats_("out_mzml", {"mzML"});
+
+    // ---- advanced
+    registerOutputFile_("out_axes", "<file>", "", "RT axes (Parquet) to join with the traces; default <out stem>.axes.parquet.", false, true);
+    registerOutputFile_("out_calibration", "<file>", "", "Calibration anchors (TSV), usable as -rt_anchors.", false, true);
+    registerStringOption_("run_name", "<name>", "", "Run name in the output (default: the input file name without extension).", false, true);
+    registerFlag_("targets_only", "Skip library decoys.", true);
+    registerFlag_("no_ms1", "No MS1 traces (fragments only).", true);
+    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only).", false, true);
+    setMinInt_("ms1_isotopes", -1); setMaxInt_("ms1_isotopes", 200);   // -1: 0.2.14's "no MS1" (now -no_ms1)
+    registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (their own times, in the axes file) or "
+                          "interpolated onto the MS2 cycle axis (cycles).", false, true);
+    setValidStrings_("ms1_axis", {"scans", "cycles"});
+    registerInputFile_("rt_anchors", "<file>", "", "Use this RT map instead: two columns, library RT and run RT (s); fitted with LOWESS.", false, true);
+    registerInputFile_("rt_trafo", "<file>", "", "Use this RT map instead: trafoXML, library RT -> run RT (s).", false, true);
+    setValidFormats_("rt_trafo", {"trafoXML"});
+    registerFlag_("rt_trafo_invert", "The trafoXML maps run RT -> library RT (as OpenSwathRTNormalizer writes it).", true);
+    registerInputFile_("instrument_file", "<yaml>", "", "Instrument defaults for this run from this file (keys: name, extends, "
+                       "mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm), over the shipped files in "
+                       "<prefix>/share/DIATraceExtractor/instruments. Files of your own for every run: "
+                       "$DIATRACEEXTRACTOR_INSTRUMENT_DIR or the user directory (~/.config/DIATraceExtractor/instruments; "
+                       "macOS ~/Library/Application Support/..., Windows %APPDATA%\\...), where a file replaces the shipped "
+                       "one of the same name.", false, true);
+    setValidFormats_("instrument_file", {"yaml"}, false);
+    registerDoubleOption_("mz_accuracy_ms2", "<k>", 0.0, "Measured fragment tolerance = k x the robust width of the fragment mass "
+                          "errors. 0 (default): the instrument's (see -instrument).", false, true);
+    registerDoubleOption_("mz_accuracy_ms1", "<k>", 0.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors. "
+                          "0 (default): the instrument's (4 for every shipped instrument).", false, true);
+    setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.0);
+    registerStringOption_("mz_calibration", "<mode>", "auto", "auto: correct the m/z by the offsets measured from the run. "
+                          "off: use -mz_offset_ms2 and -mz_offset_ms1 instead (needs -mz_tol_ms2 and -mz_tol_ms1).", false, true);
+    setValidStrings_("mz_calibration", {"auto", "off"});
+    registerDoubleOption_("mz_offset_ms2", "<ppm>", 0.0, "Fragment m/z correction with -mz_calibration off (ppm added to the target).", false, true);
+    registerDoubleOption_("mz_offset_ms1", "<ppm>", 0.0, "MS1 m/z correction with -mz_calibration off (ppm added to the target).", false, true);
+    registerStringOption_("encoding", "<enc>", "float32", "Trace intensities: float32, or log8 (1 byte per point, log-spaced "
+                          "over 6 decades below each trace's maximum).", false, true);
+    setValidStrings_("encoding", {"float32", "log8"});
+    registerFlag_("expand_rt", "Also write each trace's RT values in its row (larger file).", true);
+    registerFlag_("skip_empty", "Do not write traces that are all zero.", true);
+    registerIntOption_("write_parts", "<n>", 32, "Parquet writers working in parallel on the one -out file (1: a single "
+                       "writer, slower for large libraries). Fixed, so that the output does not depend on -threads.", false, true);
+    setMinInt_("write_parts", 1);
+    registerIntOption_("unit_precursors", "<n>", 256, "Precursors per parallel work unit.", false, true);
+    setMinInt_("unit_precursors", 1);
+    registerIntOption_("buffer_mb", "<MiB>", 512, "Memory for extracted traces waiting to be written.", false, true);
+    setMinInt_("buffer_mb", 16);
+    // TOPPBase::printUsage_ throws for an option whose subsection is not registered: register the subsection.
+    registerTOPPSubsection_("calibration", "Calibration from the run itself");
+    registerStringOption_("calibration:mz_model", "<model>", "linear", "Mass correction: linear (offset + slope x m/z, kept "
+                          "only where the m/z dependence is material, else constant) or constant.", false, true);
+    setValidStrings_("calibration:mz_model", {"constant", "linear"});
+    registerIntOption_("calibration:panel", "<n>", 0, "Precursors sampled for calibration (0: 5% of the library).", false, true);
+    setMinInt_("calibration:panel", 0);
+    registerDoubleOption_("calibration:search_ppm", "<ppm>", 50.0, "First-pass mass search half width, before calibration.", false, true);
+    setMinFloat_("calibration:search_ppm", 0.1);
+    registerDoubleOption_("calibration:lowess_span", "<f>", 0.15, "LOWESS span of the fitted RT map.", false, true);
+    setMinFloat_("calibration:lowess_span", 0.01); setMaxFloat_("calibration:lowess_span", 1.0);
+
+    // The names of 0.2.14 and earlier, so that old command lines and INI files keep working until 0.4: hidden,
+    // "unset" by default (so that their presence is visible), translated in resolveCompatibility_().
+    for (const auto& d : kDeprecated)
+    {
+      const std::string help = d.replacement[0] == '\0' ? "Removed in 0.2.15: " + std::string(d.why) : "Deprecated (0.2.15, removed in 0.4): use -" + std::string(d.replacement) + ".";
+      if (d.type == 'd') { registerDoubleOption_(d.name, "<value>", kUnsetDouble, help, false, true); }
+      else if (d.type == 'i') { registerIntOption_(d.name, "<value>", kUnsetInt, help, false, true); }
+      else { registerStringOption_(d.name, "<value>", "", help, false, true); }
+    }
+    // TOPPBase (patches/openms-toppbase-deprecated-options.patch): accepted, but not written by -write_ini nor
+    // suggested for a mistyped option; -write_ini -ini <old.ini> moves their values onto the current names
+    for (const auto& d : kDeprecated) { setDeprecated_(d.name); }
+    setDeprecatedMigration_(migrateIni);
+  }
+
+  // --- 0.2.14 names: values given under an old name, translated onto the current options
+===== src/DIATraceExtractor.cpp: run-time validation (start of run_) =====
+  ExitCodes run_(int, const char**)
+  {
+    g_debug = debug_level_ > 0;
+    if (const ExitCodes c = resolveCompatibility_(); c != EXECUTION_OK) { return c; }
+    const ODIA::StageTime t_start = ODIA::stageClock();
+    const std::string in = S("in"), lib_file = S("lib");
+    if (!std::filesystem::is_regular_file(in) || !std::ifstream(in, std::ios::binary))   // portable readability test
+    {
+      OPENMS_LOG_ERROR << "Input file not readable: " << in << std::endl;
+      return INPUT_FILE_NOT_READABLE;
+    }
+    const std::string out = S("out"), out_tsv = S("out_tsv");
+    std::string out_axes = S("out_axes");
+    const std::string out_mzml = S("out_mzml");
+    if (out.empty() && out_tsv.empty() && out_mzml.empty())
+    {
+      OPENMS_LOG_ERROR << "Nothing to do: give -out, -out_tsv and/or -out_mzml." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    if (lib_file.empty() && (out_mzml.empty() || !out.empty() || !out_tsv.empty()))
+    {
+      OPENMS_LOG_ERROR << "-lib is required for an extraction (only -out_mzml works without a library)." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    if (lib_file.empty())
+    {
+      // export only: no library, no calibration
+      // the parse is memory-bandwidth bound: flat beyond ~32 threads while its CPU time keeps growing
+      ODIA::RunGrid grid = ODIA::RunGrid::load(in, std::min(threadCount_(), 32));
+      OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, " << grid.stats.ms1_spectra << " MS1 / "
+                      << grid.stats.ms2_spectra << " MS2 spectra, " << grid.stats.ms1_peaks + grid.stats.ms2_peaks << " peaks; " << fmt(grid.stats.ingest) << mem() << std::endl;
+      writeRunAsMzML(grid, in, out_mzml);
+      return EXECUTION_OK;
+    }
+    if (out_axes.empty() && !out.empty())
+    {
+      std::filesystem::path p(out);
+      out_axes = (p.parent_path() / (p.stem().string() + ".axes.parquet")).string();
+    }
+    // the instrument files: checked before the run is read (a wrong name or file fails at once)
+    const std::string instrument_spec = S("instrument"), instrument_file = S("instrument_file");
+    if (instrument_file.size() && lowerCase(instrument_spec) != "auto")
+    {
+      OPENMS_LOG_ERROR << "Give either -instrument or -instrument_file, not both." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    try { std::string w; ODIA::resolveInstrument(instrument_spec, "", instrument_file, w); }
+    catch (const std::exception& e) { OPENMS_LOG_ERROR << "Error: " << e.what() << std::endl; return ILLEGAL_PARAMETERS; }
+    const int threads = threadCount_();
+    omp_set_num_threads(threads);
+    OPENMS_LOG_INFO << "Threads: " << threads << (threads_given_ ? "" : " (the physical cores; -threads sets the number)") << std::endl;
+
+    // --- library: opened as a stream of parts (read concurrently with extraction below)
+    const ODIA::StageTime t_lib0 = ODIA::stageClock();
+    ODIA::LibraryLoadOptions lopt;
+    lopt.top_fragments = static_cast<std::size_t>(I("top_fragments"));
+    lopt.targets_only = F("targets_only");
+    lopt.threads = threads;
+    if (!S("ids").empty()) { lopt.keep_ids = ODIA::readIdList(S("ids")); }
+    ODIA::LibraryReader library(lib_file, lopt, 65536);   // rows per streamed part; fixed, so the output does not depend on -threads
+    const ODIA::StageTime t_lib = ODIA::stageClock() - t_lib0;
+    OPENMS_LOG_INFO << "Library: " << library.rows() << " rows";
+    if (g_debug) { OPENMS_LOG_INFO << " in " << library.parts() << " parts from " << library.sources() << " source(s), streamed during extraction; open " << fmt(t_lib) << mem(); }
+    OPENMS_LOG_INFO << std::endl;
+    if (library.rows() == 0) { OPENMS_LOG_ERROR << "Library is empty." << std::endl; return INPUT_FILE_EMPTY; }
+
+    // --- calibration panel (needs only the library), loaded on its own thread while the run is ingested
+    // RT map: a given anchors or trafoXML file selects that map; otherwise -rt_mode
+    std::string mode = S("rt_mode");
+    const std::string rt_anchors = S("rt_anchors"), rt_trafo = S("rt_trafo");
+    if (!rt_anchors.empty() && !rt_trafo.empty()) { OPENMS_LOG_ERROR << "Give either -rt_anchors or -rt_trafo, not both." << std::endl; return ILLEGAL_PARAMETERS; }
+    if (!rt_anchors.empty() || !rt_trafo.empty())
+    {
+      if (mode != "auto") { OPENMS_LOG_ERROR << "-rt_anchors / -rt_trafo give the RT map; they cannot be combined with -rt_mode " << mode << "." << std::endl; return ILLEGAL_PARAMETERS; }
+      mode = rt_anchors.empty() ? "trafo" : "anchors";
+    }
+    else if (F("rt_trafo_invert")) { OPENMS_LOG_ERROR << "-rt_trafo_invert needs -rt_trafo." << std::endl; return ILLEGAL_PARAMETERS; }
+    const double rt_window_opt = D("rt_window");
+    const bool rt_needed = rt_window_opt >= 0.0;   // a whole-run extraction needs no RT map
+    const bool ms1_enabled = !F("no_ms1");
+    const double mz_tol = D("mz_tol_ms2"), mz_tol_ms1 = D("mz_tol_ms1");
+    const bool scheme_b = S("scheme") == "B";
+    const bool offsets_given = D("mz_offset_ms2") != 0.0 || D("mz_offset_ms1") != 0.0;
+    if (scheme_b && (mz_tol <= 0 || (ms1_enabled && mz_tol_ms1 <= 0)))
+    {
+      OPENMS_LOG_ERROR << "-scheme B (OpenSWATH's rules) extracts without mass correction and needs fixed tolerances: give -mz_tol_ms2"
+                       << (ms1_enabled ? " and -mz_tol_ms1" : "") << " (ppm)." << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    if (scheme_b && offsets_given) { OPENMS_LOG_ERROR << "-scheme B extracts without mass correction; -mz_offset_ms2/-mz_offset_ms1 do not apply." << std::endl; return ILLEGAL_PARAMETERS; }
+    const bool mass_auto = !scheme_b && S("mz_calibration") == "auto";
+    if (mass_auto && offsets_given) { OPENMS_LOG_ERROR << "-mz_offset_ms2/-mz_offset_ms1 replace the measured correction: give them with -mz_calibration off." << std::endl; return ILLEGAL_PARAMETERS; }
+    if (scheme_b) { OPENMS_LOG_INFO << "Scheme B: sum of the centroids in the window, MS1 isotopes at unit spacing, every window containing the precursor, no mass correction." << std::endl; }
+    const bool rt_auto = mode == "auto" && rt_needed;
+    const int ingest_threads = std::min(threads, 32);   // the parse is memory-bandwidth bound beyond ~32 threads
+    struct Panel { ODIA::Library lib; std::size_t keep_every = 1; ODIA::StageTime time; };
+    std::future<Panel> panel_future;
+    std::uint64_t all_rows = 0;   // the whole library (also with -ids): the calibration panel is drawn from all of it
+    // Experiment (results/decoys/): ODIA_ANCHOR_FDR accepts anchors at a decoy-calibrated false rate, scoring the library's
+    // own peptide decoys when it has them. Not adopted as a default: at 1% too few anchors survive on timsTOF, at 5%
+    // the timsTOF mass width widens, and on Astral the cleaner anchors understate the RT scatter (window coverage 96%).
+    const bool decoy_experiment = std::getenv("ODIA_ANCHOR_FDR") != nullptr;
+    if (rt_auto || mass_auto)
+    {
+      // The panel is drawn from the whole library (never from an -ids subset: calibrating on externally
+      // confirmed precursors would not be self-calibration), from evenly spaced rows so the library is
+      // not loaded whole: about twice the panel size, from which calibrate() stratifies by RT.
+      // Row count of the whole library: `library` is already restricted when -ids is given to a non-compact format.
+      all_rows = lopt.keep_ids.empty() ? library.rows() : ODIA::LibraryReader(lib_file, ODIA::LibraryLoadOptions{}).rows();
+      const auto panel_size = static_cast<std::uint64_t>(I("calibration:panel") > 0
+          ? I("calibration:panel")
+          : std::max(1.0, ODIA::CalibrationOptions{}.panel_fraction * static_cast<double>(all_rows)));
+      const std::size_t keep_every = static_cast<std::size_t>(std::max<std::uint64_t>(1, all_rows / (2 * panel_size)));
+      const int panel_threads = std::max(std::min(4, threads), threads - ingest_threads);
+      panel_future = std::async(std::launch::async, [lib_file, keep_every, panel_threads, decoy_experiment] {
+        const ODIA::StageTime t0 = ODIA::stageClock();
+        omp_set_num_threads(panel_threads);
+        Panel p;
+        ODIA::LibraryLoadOptions popt;
+        popt.top_fragments = 0;   // all fragments: the anchor search uses the top 6, the tolerance curve all of them
+        popt.targets_only = !decoy_experiment;   // the library's decoys only for the decoy-calibrated experiment
+        popt.threads = panel_threads;
+        popt.keep_every = keep_every;
+        ODIA::LibraryReader(lib_file, popt).readAll(p.lib, panel_threads);   // streamed: never the whole library
+        p.keep_every = keep_every;
+        p.time = ODIA::stageClock() - t0;
+        return p;
+      });
+    }
+
+    // --- run grid
+    ODIA::RunGrid grid = ODIA::RunGrid::load(in, ingest_threads);
+    omp_set_num_threads(threads);
+    releaseFreedMemory();
+    const auto& gs = grid.stats;
+    OPENMS_LOG_INFO << "Run grid: " << grid.cycles() << " cycles x " << grid.windows.size() << " windows, "
+                    << gs.ms1_spectra << " MS1 / " << gs.ms2_spectra << " MS2 spectra";
+    if (g_debug)
+    {
+      OPENMS_LOG_INFO << ", " << gs.ms1_peaks + gs.ms2_peaks << " peaks, " << gs.missing_cells << " empty cells, "
+                      << (gs.overlapping_windows ? std::to_string(gs.overlapping_windows) + " overlapping window pairs, " : std::string())
+                      << grid.bytes() / double(1u << 20) << " MiB";
+    }
+    OPENMS_LOG_INFO << "; " << fmt(gs.ingest) << mem() << std::endl;
+
+    if (!out_mzml.empty())
+    {
+      writeRunAsMzML(grid, in, out_mzml);
+      if (out.empty() && out_tsv.empty()) { return EXECUTION_OK; }
+    }
+
+    // --- instrument defaults: the option given > the instrument's file > default.yaml, per value
+    std::string instrument_warning;
+    const ODIA::InstrumentDefaults inst = ODIA::resolveInstrument(instrument_spec, grid.instrument, instrument_file, instrument_warning);
+    std::vector<std::array<std::string, 3>> sources;   // value name, value, source (logged, footer, -out_stats)
+    const auto num = [](double x) { std::ostringstream o; o << x; return o.str(); };
+    const auto multiple = [&](const char* key) {
+      const double given = D(key);
+      const double v = given > 0.0 ? given : inst.value(key);
+      sources.push_back({key, num(v), given > 0.0 ? "given" : inst.source(key)});
+      return v;
+    };
+    const double sigma_ms2 = multiple("mz_accuracy_ms2");
+    const double sigma_ms1 = multiple("mz_accuracy_ms1");
+    const double rt_window_sigma = inst.value("rt_window_sigma"), rt_window_fwhm = inst.value("rt_window_fwhm");
+    sources.push_back({"rt_window_sigma", num(rt_window_sigma), inst.source("rt_window_sigma")});
+    sources.push_back({"rt_window_fwhm", num(rt_window_fwhm), inst.source("rt_window_fwhm")});
+    OPENMS_LOG_INFO << "Instrument: " << inst.instrument << ", " << inst.how << "; defaults " << inst.filesText() << std::endl;
+    {
+      // the values an instrument file implied, and how to change them
+      std::string implied;
+      if (D("mz_accuracy_ms2") <= 0.0 && mz_tol <= 0.0) { implied += "fragment tolerance " + num(sigma_ms2) + " x the measured width"; }
+      if (D("mz_accuracy_ms1") <= 0.0 && mz_tol_ms1 <= 0.0 && ms1_enabled) { implied += (implied.empty() ? "" : ", ") + std::string("MS1 ") + num(sigma_ms1) + " x"; }
+      if (!implied.empty()) { OPENMS_LOG_INFO << inst.instrument << " defaults: " << implied << " (-mz_accuracy_ms2 / -mz_accuracy_ms1 change the multiples, -mz_tol_ms2 / -mz_tol_ms1 fix the tolerances)" << std::endl; }
+    }
+    if (!instrument_warning.empty()) { OPENMS_LOG_WARN << "WARNING: " << instrument_warning << std::endl; }
+    if (debug_level_ > 0)
+    {
+      OPENMS_LOG_INFO << "Instrument files: " << inst.directory << " (searched:";
+      for (const auto& d : ODIA::instrumentDirectories()) { OPENMS_LOG_INFO << " " << d; }
+      for (const auto& [label, d] : ODIA::userInstrumentDirectories()) { OPENMS_LOG_INFO << "; " << label << " " << d; }
+      OPENMS_LOG_INFO << "); " << inst.filesProvenance() << std::endl;
+    }
+
+    // --- calibration (from the run itself) and RT map
+===== README.md: Use =====
+## Use
+
+```bash
+# the defaults: RT map, RT window, mass offsets and tolerances measured from the run; all physical cores
+DIATraceExtractor -in run.mzML -lib library.parquet -out traces.parquet
+# a library tuned to this run (RT in run minutes, as DIALibGen -mode tune writes): skip fitting the RT map
+DIATraceExtractor -in run.mzML -lib library.parquet -rt_mode minutes -out traces.parquet -out_stats stats.json
+# OpenSWATH's extraction rules, fixed tolerances (+- ppm)
+DIATraceExtractor -in run.mzML -lib library.parquet -scheme B -mz_tol_ms2 6 -mz_tol_ms1 6 -out traces.parquet
+# a converted mzML without the instrument in its metadata: name it (sets the tolerance multiples)
+DIATraceExtractor -in run.mzML -lib library.parquet -instrument Astral -out traces.parquet
+# only convert a run (e.g. diaPASEF mzPeak) to mzML for tools that do not read mzPeak
+DIATraceExtractor -in run.mzpeak -out_mzml run.mzML
+```
+
+`DIATraceExtractor --help` lists the 14 everyday options, `--helphelp` all of them; a mistyped option gets one line
+with the closest name (`Unknown option '-mz_tolx' (did you mean -mz_tol_ms2?).`). The option names of 0.2.14 and earlier still work
+until 0.4 (one `WARNING:` line names the current ones); `-write_ini new.ini -ini old.ini` rewrites an old INI file on
+the current names. Option names follow one
+pattern: `rt_*` for retention time, `mz_*` for m/z with `_ms2`/`_ms1` for the level, `ms1_*` for MS1 traces, `out_*`
+for output files.
+
+- **Input:** `-in` is a centroided mzML, an mzPeak `.mzpeak` (MS1 must be centroided in the file, e.g. mzpeak-convert
+  `--representation centroid --representation-levels 1`) or a Thermo `.raw`. `-lib` is a DIA-NN/DIALibGen
+  `.parquet`/`.tsv` or an OpenSWATH `.tsv`/`.pqp`/`.TraML` library. `-ids` restricts the extraction to a precursor
+  list; `-top_fragments` (default 6, 0 = all).
+- **RT:** `-rt_mode auto` (default) fits the library-to-run RT map from the run itself and works with any library
+  RT scale (predicted, iRT, minutes); `minutes` and `seconds` take the library RT as run time; `-rt_anchors` or
+  `-rt_trafo` give a map. `-rt_window` (half width) is by default measured along the gradient: 7 × the robust RT scatter
+  of the calibration anchors about the map + 2 × their peak width (FWHM), per RT bin (`rt_window_sigma`,
+  `rt_window_fwhm` in `default.yaml`). On the ten benchmark
+  configurations (Astral runs 01–03 with tuned and predicted libraries, timsTOF A01/B01) it contained 99.4–100% of
+  DIA-NN's whole peaks; about ±40–90 s with tuned libraries, ±250–300 s with predicted RT. A value in
+  seconds fixes it, a negative value extracts the whole run. The tool warns when the library's RTs map onto only a
+  small part of the run, the sign of a wrong `-rt_mode`.
+- **Instrument:** the instrument-dependent defaults are data files, `share/DIATraceExtractor/instruments/*.yaml`
+  (`data/instruments/` in the source tree): `default.yaml` holds every default, one file per instrument or class only
+  what differs (`orbitrap.yaml` 9, `astral.yaml` 9, `tof.yaml` 4, `timstof.yaml` 4: the fragment tolerance as a
+  multiple of the measured width; each value with its source). `-instrument auto` (default) picks the file from the
+  run's metadata, the most specific match (`timsTOF` over `TOF`); `-instrument <name>` names it (a file name or alias,
+  e.g. `Astral`, `timsTOF SCP`, or any instrument name classified like the metadata, e.g. `Exploris 480` → Orbitrap);
+  `-instrument_file my.yaml` uses a file of your own for one run; for every run, put it into
+  `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` or the user directory (`~/.config/DIATraceExtractor/instruments`, macOS
+  `~/Library/Application Support/DIATraceExtractor/instruments`, Windows `%APPDATA%\DIATraceExtractor\instruments`),
+  where it replaces the shipped file of the same name or adds an instrument (keys `name`, `extends`, `aliases`, `keywords`,
+  `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`, `priority` for overlapping keywords; unknown or repeated keys, wrong types and
+  values out of range are errors). Per value: the option given > the instrument's file > the files it extends >
+  `default.yaml`. The log names the files used; the Parquet footer (`odia.instrument*`, `odia.value_sources`) and
+  `-out_stats` record each value used with its source (`given`, `instrument-default:Astral`, `default`, `measured`).
+- **m/z:** the tolerances `-mz_tol_ms2`/`-mz_tol_ms1` (± ppm) are by default measured: `-mz_accuracy_ms2` and
+  `-mz_accuracy_ms1` × the robust width of the mass errors (the instrument's multiples: Orbitrap and Astral 9, timsTOF
+  and other TOFs 4, others 6 for fragments; 4 for MS1), with the measured offsets (and an m/z-dependent term when the data show one) corrected
+  (`-mz_calibration auto`; `off` uses `-mz_offset_ms2`/`-mz_offset_ms1`). `-scheme B` applies OpenSWATH's rules as one
+  preset (sum of the centroids, MS1 isotopes at unit spacing, every window containing the precursor, no mass
+  correction). `-no_ms1` extracts fragments only; `-ms1_isotopes` (default 2) after the monoisotopic peak.
+- **Log:** one short line per stage (`Library:`, `Run grid:`, `Instrument:`, `Calibration:`, `Extraction:`,
+  `Written:`, `Total:`); every warning starts with `WARNING:`; `-debug 1` adds the development detail (memory, the
+  calibration search, the scheduler, the files searched, every value with its source).
+- **Output:** `-out` is one Parquet file with one row per trace (MS2 rows on the global cycle axis, MS1 rows on the
+  MS1 scans), written by 32 writers in parallel; the axes go to `<out stem>.axes.parquet`. `-out_tsv` writes a long
+  TSV, `-out_stats` a JSON summary, `-out_calibration` the calibration anchors.
+
+```python
+import numpy as np, pyarrow.parquet as pq
+t = pq.read_table("traces.parquet").to_pandas()
+axes = pq.read_table("traces.axes.parquet").to_pandas()
+cycle_rt = axes[axes.lane == -1].sort_values("cycle").rt.to_numpy()
+row = t[t.ms_level == 2].iloc[0]   # MS1 rows index axes[axes.lane == -2] instead
+y = np.frombuffer(row.intensity, "<f4"); rt = cycle_rt[row.cycle_begin:row.cycle_begin + len(y)]
+```
+
+## Layout

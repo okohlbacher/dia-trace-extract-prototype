@@ -114,7 +114,8 @@ for output files.
   preset (sum of the centroids, MS1 isotopes at unit spacing, every window containing the precursor, no mass
   correction). `-no_ms1` extracts fragments only; `-ms1_isotopes` (default 2) after the monoisotopic peak.
 - **Log:** one short line per stage (`Library:`, `Run grid:`, `Instrument:`, `Calibration:`, `Extraction:`,
-  `Written:`, `Total:`); every warning starts with `WARNING:`; `-debug 1` adds the development detail (memory, the
+  `Written:`, `Total:`); every warning starts with `WARNING:`; options without effect in the given combination are
+  named in one `WARNING: without effect here:` line; `-debug 1` adds the development detail (memory, the
   calibration search, the scheduler, the files searched, every value with its source).
 - **Output:** `-out` is one Parquet file with one row per trace (MS2 rows on the global cycle axis, MS1 rows on the
   MS1 scans), written by 32 writers in parallel; the axes go to `<out stem>.axes.parquet`. `-out_tsv` writes a long

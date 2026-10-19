@@ -56,7 +56,9 @@ if check == "help":
     expect("-instrument <name>" in out, "--help lists -instrument")
     _, out = run("--helphelp")
     expect("-instrument_file" in out, "--helphelp lists -instrument_file")
-    expect(re.search(r"-mz_tol <value>\s+Deprecated", out) is not None, "--helphelp lists the deprecated -mz_tol")
+    expect(re.search(r"^Deprecated names, still accepted .*-mz_tol,", out, re.M) is not None, "--helphelp names the deprecated -mz_tol once, at the end")
+    expect(re.search(r"^  -mz_tol <", out, re.M) is None, "--helphelp does not list the deprecated names as options")
+    expect(out.count("Calibration from the run itself:") == 1, "--helphelp has one calibration section")
 
 elif check == "unknown_option":
     rc, out = run("-in", IN, "-mz_tolx", "5", "-threadz", "2", ok=False)
@@ -126,6 +128,39 @@ elif check == "user_instruments":
     expect(s["values"]["mz_accuracy_ms2"] == {"value": "9", "source": "instrument-default:Astral"}, "without them the shipped file", json.dumps(s["values"]))
     rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", ok=False, env={"DIATRACEEXTRACTOR_INSTRUMENT_DIR": os.path.abspath("missing")})
     expect(rc == 6 and "is not a directory" in out, "a missing $DIATRACEEXTRACTOR_INSTRUMENT_DIR is an error", out)
+
+elif check == "combinations":
+    # errors before any work
+    for what, args, msg in (
+        ("-rt_trafo_invert without -rt_trafo", ["-rt_trafo_invert"], "-rt_trafo_invert needs -rt_trafo"),
+        ("two outputs on one path", ["-out", "same.parquet", "-out_axes", "same.parquet"], "name the same file"),
+        ("an output over an input", ["-out_tsv", LIB], "would overwrite the input -lib"),
+    ):
+        rc, out = run("-in", IN, "-lib", LIB, *FIXED, *(["-out", "x.parquet"] if "-out" not in args else []), *args, ok=False)
+        expect(rc == 6 and msg in out, f"error: {what}", out)
+    rc, out = run("-in", IN, "-lib", LIB, "-mz_calibration", "off", "-out", "x.parquet", ok=False)
+    expect(rc == 6 and "-mz_calibration off needs fixed tolerances" in out, "error: -mz_calibration off without tolerances", out)
+    # options without effect: one WARNING line
+    for what, args, names in (
+        ("-no_ms1", ["-no_ms1", "-ms1_isotopes", "5", "-ms1_axis", "cycles"], "-ms1_isotopes, -ms1_axis, -mz_tol_ms1 (-no_ms1)"),
+        ("-scheme B", ["-scheme", "B", "-mz_accuracy_ms2", "7"], "-mz_accuracy_ms2 (-scheme B"),
+        ("a fixed tolerance", ["-mz_accuracy_ms2", "7"], "-mz_accuracy_ms2 (-mz_tol_ms2 fixes the fragment tolerance)"),
+        ("the whole run", ["-rt_mode", "minutes"], "-rt_mode (a negative -rt_window extracts the whole run)"),
+    ):
+        rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", *args)
+        expect(f"WARNING: without effect here: " in out and names in out, f"warning: {what}", out)
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet")
+    expect("without effect" not in out, "no such warning for a plain command", out)
+    # only -out_mzml: the library is not opened
+    rc, out = run("-in", IN, "-lib", LIB, "-out_mzml", "run.mzML")
+    expect("-lib (only -out_mzml is written)" in out and "Library:" not in out, "-out_mzml alone does not open -lib", out)
+    # -ids: counted
+    open("ids.txt", "w").write("Precursor.Id\nNOT_THERE\nPEPTIDEA\n")
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", "-ids", "ids.txt")
+    expect("1 of the 2 ids of -ids are not in the library" in out, "-ids: unknown ids are counted", out)
+    open("none.txt", "w").write("NOT_THERE\n")
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", "-ids", "none.txt", ok=False)
+    expect(rc == 4 and "None of the 1 ids of -ids is in the library" in out, "-ids: none in the library is an error", out)
 
 elif check == "compatibility":
     # the 0.2.14 names give the same traces as the current ones
