@@ -78,8 +78,6 @@
   Orbitrap Astral and the timsTOF are the only target instruments; no further ones are planned.
 
 ## Open
-- **Laptop benchmark with V0.3.0** (MacBook Pro M4 Max, `scripts/bench_macos.sh` with the Homebrew release binary):
-  requested 2026-10-19; report §6 still shows V0.2.7's laptop series.
 - **TOPPBase patch upstream:** `patches/openms-toppbase-deprecated-options.patch` (deprecated options, one-line
   unknown-option message, `--helphelp` listing) to be offered to OpenMS; not yet.
 - **Release signing** (waiting on secrets): the macOS `.pkg` is built and tested on every macOS build and published
@@ -97,6 +95,9 @@
 - Share the trace export (`benchmark-data/traces-v0.2.1`, 179 GB) and the results with the group.
 
 ## Done (recent)
+- **Laptop benchmark with V0.3.0** (2026-10-19, M4 Max, the Homebrew release, on battery; report §6,
+  `results/macos-benchmark/v0.3.0/`): 6.6 s at 1 thread, 0.88 s at 16 (V0.2.7: 6.2 / 0.70 s; same CPU time, second
+  repeats within 10%); the full 7 M library 26.7 s in 4.4 GiB with the measured window (V0.2.7's fixed ±60 s: 14.7 s).
 - **Command-line review of 0.3.0** (2026-10-19, `docs/cli-review-0.3/REVIEW.md`; own pass, Codex, Kimi; Vibe gave
   no output): options without effect named in one warning line; errors for colliding outputs, `-rt_trafo_invert`
   without `-rt_trafo`, `-mz_calibration off` without tolerances; `-out_mzml` alone does not open the library; `-ids`
