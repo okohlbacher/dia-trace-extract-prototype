@@ -74,9 +74,8 @@ DIATraceExtractor -in run.mzpeak -out_mzml run.mzML
 ```
 
 `DIATraceExtractor --help` lists the 14 everyday options, `--helphelp` all of them; a mistyped option gets one line
-with the closest name (`Unknown option '-mz_tolx' (did you mean -mz_tol_ms2?).`). The option names of 0.2.14 and earlier still work
-until 0.4 (one `WARNING:` line names the current ones); `-write_ini new.ini -ini old.ini` rewrites an old INI file on
-the current names. Option names follow one
+with the closest name (`Unknown option '-mz_tolx' (did you mean -mz_tol_ms2?).`). The option names of 0.2.14 and earlier were removed in 0.4 (a hint
+names the current one); convert an old INI file with 0.3 (`-write_ini new.ini -ini old.ini`).
 pattern: `rt_*` for retention time, `mz_*` for m/z with `_ms2`/`_ms1` for the level, `ms1_*` for MS1 traces, `out_*`
 for output files.
 

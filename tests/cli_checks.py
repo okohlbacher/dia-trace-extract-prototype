@@ -56,8 +56,7 @@ if check == "help":
     expect("-instrument <name>" in out, "--help lists -instrument")
     _, out = run("--helphelp")
     expect("-instrument_file" in out, "--helphelp lists -instrument_file")
-    expect(re.search(r"^Deprecated names, still accepted .*-mz_tol,", out, re.M) is not None, "--helphelp names the deprecated -mz_tol once, at the end")
-    expect(re.search(r"^  -mz_tol <", out, re.M) is None, "--helphelp does not list the deprecated names as options")
+    expect("-mz_tol <" not in out and "Deprecated names" not in out, "--helphelp has no 0.2.14 names (removed in 0.4)")
     expect(out.count("Calibration from the run itself:") == 1, "--helphelp has one calibration section")
 
 elif check == "unknown_option":
@@ -163,49 +162,25 @@ elif check == "combinations":
     expect(rc == 4 and "None of the 1 ids of -ids is in the library" in out, "-ids: none in the library is an error", out)
 
 elif check == "compatibility":
-    # the 0.2.14 names give the same traces as the current ones
-    run("-in", IN, "-lib", LIB, "-rt_window", "-1", "-mz_tol", "20", "-mz_tol_ms1", "20", "-mz_sigma_ms1", "4", "-out_shards", "4", "-threads", "2", "-out", "old.parquet")
-    run("-in", IN, "-lib", LIB, "-rt_window", "-1", "-mz_tol_ms2", "20", "-mz_tol_ms1", "20", "-write_parts", "4", "-threads", "2", "-out", "new.parquet")
-    expect(same_table("old.parquet", "new.parquet"), "old and new option names: identical traces")
+    # the names of 0.2.14 were removed in 0.4: an error with a hint naming the replacement
     rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-mz_tol", "5", "-out", "x.parquet", ok=False)
-    expect(rc == 6 and "different values" in out, "an old and a new name with different values is an error", out)
-    # an old name in an INI counts as given, also at its old default: it overrides an instrument file
-    ini = open(os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini")).read()
-    expect('name="mz_sigma_ms1" value="4.0"' in ini, "fixture: the 0.2.14 INI has mz_sigma_ms1 4.0")
-    own = write_yaml("ms1.yaml", "name: Wide\nextends: orbitrap\nmz_accuracy_ms1: 8\n")
-    s = extract("oldini", "-ini", os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini"), "-instrument_file", own)
-    expect(s["values"]["mz_accuracy_ms1"] == {"value": "4", "source": "given"}, "old INI value (at its old default) over the instrument file", json.dumps(s["values"]))
-    # an INI written by 0.2.14 runs
-    rc, out = run("-ini", os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini"), "-in", IN, "-lib", LIB, *FIXED, "-out", "ini.parquet")
-    expect(rc == 0, "an INI written by 0.2.14 runs")
+    expect(rc == 6 and "-mz_tol was renamed to -mz_tol_ms2" in out and "did you mean -mz_tol_ms2" in out, "an old name: error with a hint", out)
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-rt_mode", "identity", "-out", "x.parquet", ok=False)
+    expect(rc != 0 and "use -rt_mode seconds" in out, "an old -rt_mode value: error with a hint", out)
+    rc, out = run("-ini", os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini"), "-in", IN, "-lib", LIB, *FIXED, "-out", "ini.parquet", ok=False)
+    expect(rc != 0 and "The -ini file is from 0.2.14 or earlier" in out, "an INI of 0.2.14: error with a hint", out)
+    rc, out = run("-ms1_isotopes", "-1", "-in", IN, "-lib", LIB, *FIXED, "-out", "x.parquet", ok=False)
+    expect(rc != 0, "-ms1_isotopes -1 (0.2.14's -no_ms1) is rejected", out)
 
 elif check == "write_ini":
     run("-write_ini", "new.ini")
     text = open("new.ini").read()
-    expect(not re.search(r'name="(mz_tol|mz_sigma_ms2|aggregation|out_shards|calibration:anchor_fdr)"', text), "-write_ini leaves the 0.2.14 names out")
+    expect(not re.search(r'name="(mz_tol|mz_sigma_ms2|aggregation|out_shards|calibration:anchor_fdr)"', text), "-write_ini has no 0.2.14 names")
     expect('name="instrument"' in text and 'name="instrument_file"' in text, "-write_ini has the new options")
     # round trip: the written INI runs and gives the defaults' traces
     run("-ini", "new.ini", "-in", IN, "-lib", LIB, *FIXED, "-out", "roundtrip.parquet")
     run("-in", IN, "-lib", LIB, *FIXED, "-out", "plain.parquet")
     expect(same_table("roundtrip.parquet", "plain.parquet"), "-write_ini round trip: identical traces")
-    # an old INI rewritten: values on the new names
-    old = open(os.path.join(src, "docs", "cli-review", "defaults-0.2.14.ini")).read()
-    for k, v in (("mz_tol", "6.0"), ("rt_mode", "identity"), ("aggregation", "sum"), ("ms1_isotope_spacing", "unit")):
-        old, n = re.subn(rf'(name="{k}" value=")[^"]*"', rf'\g<1>{v}"', old)
-        expect(n == 1, f"fixture has {k}")
-    open("old.ini", "w").write(old)
-    run("-write_ini", "migrated.ini", "-ini", "old.ini")
-    m = open("migrated.ini").read()
-    # the current name with another value in the same INI is kept (and reported)
-    both = re.sub(r'(\s*)(<ITEM name="mz_tol" [^\n]*/>)', r'\1\2\1<ITEM name="mz_tol_ms2" value="20.0" type="double" description="" required="false" advanced="false" />', old, count=1)
-    expect('name="mz_tol_ms2" value="20.0"' in both, "fixture: an INI with mz_tol 6 and mz_tol_ms2 20")
-    open("both.ini", "w").write(both)
-    rc, out = run("-write_ini", "both_migrated.ini", "-ini", "both.ini")
-    expect('name="mz_tol_ms2" value="20.0"' in open("both_migrated.ini").read(), "-write_ini keeps the current name's value on a conflict")
-    expect("mz_tol (its current name mz_tol_ms2 has another value, kept)" in out, "-write_ini reports the conflict", out)
-    for k, v in (("mz_tol_ms2", "6.0"), ("rt_mode", "seconds"), ("scheme", "B")):
-        expect(f'name="{k}" value="{v}"' in m, f"-write_ini -ini <0.2.14 INI>: {k} = {v}")
-    expect('name="mz_tol"' not in m and 'name="aggregation"' not in m, "-write_ini -ini <0.2.14 INI>: no old names")
 
 else:
     sys.exit(f"unknown check {check}")

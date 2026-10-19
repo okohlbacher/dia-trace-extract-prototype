@@ -30,6 +30,7 @@
 #include <omp.h>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <array>
 #include <iterator>
 #include <map>
@@ -195,108 +196,80 @@ void writeRunAsMzML(const ODIA::RunGrid& grid, const std::string& source, const 
   OPENMS_LOG_INFO << "mzML: " << items.size() << " spectra (" << grid.ms1.rt.size() << " MS1, " << grid.windows.size() << " windows) -> " << filename << std::endl;
 }
 
-/// Names of 0.2.14 and earlier: renamed (replacement set) or removed (why set), with their old defaults.
-struct Deprecated { const char* name; char type; const char* old_default; const char* replacement; const char* new_default; const char* why; };
-constexpr double kUnsetDouble = -1e300;   // "not given" for the deprecated names (printed in INI files written by -write_ini)
-constexpr int kUnsetInt = -2147483647;
-const Deprecated kDeprecated[] = {
-  {"mz_tol", 'd', "0.0", "mz_tol_ms2", "0.0", ""},
-  {"mz_sigma_ms2", 'd', "0.0", "mz_accuracy_ms2", "0.0", ""},
-  {"mz_sigma_ms1", 'd', "4.0", "mz_accuracy_ms1", "0.0", ""},
-  {"mass_calibration", 's', "auto", "mz_calibration", "auto", ""},
-  {"mz_offset", 'd', "0.0", "mz_offset_ms2", "0.0", ""},
-  {"calibration:mass_model", 's', "linear", "calibration:mz_model", "linear", ""},
-  {"out_shards", 'i', "32", "write_parts", "32", ""},
-  {"rt_intercept", 'd', "0.0", "", "", "the linear RT map; give -rt_anchors"},
-  {"rt_slope", 'd', "1.0", "", "", "the linear RT map; give -rt_anchors"},
-  {"rt_anchor_model", 's', "lowess", "", "", "anchors are fitted with LOWESS"},
-  {"aggregation", 's', "max", "", "", "OpenSWATH's sum is part of -scheme B"},
-  {"ms1_isotope_spacing", 's', "charge", "", "", "OpenSWATH's unit spacing is part of -scheme B"},
-  {"window_assignment", 's', "nearest", "", "", "OpenSWATH's assignment is part of -scheme B"},
-  {"log8_decades", 'd', "6.0", "", "", "the log8 encoding spans 6 decades"},
-  {"ingest_threads", 'i', "0", "", "", "the ingest uses min(threads, 32)"},
-  {"library_part_rows", 'i', "65536", "", "", "fixed at 65536"},
-  {"calibration:panel_fraction", 'd', "0.05", "", "", "fixed at 0.05; -calibration:panel sets the panel size"},
-  {"calibration:search_factor", 'd', "3.0", "", "", "fixed at 3"},
-  {"calibration:search_rounds", 'i', "3", "", "", "fixed at 3"},
-  {"calibration:accuracy_rule", 's', "fixed", "", "", "the tolerance is -mz_accuracy_ms2 x the measured width"},
-  {"calibration:coverage", 'd', "0.99", "", "", "fixed at 0.99"},
-  {"calibration:coverage_factor", 'd', "1.3", "", "", "fixed at 1.3"},
-  {"calibration:min_relative_intensity", 'd', "0.0", "", "", "fixed at 0"},
-  {"calibration:strict_min_fragments", 'i', "5", "", "", "fixed at 5"},
-  {"calibration:strict_min_correlation", 'd', "0.9", "", "", "fixed at 0.9"},
-  {"calibration:strict_min_cosine", 'd', "0.85", "", "", "fixed at 0.85"},
-  {"calibration:min_fragments", 'i', "4", "", "", "fixed at 4"},
-  {"calibration:min_correlation", 'd', "0.8", "", "", "fixed at 0.8"},
-  {"calibration:min_cosine", 'd', "0.75", "", "", "fixed at 0.75"},
-  {"calibration:half_window_cycles", 'i', "0", "", "", "measured from the peak width"},
-  {"calibration:seed_window_cycles", 'i', "4", "", "", "fixed at 4"},
-  {"calibration:anchor_fdr", 'd', "0.0", "", "", "the decoy-calibrated cut is not used"},
-  {"calibration:decoy_shift", 'd', "0.4", "", "", "fixed at 0.4 Th"},
-  {"calibration:candidates", 'i', "5", "", "", "fixed at 5"},
-  {"calibration:mode_bins", 'i', "20", "", "", "fixed at 20"},
-  {"calibration:mode_bandwidth", 'd', "15.0", "", "", "fixed at 15 s"},
-  {"calibration:min_window", 'd', "30.0", "", "", "fixed at 30 s"},
-  {"calibration:rejection_rounds", 'i', "3", "", "", "fixed at 3"},
-  {"calibration:min_reject", 'd', "3.0", "", "", "fixed at 3 s"},
+/// The option names of 0.2.14 and earlier (accepted until 0.3, removed in 0.4), for one hint line when they are used.
+struct OldName { const char* name; const char* hint; };
+const OldName kOldNames[] = {
+  {"mz_tol", "renamed to -mz_tol_ms2 in 0.2.15"},
+  {"mz_sigma_ms2", "renamed to -mz_accuracy_ms2 in 0.2.15"},
+  {"mz_sigma_ms1", "renamed to -mz_accuracy_ms1 in 0.2.15"},
+  {"mass_calibration", "renamed to -mz_calibration in 0.2.15"},
+  {"mz_offset", "renamed to -mz_offset_ms2 in 0.2.15"},
+  {"calibration:mass_model", "renamed to -calibration:mz_model in 0.2.15"},
+  {"out_shards", "renamed to -write_parts in 0.2.15"},
+  {"rt_intercept", "removed in 0.2.15: the linear RT map; give -rt_anchors"},
+  {"rt_slope", "removed in 0.2.15: the linear RT map; give -rt_anchors"},
+  {"rt_anchor_model", "removed in 0.2.15: anchors are fitted with LOWESS"},
+  {"aggregation", "removed in 0.2.15: OpenSWATH's sum is part of -scheme B"},
+  {"ms1_isotope_spacing", "removed in 0.2.15: OpenSWATH's unit spacing is part of -scheme B"},
+  {"window_assignment", "removed in 0.2.15: OpenSWATH's assignment is part of -scheme B"},
+  {"log8_decades", "removed in 0.2.15: the log8 encoding spans 6 decades"},
+  {"ingest_threads", "removed in 0.2.15: the ingest uses min(threads, 32)"},
+  {"library_part_rows", "removed in 0.2.15: fixed at 65536"},
+  {"calibration:panel_fraction", "removed in 0.2.15: fixed at 0.05; -calibration:panel sets the panel size"},
+  {"calibration:search_factor", "removed in 0.2.15: fixed at 3"},
+  {"calibration:search_rounds", "removed in 0.2.15: fixed at 3"},
+  {"calibration:accuracy_rule", "removed in 0.2.15: the tolerance is -mz_accuracy_ms2 x the measured width"},
+  {"calibration:coverage", "removed in 0.2.15: fixed at 0.99"},
+  {"calibration:coverage_factor", "removed in 0.2.15: fixed at 1.3"},
+  {"calibration:min_relative_intensity", "removed in 0.2.15: fixed at 0"},
+  {"calibration:strict_min_fragments", "removed in 0.2.15: fixed at 5"},
+  {"calibration:strict_min_correlation", "removed in 0.2.15: fixed at 0.9"},
+  {"calibration:strict_min_cosine", "removed in 0.2.15: fixed at 0.85"},
+  {"calibration:min_fragments", "removed in 0.2.15: fixed at 4"},
+  {"calibration:min_correlation", "removed in 0.2.15: fixed at 0.8"},
+  {"calibration:min_cosine", "removed in 0.2.15: fixed at 0.75"},
+  {"calibration:half_window_cycles", "removed in 0.2.15: measured from the peak width"},
+  {"calibration:seed_window_cycles", "removed in 0.2.15: fixed at 4"},
+  {"calibration:anchor_fdr", "removed in 0.2.15: the decoy-calibrated cut is not used"},
+  {"calibration:decoy_shift", "removed in 0.2.15: fixed at 0.4 Th"},
+  {"calibration:candidates", "removed in 0.2.15: fixed at 5"},
+  {"calibration:mode_bins", "removed in 0.2.15: fixed at 20"},
+  {"calibration:mode_bandwidth", "removed in 0.2.15: fixed at 15 s"},
+  {"calibration:min_window", "removed in 0.2.15: fixed at 30 s"},
+  {"calibration:rejection_rounds", "removed in 0.2.15: fixed at 3"},
+  {"calibration:min_reject", "removed in 0.2.15: fixed at 3 s"},
 };
 
-/// -write_ini -ini <0.2.14 INI>: the values given under the old names, on the current names (the translations of
-/// resolveCompatibility_(); what cannot be translated is reported and left out).
-Param migrateIni(const Param& p)
+/// An old option name on the command line or in the -ini file gets one hint line before TOPP's own error.
+void hintOldNames(int argc, const char** argv)
 {
-  Param out;
-  std::vector<std::string> dropped;
-  const auto has = [&](const std::string& k) { return p.exists(k); };
-  const auto setD = [&](const Deprecated& d) { return d.type == 'd' && has(d.name) && double(p.getValue(d.name)) > kUnsetDouble / 2; };
-  const auto setI = [&](const Deprecated& d) { return d.type == 'i' && has(d.name) && int(p.getValue(d.name)) != kUnsetInt; };
-  const auto setS = [&](const Deprecated& d) { return d.type == 's' && has(d.name) && !p.getValue(d.name).toString().empty(); };
-  for (const auto& d : kDeprecated)
+  std::vector<std::string> ini_names;
+  for (int i = 1; i < argc; ++i)
   {
-    if (!(setD(d) || setI(d) || setS(d))) { continue; }
-    if (d.replacement[0] != '\0')
+    std::string a = argv[i];
+    if ((a == "-ini" || a == "--ini") && i + 1 < argc)
     {
-      // a different value under the current name in the same INI is a conflict: the current name is kept
-      const std::string nn = d.replacement;
-      bool clash = false;
-      if (p.exists(nn))
-      {
-        if (d.type == 's') { const std::string now = p.getValue(nn).toString(); clash = now != d.new_default && now != p.getValue(d.name).toString(); }
-        else
-        {
-          const double now = double(p.getValue(nn)), v = double(p.getValue(d.name));
-          clash = std::fabs(now - std::atof(d.new_default)) > 1e-12 && std::fabs(now - v) > 1e-12;
-        }
-      }
-      if (clash) { dropped.push_back(std::string(d.name) + " (its current name " + nn + " has another value, kept)"); continue; }
-      out.setValue(nn, p.getValue(d.name));
+      std::ifstream f(argv[i + 1]);
+      const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+      for (const auto& o : kOldNames) { if (text.find("name=\"" + std::string(o.name) + "\"") != std::string::npos) { ini_names.push_back("-" + std::string(o.name)); } }
       continue;
     }
-    const bool at_default = d.type == 's' ? p.getValue(d.name).toString() == d.old_default
-                          : std::fabs(double(p.getValue(d.name)) - std::atof(d.old_default)) < 1e-12;
-    const std::string n = d.name;
-    if (at_default || n == "aggregation" || n == "ms1_isotope_spacing" || n == "rt_intercept" || n == "rt_slope") { continue; }
-    dropped.push_back(n + " (removed in 0.2.15)");
+    while (!a.empty() && a.front() == '-') { a.erase(0, 1); }
+    for (const auto& o : kOldNames) { if (a == o.name) { std::cerr << "-" << o.name << " was " << o.hint << " (accepted until 0.3, removed in 0.4)." << std::endl; } }
+    if (a == "rt_mode" && i + 1 < argc)
+    {
+      const std::string m = argv[i + 1];
+      if (m == "identity" || m == "linear") { std::cerr << "-rt_mode " << m << " of 0.2.14: use -rt_mode seconds (library RT = run seconds), or -rt_anchors for another linear map." << std::endl; }
+      if (m == "anchors" || m == "trafo") { std::cerr << "-rt_mode " << m << " of 0.2.14: the file alone selects the map (-rt_" << m << " <file>)." << std::endl; }
+    }
   }
-  if (has("aggregation") && has("ms1_isotope_spacing") && p.getValue("aggregation").toString() == "sum" && p.getValue("ms1_isotope_spacing").toString() == "unit") { out.setValue("scheme", "B"); }
-  if (has("rt_mode"))
-  {
-    const std::string m = p.getValue("rt_mode").toString();
-    const double ic = has("rt_intercept") && double(p.getValue("rt_intercept")) > kUnsetDouble / 2 ? double(p.getValue("rt_intercept")) : 0.0;
-    const double sl = has("rt_slope") && double(p.getValue("rt_slope")) > kUnsetDouble / 2 ? double(p.getValue("rt_slope")) : 1.0;
-    if (m == "identity" || (m == "linear" && ic == 0.0 && sl == 1.0)) { out.setValue("rt_mode", "seconds"); }
-    else if (m == "linear" && ic == 0.0 && sl == 60.0) { out.setValue("rt_mode", "minutes"); }
-    else if (m == "linear") { out.setValue("rt_mode", "auto"); dropped.push_back("rt_mode linear (give the map as -rt_anchors)"); }
-    else if (m == "anchors" || m == "trafo") { out.setValue("rt_mode", "auto"); }
-  }
-  if (has("ms1_isotopes") && int(p.getValue("ms1_isotopes")) < 0) { out.setValue("no_ms1", "true"); out.setValue("ms1_isotopes", 2); }
-  if (!dropped.empty())
+  if (!ini_names.empty())
   {
     std::string t;
-    for (const auto& x : dropped) { t += (t.empty() ? "" : ", ") + x; }
-    OPENMS_LOG_WARN << "WARNING: not carried over into the new INI: " << t << "." << std::endl;
+    for (std::size_t k = 0; k < ini_names.size() && k < 5; ++k) { t += (k ? ", " : "") + ini_names[k]; }
+    std::cerr << "The -ini file is from 0.2.14 or earlier (" << t << (ini_names.size() > 5 ? ", ..." : "")
+              << "): convert it with DIATraceExtractor 0.3 (-write_ini new.ini -ini old.ini) or rename its entries." << std::endl;
   }
-  return out;
 }
 
 class TOPPDIATraceExtractor : public TOPPBase
@@ -338,6 +311,7 @@ protected:
                           "How library RT maps to the run: auto (fitted from the run itself; any library RT scale), "
                           "minutes (library RT is run minutes, e.g. a library tuned to this run), seconds (run seconds). "
                           "-rt_anchors or -rt_trafo select a given map instead.", false);
+    setValidStrings_("rt_mode", {"auto", "minutes", "seconds"});
     registerDoubleOption_("rt_window", "<s>", 0.0, "Extract +- this many seconds around each precursor's mapped RT. "
                           "0: measured from the run, along the gradient (7 x the RT scatter of the calibration anchors about "
                           "the RT map + 2 x their peak width; +-60 s with a warning when no calibration runs). Negative: "
@@ -365,9 +339,8 @@ protected:
                           "extension).", false, true);
     registerFlag_("targets_only", "Skip library decoys.", true);
     registerFlag_("no_ms1", "No MS1 traces (fragments only).", true);
-    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only; -1: "
-                       "0.2.14's spelling of -no_ms1, accepted until 0.4).", false, true);
-    setMinInt_("ms1_isotopes", -1); setMaxInt_("ms1_isotopes", 200);   // -1: 0.2.14's "no MS1" (now -no_ms1)
+    registerIntOption_("ms1_isotopes", "<n>", 2, "MS1 isotope peaks after the monoisotopic one (0: monoisotopic only).", false, true);
+    setMinInt_("ms1_isotopes", 0); setMaxInt_("ms1_isotopes", 200);
     registerStringOption_("ms1_axis", "<axis>", "scans", "MS1 traces on the MS1 scans (their own times, in the axes file) or "
                           "interpolated onto the MS2 cycle axis (cycles).", false, true);
     setValidStrings_("ms1_axis", {"scans", "cycles"});
@@ -419,137 +392,12 @@ protected:
     registerDoubleOption_("calibration:lowess_span", "<f>", 0.15, "LOWESS span of the fitted RT map.", false, true);
     setMinFloat_("calibration:lowess_span", 0.01); setMaxFloat_("calibration:lowess_span", 1.0);
 
-    // The names of 0.2.14 and earlier, so that old command lines and INI files keep working until 0.4: hidden,
-    // "unset" by default (so that their presence is visible), translated in resolveCompatibility_().
-    for (const auto& d : kDeprecated)
-    {
-      const std::string help = d.replacement[0] == '\0' ? "Removed in 0.2.15: " + std::string(d.why) : "Deprecated (0.2.15, removed in 0.4): use -" + std::string(d.replacement) + ".";
-      if (d.type == 'd') { registerDoubleOption_(d.name, "<value>", kUnsetDouble, help, false, true); }
-      else if (d.type == 'i') { registerIntOption_(d.name, "<value>", kUnsetInt, help, false, true); }
-      else { registerStringOption_(d.name, "<value>", "", help, false, true); }
-    }
-    // TOPPBase (patches/openms-toppbase-deprecated-options.patch): accepted, but not written by -write_ini nor
-    // suggested for a mistyped option; -write_ini -ini <old.ini> moves their values onto the current names
-    for (const auto& d : kDeprecated) { setDeprecated_(d.name); }
-    setDeprecatedMigration_(migrateIni);
   }
 
-  // --- 0.2.14 names: values given under an old name, translated onto the current options
-  std::map<std::string, double> dbl_;
-  std::map<std::string, int> int_;
-  std::map<std::string, std::string> str_;
-  std::map<std::string, bool> flag_;
-  double D(const std::string& n) { auto it = dbl_.find(n); return it != dbl_.end() ? it->second : getDoubleOption_(n); }
-  int I(const std::string& n) { auto it = int_.find(n); return it != int_.end() ? it->second : getIntOption_(n); }
-  std::string S(const std::string& n) { auto it = str_.find(n); return it != str_.end() ? it->second : getStringOption_(n); }
-  bool F(const std::string& n) { auto it = flag_.find(n); return it != flag_.end() ? it->second : getFlag_(n); }
-
-  /// Translates the 0.2.14 names and values; returns ILLEGAL_PARAMETERS (after one error line) when they cannot be.
-  ExitCodes resolveCompatibility_()
-  {
-    std::vector<std::string> notes;
-    std::size_t at_old_default = 0;
-    const auto setD = [&](const Deprecated& d) { return d.type == 'd' && getDoubleOption_(d.name) > kUnsetDouble / 2; };
-    const auto setI = [&](const Deprecated& d) { return d.type == 'i' && getIntOption_(d.name) != kUnsetInt; };
-    const auto setS = [&](const Deprecated& d) { return d.type == 's' && !getStringOption_(d.name).empty(); };
-    const auto oldValue = [&](const Deprecated& d) {
-      std::ostringstream o;
-      if (d.type == 'd') { o << getDoubleOption_(d.name); } else if (d.type == 'i') { o << getIntOption_(d.name); } else { o << getStringOption_(d.name); }
-      return o.str();
-    };
-    const auto isOldDefault = [&](const Deprecated& d) {
-      if (d.type == 'd') { return std::fabs(getDoubleOption_(d.name) - std::atof(d.old_default)) < 1e-12; }
-      if (d.type == 'i') { return getIntOption_(d.name) == std::atoi(d.old_default); }
-      return getStringOption_(d.name) == d.old_default;
-    };
-    for (const auto& d : kDeprecated)
-    {
-      if (!(setD(d) || setI(d) || setS(d))) { continue; }
-      if (d.replacement[0] != '\0')
-      {
-        // renamed: the value moves to the new name (also at its old default: an INI value counts as given); a
-        // different value given under the new name is a conflict. The command line overrides an INI file: an old
-        // name from the INI yields to a new name on the command line, an old name on the command line wins over a
-        // new name from the INI.
-        const std::string nn = d.replacement;
-        const bool old_cli = cli_names_.count(d.name) > 0, new_cli = cli_names_.count(nn) > 0;
-        if (!old_cli && new_cli) { notes.push_back("-" + std::string(d.name) + " of the INI file overridden by -" + nn); continue; }
-        bool clash = false;
-        if (d.type == 'd')
-        {
-          const double now = getDoubleOption_(nn), def = std::atof(d.new_default), v = getDoubleOption_(d.name);
-          clash = std::fabs(now - def) > 1e-12 && std::fabs(now - v) > 1e-12;
-          dbl_[nn] = v;
-        }
-        else if (d.type == 'i')
-        {
-          const int now = getIntOption_(nn), def = std::atoi(d.new_default), v = getIntOption_(d.name);
-          clash = now != def && now != v;
-          int_[nn] = v;
-        }
-        else
-        {
-          const std::string now = getStringOption_(nn), v = getStringOption_(d.name);
-          clash = now != d.new_default && now != v;
-          str_[nn] = v;
-        }
-        if (old_cli && !new_cli) { clash = false; }
-        if (clash) { OPENMS_LOG_ERROR << "-" << d.name << " (0.2.14's name of -" << nn << ") and -" << nn << " are given with different values." << std::endl; return ILLEGAL_PARAMETERS; }
-        notes.push_back("-" + std::string(d.name) + " -> -" + nn);
-        continue;
-      }
-      if (isOldDefault(d)) { ++at_old_default; continue; }   // a removed option at its old default changes nothing
-      const std::string n = d.name;
-      if (n == "aggregation" || n == "ms1_isotope_spacing" || n == "window_assignment" || n == "rt_intercept" || n == "rt_slope") { continue; }   // below
-      if (n == "ingest_threads" || n == "library_part_rows") { notes.push_back("-" + n + " ignored (removed; no effect on the traces)"); continue; }
-      OPENMS_LOG_ERROR << "-" << n << " " << oldValue(d) << ": removed in 0.2.15 (" << d.why << ")." << std::endl;
-      return ILLEGAL_PARAMETERS;
-    }
-    // OpenSWATH's rules as separate switches (0.2.14 and earlier) = -scheme B
-    {
-      const std::string agg = getStringOption_("aggregation"), sp = getStringOption_("ms1_isotope_spacing"), wa = getStringOption_("window_assignment");
-      const bool sum = agg == "sum", unit = sp == "unit", all = wa == "all";
-      if (sum && unit)
-      {
-        str_["scheme"] = "B";
-        notes.push_back("-aggregation sum -ms1_isotope_spacing unit -> -scheme B (which also assigns every window containing the precursor)");
-      }
-      else if (sum || unit || all)
-      {
-        OPENMS_LOG_ERROR << (sum ? "-aggregation sum" : unit ? "-ms1_isotope_spacing unit" : "-window_assignment all")
-                         << ": removed in 0.2.15; OpenSWATH's rules are the preset -scheme B (sum, unit isotope spacing, every containing window)." << std::endl;
-        return ILLEGAL_PARAMETERS;
-      }
-    }
-    // -rt_mode values of 0.2.14 (whose default was linear with intercept 0 and slope 1: library RT = run seconds)
-    {
-      const std::string m = getStringOption_("rt_mode");
-      const double ic = getDoubleOption_("rt_intercept") > kUnsetDouble / 2 ? getDoubleOption_("rt_intercept") : 0.0;
-      const double sl = getDoubleOption_("rt_slope") > kUnsetDouble / 2 ? getDoubleOption_("rt_slope") : 1.0;
-      if (m == "identity") { str_["rt_mode"] = "seconds"; notes.push_back("-rt_mode identity -> seconds"); }
-      else if (m == "linear")
-      {
-        if (ic == 0.0 && sl == 1.0) { str_["rt_mode"] = "seconds"; notes.push_back("-rt_mode linear (0.2.14's default: intercept 0, slope 1) -> seconds"); }
-        else if (ic == 0.0 && sl == 60.0) { str_["rt_mode"] = "minutes"; notes.push_back("-rt_mode linear -rt_slope 60 -> minutes"); }
-        else { OPENMS_LOG_ERROR << "-rt_mode linear with -rt_intercept " << ic << " -rt_slope " << sl << ": removed in 0.2.15; give the map as -rt_anchors (two columns, library RT and run RT)." << std::endl; return ILLEGAL_PARAMETERS; }
-      }
-      else if (m == "anchors" || m == "trafo")
-      {
-        if (getStringOption_(m == "anchors" ? "rt_anchors" : "rt_trafo").empty()) { OPENMS_LOG_ERROR << "-rt_mode " << m << " needs -rt_" << m << " <file> (the file alone selects the map since 0.2.15)." << std::endl; return ILLEGAL_PARAMETERS; }
-        str_["rt_mode"] = "auto"; notes.push_back("-rt_mode " + m + " -> implied by -rt_" + m);
-      }
-      else if (m != "auto" && m != "minutes" && m != "seconds") { OPENMS_LOG_ERROR << "-rt_mode " << m << ": use auto, minutes or seconds." << std::endl; return ILLEGAL_PARAMETERS; }
-    }
-    if (getIntOption_("ms1_isotopes") < 0) { flag_["no_ms1"] = true; int_["ms1_isotopes"] = 0; notes.push_back("-ms1_isotopes -1 -> -no_ms1"); }
-    if (!notes.empty() || at_old_default > 0)
-    {
-      std::string t;
-      for (const auto& x : notes) { t += (t.empty() ? "" : "; ") + x; }
-      if (at_old_default > 0) { t += (t.empty() ? "" : "; ") + std::to_string(at_old_default) + " removed option(s) at their old default (ignored)"; }
-      OPENMS_LOG_WARN << "WARNING: options of 0.2.14 (accepted until 0.4): " << t << "." << std::endl;
-    }
-    return EXECUTION_OK;
-  }
+  double D(const std::string& n) { return getDoubleOption_(n); }
+  int I(const std::string& n) { return getIntOption_(n); }
+  std::string S(const std::string& n) { return getStringOption_(n); }
+  bool F(const std::string& n) { return getFlag_(n); }
 
   ExitCodes main_(int argc, const char** argv) override
   {
@@ -558,7 +406,6 @@ protected:
     {
       const std::string a = argv[i];
       if (a == "-threads" || a == "--threads") { threads_given_ = true; }
-      if (a.size() > 1 && a[0] == '-' && std::isalpha(static_cast<unsigned char>(a[a[1] == '-' ? 2 : 1]))) { cli_names_.insert(a.substr(a[1] == '-' ? 2 : 1)); }
       if ((a == "-ini" || a == "--ini") && i + 1 < argc)
       {
         // an INI file sets the thread count only when it has a threads entry (TOPP writes one; hand-written may not)
@@ -578,7 +425,6 @@ protected:
   }
 
   bool threads_given_ = false;
-  std::set<std::string> cli_names_;   ///< options given on the command line (not from an INI file)
 
   int threadCount_()
   {
@@ -652,7 +498,7 @@ protected:
       if (!ms1)
       {
         const std::string why = "-no_ms1";
-        add(I("ms1_isotopes") != 2 && I("ms1_isotopes") >= 0, "ms1_isotopes", why);
+        add(I("ms1_isotopes") != 2, "ms1_isotopes", why);
         add(str("ms1_axis", "scans"), "ms1_axis", why);
         add(num("mz_tol_ms1", 0.0), "mz_tol_ms1", why);
         add(num("mz_accuracy_ms1", 0.0), "mz_accuracy_ms1", why);
@@ -707,7 +553,6 @@ protected:
   ExitCodes run_(int, const char**)
   {
     g_debug = debug_level_ > 0;
-    if (const ExitCodes c = resolveCompatibility_(); c != EXECUTION_OK) { return c; }
     const ODIA::StageTime t_start = ODIA::stageClock();
     const std::string in = S("in"), lib_file = S("lib");
     if (!std::filesystem::is_regular_file(in) || !std::ifstream(in, std::ios::binary))   // portable readability test
@@ -1288,6 +1133,7 @@ int main(int argc, const char** argv)
   // I/O). libgomp reads OMP_WAIT_POLICY only when it is loaded, so set it and re-execute once; an
   // explicit user setting is respected.
   if (std::getenv("OMP_WAIT_POLICY") == nullptr) { ODIA::platform::reexecWithEnv("OMP_WAIT_POLICY", "PASSIVE", argc, argv); }
+  hintOldNames(argc, argv);
   TOPPDIATraceExtractor tool;
   return tool.main(argc, argv);
 }
