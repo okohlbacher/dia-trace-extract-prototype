@@ -3,7 +3,7 @@
 Behaviour changes a user must know about, in plain words. Releases before 0.3.0 are summarised in
 `docs/10-release-report.md` (Appendix A and the repository paragraph).
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-10-19)
 
 - **Faster beyond 64 threads:** every finished task woke all idle workers, which queued for the scheduler's lock
   and slept again (3.6 M context switches at 192 threads); now one sleeping worker is woken, and a worker that takes a
