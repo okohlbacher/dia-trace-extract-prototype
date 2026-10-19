@@ -5,6 +5,15 @@ Behaviour changes a user must know about, in plain words. Releases before 0.3.0 
 
 ## 0.4.0 (unreleased)
 
+- **Faster beyond 64 threads:** every finished task woke all idle workers, which queued for the scheduler's lock
+  and slept again (3.6 M context switches at 192 threads); now one sleeping worker is woken, and a worker that takes a
+  task wakes the next. The units in flight grow with the threads (2 per thread beyond 32; were capped at 64). 7 M
+  precursors on 2 × EPYC 9654: 192 threads 22.0 → 11.8 s, 384 threads 40.6 → 12.7 s, 16–96 threads unchanged; the
+  output is identical at every thread count. The default (the physical cores) is no longer slower than 64 threads.
+- **TSV output memory:** a unit's text is one buffer of the recycling Arrow pool, and the encoded bytes waiting for
+  the writers are bounded (1 GiB): the human library to `-out_tsv` peaked at 11.2 GiB, now 6.3 GiB (and 85 → 66 s);
+  the TSV is byte-identical.
+
 - **The option names of 0.2.14 and earlier are removed** (accepted with a warning since 0.2.16): `-mz_tol`,
   `-mz_sigma_ms2`/`_ms1`, `-mass_calibration`, `-mz_offset`, `-calibration:mass_model`, `-out_shards`, `-rt_mode
   identity|linear|anchors|trafo`, `-ms1_isotopes -1` and the 30 options removed in 0.2.15 are errors now; the error is
