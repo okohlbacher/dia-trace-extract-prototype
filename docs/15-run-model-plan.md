@@ -92,10 +92,34 @@ fewer anchors and finding them faster.
 | step | change | output effect | validation |
 |---|---|---|---|
 | 1 | done: run model as metadata, estimator fixes above | none (traces identical) | unit tests (gradient, density gap, invalid input) |
-| 2 | m/z terms in the run model: width along RT and by intensity decile (MS1, MS2), from a broad fixed diagnostic window as well as the narrowed one, with counts per cell | metadata only | unit test; traces identical |
+| 2 | done: m/z terms in the run model (`mz`): width along RT and by intensity tenth (MS1, MS2), from the broad first pass (±50 ppm) and the narrowed final pass, with counts, the share beyond the tolerance and a background share (§7) | metadata only | unit test; traces identical on both instruments |
 | 3 | stage 1 split into RT tiles per isolation window (overlapping, deduplicated, canonical order) | none intended: identical anchors | anchor identities and output identical across thread counts; timsTOF calibration time (target −1–2 s) |
 | 4 | continuous RT window from the run model, opt-in (`-rt_window_model running`) | window only when chosen | per-run, stratified coverage with uncertainty on the ten configurations and held-out runs, endpoint behaviour, fallback when the model is empty; default only after that |
 | 5 | intensity-aware m/z tolerance, opt-in, after the research item above | traces | signal recovery, interference and quantitative bias by intensity; trace-quality screen; DIA-NN agreement |
 | — | dropped: anchor reduction, sequential stopping | | |
 
 Defaults stay as they are; the run model is diagnostics for now and the input for steps 4–5 once validated.
+
+## 7. Step 2: the m/z terms on the benchmark runs (2026-10-20)
+
+Astral run 01 with the 7 M library, timsTOF A01; core robust scale (ppm) about the final mass model; "broad" = the
+strict stage-1 anchors at ±50 ppm, "final" = the last stage-2 pass; tenths by centroid intensity. Traces identical to
+0.4.0 on both (only `odia.run_model` differs).
+
+| | centroids | scale | along RT | weakest / strongest tenth | beyond tolerance | background |
+|---|---|---|---|---|---|---|
+| Astral MS2 broad / final | 3,153 / 3,691 | 0.92 / 0.98 | 0.79–1.00 / 0.90–1.06 | 1.89 / 0.70 · 2.33 / 0.72 | 2.0% / 1.9% (±8.6) | 1.8% / 2.8% |
+| Astral MS1 broad / final | 530 / 606 | 0.36 / 0.39 | 0.30–0.39 / 0.32–0.46 | 0.69 / 0.23 · 0.71 / 0.25 | 9.6% / 3.6% (±1.5) | 7.6% / 4.3% |
+| timsTOF MS2 broad / final | 1,752 / 2,235 | 2.59 / 2.71 | 1.9–2.9 / 2.3–3.0 | 5.39 / 1.36 · 5.68 / 1.44 | 2.7% / 2.0% (±10.8) | 1.8% / 1.3% |
+| timsTOF MS1 broad / final | 293 / 373 | 2.44 / 2.29 | 1.3–3.9 / 1.4–3.5 | 3.40 / 3.19 · 4.40 / 2.67 (5 / 7 bins) | 9.9% / 6.7% (±8.9) | 9.6% / 7.5% |
+
+- **No sign of the selection loop at today's windows:** the broad widths are not larger than the final ones (they are
+  4–16% smaller on MS2, from the stricter, stronger stage-1 anchors -- a different population, so the comparison is
+  not a clean test). The final windows are 25× (Astral MS2) to 12× (timsTOF MS1) the scale, so they cannot truncate
+  the core; the loop matters once a tolerance is narrowed towards the scale (step 5).
+- **The intensity dependence holds in the broad search:** 2.7× (Astral MS2), 4× (timsTOF MS2), 3× (Astral MS1)
+  between the weakest and strongest tenth; timsTOF MS1 is too sparse (293–373 centroids) for a firm intensity trend.
+- **MS1 apex centroids beyond the tolerance (4–10%) are mostly background** (the background share is about as large):
+  a precursor without its own centroid in the window takes a random one.
+- The m/z widths along RT agree with the offline analysis (`results/runmodel/mass.py`; timsTOF MS1 varies ×2.6 along
+  the gradient).

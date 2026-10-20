@@ -788,6 +788,8 @@ namespace ODIA
     };
     std::vector<MassErr> ms2_ppm, ms1_ppm;
     errors(stage1, a1, ms2_ppm, ms1_ppm);
+    const std::vector<MassErr> ms2_broad = ms2_ppm, ms1_broad = ms1_ppm;   // the run model's broad-search diagnostics
+    const MassSearch broad_search = search;
     MassModel m2 = massModel(ms2_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms2_offset, search.ms2_width, opt.coverage, opt.linear_mass_model);
     MassModel m1 = massModel(ms1_ppm, opt.accuracy_sigma > 0 ? opt.accuracy_sigma : opt.fallback_sigma, search.ms1_offset, search.ms1_width, opt.coverage, opt.linear_mass_model);
 
@@ -944,6 +946,20 @@ namespace ODIA
     res.ms2_search_ppm = search.ms2_width; res.ms1_search_ppm = search.ms1_width;
     res.strict_mass_anchors = mass_anchors;
     res.decoy_anchors = stage2_decoys;
+    const auto sample = [](const std::vector<MassErr>& v, const MassModel& m, double centre, double width) {
+      MassSample s;
+      s.search_ppm = width;
+      for (const auto& e : v)
+      {
+        s.rt.push_back(e.rt); s.residual.push_back(e.ppm - (m.offset + m.slope * (e.mz - m.mz_ref)));
+        s.window.push_back(e.ppm - centre); s.intensity.push_back(e.intensity);
+      }
+      return s;
+    };
+    res.ms2_broad = sample(ms2_broad, m2, broad_search.ms2_offset, broad_search.ms2_width);
+    res.ms1_broad = sample(ms1_broad, m1, broad_search.ms1_offset, broad_search.ms1_width);
+    res.ms2_final = sample(ms2_ppm, m2, search.ms2_offset, search.ms2_width);
+    res.ms1_final = sample(ms1_ppm, m1, search.ms1_offset, search.ms1_width);
     res.ms2_mass_points = ms2_ppm.size();
     res.ms1_mass_points = ms1_ppm.size();
     res.time = stageClock() - t0;

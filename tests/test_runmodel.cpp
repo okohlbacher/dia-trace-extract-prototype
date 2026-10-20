@@ -57,5 +57,29 @@ int main()
     const std::vector<double> other(m.rt.size(), 1.0);
     check("foreign curve gives NaN", std::isnan(m.at(other, 900.0)) ? 1.0 : 0.0, 1, 0);
   }
+  // m/z errors: width 3 ppm for the weakest tenth falling to 1 ppm for the strongest (log-uniform intensities),
+  // offset 0, plus 10% random centroids flat over a +-50 ppm window
+  {
+    std::uniform_real_distribution<double> li(3.0, 7.0), w(-50.0, 50.0), u01(0.0, 1.0);
+    std::vector<double> t3, r3, win, in;
+    for (int i = 0; i < 20000; ++i)
+    {
+      const double l = li(rng), x = (l - 3.0) / 4.0;
+      double e = (3.0 - 2.0 * x) * z(rng);
+      if (u01(rng) < 0.1) { e = w(rng); }
+      t3.push_back(u(rng)); r3.push_back(e); win.push_back(e); in.push_back(std::pow(10.0, l));
+    }
+    const ODIA::MzErrors e = ODIA::estimateMzErrors("ms2", "broad", t3, r3, win, in, 50.0, 6.0);
+    check("m/z bins", static_cast<double>(e.scale_by_intensity.size()), 10, 0);
+    check("m/z scale, weakest tenth", e.scale_by_intensity.front(), 2.9, 0.3);   // bin centre x = 0.05
+    check("m/z scale, strongest tenth", e.scale_by_intensity.back(), 1.1, 0.15);
+    check("m/z background share", e.background, 0.1, 0.02);
+    check("m/z count per bin", static_cast<double>(e.count_by_intensity[3]), 2000, 0);
+    check("m/z centre along RT", e.center_rt[e.center_rt.size() / 2], 0.0, 0.1);
+    check("m/z too few points: empty", static_cast<double>(ODIA::estimateMzErrors("ms1", "final", {1}, {0}, {0}, {1}, 5, 1).empty()), 1, 0);
+    ODIA::RunModel only_mz;
+    only_mz.mz.push_back(e);
+    check("m/z only: model not empty", only_mz.empty() ? 0.0 : 1.0, 1, 0);
+  }
   return bad ? 1 : 0;
 }

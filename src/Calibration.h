@@ -79,6 +79,14 @@ namespace ODIA
     float fwhm_interp_s = 0;             ///< the same with the half-apex crossings interpolated between cycles (s)
   };
 
+  /// Apex mass errors of one level and search (diagnostics for the run model): run RT (s), residual about the final
+  /// mass model and position in the search window (ppm from its centre), centroid intensity; the window's half width.
+  struct MassSample
+  {
+    std::vector<double> rt, residual, window, intensity;
+    double search_ppm = 0;
+  };
+
   struct CalibrationResult
   {
     std::vector<Anchor> anchors;         ///< all accepted apexes (used = in the final fit)
@@ -104,6 +112,9 @@ namespace ODIA
     int search_rounds = 0;                                    ///< stage-2 passes run
     std::size_t strict_mass_anchors = 0;                      ///< anchors the mass model comes from
     std::uint64_t ms2_mass_points = 0, ms1_mass_points = 0;
+    /// The mass errors behind the model: "broad" = stage 1 (strict anchors, the fixed first-pass window), "final" = the
+    /// last stage-2 pass (the narrowed window), both about the final model.
+    MassSample ms2_broad, ms1_broad, ms2_final, ms1_final;
     StageTime time;
   };
 

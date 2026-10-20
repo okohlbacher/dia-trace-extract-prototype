@@ -840,13 +840,37 @@ protected:
       std::vector<double> mrt, mres, mfw;
       for (const auto& a : cal->anchors) { if (a.used) { mrt.push_back(a.run_rt); mres.push_back(a.run_rt - rt_map(a.library_rt)); mfw.push_back(a.fwhm_s); } }
       run_model = ODIA::estimateRunModel(mrt, mres, mfw);
-      if (g_debug && !run_model.empty())
+      if (g_debug && !run_model.rt.empty())
       {
         const auto range = [](const std::vector<double>& v) { std::ostringstream o; o.precision(3); o << *std::min_element(v.begin(), v.end()) << "-" << *std::max_element(v.begin(), v.end()); return o.str(); };
         OPENMS_LOG_INFO << "Run model: " << run_model.anchors << " anchors, " << run_model.neighbours << " per estimate; RT error scale "
                         << range(run_model.drt_scale) << " s, 99th percentile " << range(run_model.drt_tail99) << " s, peak FWHM "
                         << range(run_model.fwhm) << " s along " << run_model.rt.front() << "-" << run_model.rt.back() << " s" << std::endl;
       }
+    }
+    if (cal)
+    {
+      // m/z errors along RT and by intensity, from the broad first pass and the narrowed final one (metadata only)
+      const auto add = [&](const char* level, const char* search, const ODIA::MassSample& s, double tol) {
+        auto e = ODIA::estimateMzErrors(level, search, s.rt, s.residual, s.window, s.intensity, s.search_ppm, tol);
+        if (e.empty()) { return; }
+        if (g_debug)
+        {
+          const auto range = [](const std::vector<double>& v) { std::ostringstream o; o.precision(3); if (v.empty()) { return std::string("-"); } o << *std::min_element(v.begin(), v.end()) << "-" << *std::max_element(v.begin(), v.end()); return o.str(); };
+          std::ostringstream o; o.precision(3);
+          o << "Run model m/z, " << level << " " << search << " (+-" << s.search_ppm << " ppm, " << e.points << " centroids): scale " << e.scale
+            << " ppm, along RT " << range(e.scale_rt) << ", lowest / highest intensity bin "
+            << (e.scale_by_intensity.empty() ? 0.0 : e.scale_by_intensity.front()) << " / " << (e.scale_by_intensity.empty() ? 0.0 : e.scale_by_intensity.back())
+            << " ppm; beyond the tolerance (+-" << tol << ") " << 100 * e.beyond_tolerance << "%, background " << 100 * e.background << "%";
+          OPENMS_LOG_INFO << o.str() << std::endl;
+        }
+        run_model.mz.push_back(std::move(e));
+      };
+      const double tol2 = mz_tol > 0.0 ? mz_tol : cal->ms2_accuracy_ppm, tol1 = mz_tol_ms1 > 0.0 ? mz_tol_ms1 : cal->ms1_accuracy_ppm;   // the extraction's
+      add("ms2", "broad", cal->ms2_broad, tol2);
+      add("ms2", "final", cal->ms2_final, tol2);
+      add("ms1", "broad", cal->ms1_broad, tol1);
+      add("ms1", "final", cal->ms1_final, tol1);
     }
 
     // --- extraction + export

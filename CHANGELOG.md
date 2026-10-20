@@ -3,6 +3,15 @@
 Behaviour changes a user must know about, in plain words. Releases before 0.3.0 are summarised in
 `docs/10-release-report.md` (Appendix A and the repository paragraph).
 
+## Unreleased
+
+- **Run model (metadata only; the traces are unchanged):** the output footer (`odia.run_model`) and `-out_stats`
+  (`"run_model"`) record what the calibration measured about the run, for downstream algorithms: along the gradient,
+  the RT map's local bias, the RT error's robust scale and 99th percentile, and the peak FWHM; and the m/z errors of
+  MS2 and MS1 (`"mz"`), each from the broad first pass (±50 ppm) and from the narrowed final pass, about the mass
+  model -- their width along RT and by intensity tenth, with counts, the share beyond the tolerance and the share of
+  random centroids. Logged with `-debug 1`. Descriptive, not a coverage guarantee (`docs/15-run-model-plan.md`).
+
 ## 0.4.0 (2026-10-19)
 
 - **Faster beyond 64 threads:** every finished task woke all idle workers, which queued for the scheduler's lock
