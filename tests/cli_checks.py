@@ -139,6 +139,8 @@ elif check == "combinations":
         expect(rc == 6 and msg in out, f"error: {what}", out)
     rc, out = run("-in", IN, "-lib", LIB, "-mz_calibration", "off", "-out", "x.parquet", ok=False)
     expect(rc == 6 and "-mz_calibration off needs fixed tolerances" in out, "error: -mz_calibration off without tolerances", out)
+    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-mz_calibration", "off", "-mz_tol_model", "intensity", "-out", "x.parquet", ok=False)
+    expect(rc != 0 and "-mz_tol_model intensity needs" in out, "error: -mz_tol_model intensity without the calibration", out)
     # options without effect: one WARNING line
     for what, args, names in (
         ("-no_ms1", ["-no_ms1", "-ms1_isotopes", "5", "-ms1_axis", "cycles"], "-ms1_isotopes, -ms1_axis, -mz_tol_ms1 (-no_ms1)"),

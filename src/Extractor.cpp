@@ -157,10 +157,20 @@ namespace ODIA
     /// active targets; the bucket index jumps over m/z gaps. Same result as a lower_bound per target and cell
     /// (first peak >= lo, then every peak <= hi aggregated by max or sum), and only cells inside each span are
     /// written.
-    template <bool Sum>
+    ///
+    /// Graded (intensity-dependent tolerance): [lo, hi] is the widest band's window; a peak counts when its distance
+    /// from the window's centre is within the half width x factor[band of its intensity] / the largest factor.
+    struct Bands
+    {
+      const float* upper = nullptr;
+      const float* factor = nullptr;
+      std::size_t n = 0;
+      float max_factor = 1;
+    };
+    template <bool Sum, bool Graded>
     std::uint64_t join(const PeakArena& P, const std::vector<Target>& targets, const std::vector<std::uint32_t>& seg,
                        const std::vector<Span>& spans, std::size_t c0, std::size_t c1,
-                       std::vector<Target>& act, std::vector<Target>& tmp)
+                       std::vector<Target>& act, std::vector<Target>& tmp, const Bands& bands = {})
     {
       const MzFixed* mz = P.mz;
       const float* in = P.intensity;
@@ -212,9 +222,24 @@ namespace ODIA
             while (p < b && mz[p] < t.lo) { ++p; }
           }
           float v = 0.0f;
-          for (std::size_t i = p; i < b && mz[i] <= t.hi; ++i)
+          if constexpr (Graded)
           {
-            if constexpr (Sum) { v += in[i]; } else { v = std::max(v, in[i]); }
+            const double centre = 0.5 * (static_cast<double>(t.lo) + static_cast<double>(t.hi));
+            const double half = 0.5 * static_cast<double>(t.hi - t.lo) / bands.max_factor;
+            for (std::size_t i = p; i < b && mz[i] <= t.hi; ++i)
+            {
+              std::size_t k = 0;
+              while (k + 1 < bands.n && in[i] >= bands.upper[k]) { ++k; }
+              if (std::fabs(static_cast<double>(mz[i]) - centre) > half * bands.factor[k]) { continue; }
+              if constexpr (Sum) { v += in[i]; } else { v = std::max(v, in[i]); }
+            }
+          }
+          else
+          {
+            for (std::size_t i = p; i < b && mz[i] <= t.hi; ++i)
+            {
+              if constexpr (Sum) { v += in[i]; } else { v = std::max(v, in[i]); }
+            }
           }
           const Span& sp = spans[t.rec];
           sp.base[static_cast<std::size_t>(t.row) * sp.stride + (c - sp.begin)] = v;
@@ -235,6 +260,8 @@ namespace ODIA
     const auto ms1_corr = [&](double mz) { return corrected(mz, opt_.ms1_ppm_offset, opt_.ms1_ppm_slope, opt_.ms1_mz_ref); };
     const int n_iso = opt_.extract_ms1 ? opt_.ms1_isotopes + 1 : 0;
     const auto& ms1 = grid_.ms1;
+    const bool graded = !opt_.ms2_tol_factor.empty();
+    const float ms2_max_factor = graded ? *std::max_element(opt_.ms2_tol_factor.begin(), opt_.ms2_tol_factor.end()) : 1.0f;
     const auto& lane = grid_.windows[plan.assignments[u.begin].window];
 
     // Reused per worker: targets and spans of the unit (a few 10 kB), MS1 interpolation scratch.
@@ -283,7 +310,7 @@ namespace ODIA
       c_min = std::min(c_min, lo); c_max = std::max(c_max, hi);
       for (std::uint32_t f = lib.fragment_begin[p], row = 0; f < lib.fragment_begin[p + 1]; ++f, ++row)
       {
-        const Bounds bd = bounds(ms2_corr(lib.fragment_mz[f]), opt_.ms2_ppm);
+        const Bounds bd = bounds(ms2_corr(lib.fragment_mz[f]), opt_.ms2_ppm * ms2_max_factor);
         t2.push_back({bd.lo, bd.hi, rec, row});
       }
       std::sort(t2.begin() + g2.back(), t2.end(), [](const Target& x, const Target& y) {
@@ -361,13 +388,22 @@ namespace ODIA
     g1.push_back(static_cast<std::uint32_t>(t1.size()));
     if (!t2.empty())
     {
-      out.lookups += opt_.aggregate_sum ? join<true>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp)
-                                        : join<false>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp);
+      if (graded)
+      {
+        const Bands bands{opt_.ms2_tol_upper.data(), opt_.ms2_tol_factor.data(), opt_.ms2_tol_factor.size(), ms2_max_factor};
+        out.lookups += opt_.aggregate_sum ? join<true, true>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp, bands)
+                                          : join<false, true>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp, bands);
+      }
+      else
+      {
+        out.lookups += opt_.aggregate_sum ? join<true, false>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp)
+                                          : join<false, false>(lane.peaks, t2, g2, s2, c_min, c_max, act, tmp);
+      }
     }
     if (!t1.empty())
     {
-      out.lookups += opt_.aggregate_sum ? join<true>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp)
-                                        : join<false>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp);
+      out.lookups += opt_.aggregate_sum ? join<true, false>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp)
+                                        : join<false, false>(ms1.peaks, t1, g1, s1, m_min, m_max, act, tmp);
     }
   }
 

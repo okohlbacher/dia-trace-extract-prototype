@@ -93,9 +93,9 @@ fewer anchors and finding them faster.
 |---|---|---|---|
 | 1 | done: run model as metadata, estimator fixes above | none (traces identical) | unit tests (gradient, density gap, invalid input) |
 | 2 | done: m/z terms in the run model (`mz`): width along RT and by intensity tenth (MS1, MS2), from the broad first pass (±50 ppm) and the narrowed final pass, with counts, the share beyond the tolerance and a background share (§7) | metadata only | unit test; traces identical on both instruments |
-| 3 | stage 1 split into RT tiles per isolation window (overlapping, deduplicated, canonical order) | none intended: identical anchors | anchor identities and output identical across thread counts; timsTOF calibration time (target −1–2 s) |
-| 4 | continuous RT window from the run model, opt-in (`-rt_window_model running`) | window only when chosen | per-run, stratified coverage with uncertainty on the ten configurations and held-out runs, endpoint behaviour, fallback when the model is empty; default only after that |
-| 5 | intensity-aware m/z tolerance, opt-in, after the research item above | traces | signal recovery, interference and quantitative bias by intensity; trace-quality screen; DIA-NN agreement |
+| 3 | tried and rejected: stage 1 split into RT segments (§8) | none: identical anchors | identical anchors and traces at 8/32/all threads, but 0.3–0.6 s slower |
+| 4 | done, opt-in: continuous RT window from the run model (`-rt_window_model running`; §8) | window only when chosen | per-run, stratified coverage with uncertainty on the ten configurations and held-out runs, endpoint behaviour, fallback when the model is empty; default only after that |
+| 5 | done, opt-in: intensity-dependent fragment tolerance (`-mz_tol_model intensity`; §8) | traces | signal recovery, interference and quantitative bias by intensity; trace-quality screen; DIA-NN agreement |
 | — | dropped: anchor reduction, sequential stopping | | |
 
 Defaults stay as they are; the run model is diagnostics for now and the input for steps 4–5 once validated.
@@ -123,3 +123,70 @@ strict stage-1 anchors at ±50 ppm, "final" = the last stage-2 pass; tenths by c
   a precursor without its own centroid in the window takes a random one.
 - The m/z widths along RT agree with the offline analysis (`results/runmodel/mass.py`; timsTOF MS1 varies ×2.6 along
   the gradient).
+
+## 8. Steps 3–5 (2026-10-20)
+
+Data: `results/steps35/` (scripts and tables). Timings on data (2 × EPYC 9654, 112 cores online), shared with other
+users (load 23–55), interleaved A/B; extraction at 32 threads as in the benchmark.
+
+**Step 3, stage 1 in RT segments: rejected.** Stage 1 was restructured into waves of ≤ 32 jobs: fragment bounds per
+job, the trace gathering split into RT segments of every job (disjoint cells, each computed exactly as before), then
+the members scored in parallel; the trace buffers stayed at ≤ 32 × 256 MiB. Anchors (all nine columns 0.4.0 writes)
+and traces were identical to 0.4.0 at 8, 32 and all threads on both instruments. But calibration got slower:
+
+| calibration wall (2 repeats) | 0.4.0 | segmented | per window, no 32-thread cap |
+|---|---|---|---|
+| timsTOF A01, 32 threads | 4.78 / 4.64 s | 5.38 / 5.26 s | 4.84 / 4.78 s |
+| timsTOF A01, all threads | 3.68 / 3.77 s | 4.24 / 4.07 s (2× CPU) | 4.17 / 4.17 s |
+| Astral 01, 32 threads | 1.17 / 1.21 s | 1.32 / 1.31 s | 1.23 / 1.18 s |
+| Astral 01, all threads | 0.95 / 0.92 s | 1.22 / 1.20 s (2.8× CPU) | 1.03 / 1.01 s |
+
+The whole-run gathering is memory-bound: a tile written by many threads (across sockets) and the barriers between
+the phases cost more than the better balance gains, and more threads only add CPU time. 0.4.0's 32-thread cap is
+right; the code is unchanged.
+
+**Step 4, the RT window from the run model: opt-in, no gain.** `-rt_window_model running`: 7 × `drt_scale(t)` + 2 ×
+`fwhm(t)` on the run model's grid; beyond the grid (the outer 5% of the anchors on each side) the curve's maximum.
+Offline on the ten configurations (`rtcov.py`; DIA-NN's whole peaks, q ≤ 1%; bootstrap 95% intervals over the IDs;
+leave-one-run-out multiple):
+
+| rule | lowest coverage (95% interval) | worst RT tenth | mean half window | multiple, run held out | lowest held-out coverage | mean half window there |
+|---|---|---|---|---|---|---|
+| bins (default) | 99.41% (99.35–99.46) | 94.1% | 145.8 s | 6.75–7 | 99.30% | 145.4 s |
+| running, end value continued | 98.97% (98.90–99.05) | 92.0% | 142.3 s | 7.5 | 99.41% | 152.1 s |
+| running, maximum beyond the grid (implemented) | 99.53% (99.49–99.59) | 95.4% | 145.3 s | 6.25–6.75 | 99.24% | 139.5 s |
+
+With the end value continued the window misses the gradient's ends (95.1% of the IDs beyond the grid on Astral 01
+with the predicted human library), hence the maximum there. At the same multiple the window is as wide as the bins'
+(−0.3%), at the held-out multiple 4% narrower with the same lowest coverage. Full library (timsTOF A01): output −4.1%,
+time within noise; Astral 01: same output size. The run model does not narrow the window: the width is set by the RT
+scatter, which the bins already follow. Both rules miss in the same RT tenth of Astral run 03 (human library, 94–95%):
+a local error the anchors do not see.
+
+**Step 5, intensity-dependent fragment tolerance: opt-in, better traces.** `-mz_tol_model intensity`: the fragment
+tolerance per centroid = the base tolerance × the width at its intensity / the overall width, from the broad first
+pass's ten intensity bands (factors 0.5–3; Astral 2.0 for the weakest band to 0.63, timsTOF 2.1 to 0.52). Scores of
+the tolerance screen (§5 of the release report) on DIA-NN's identified precursors (`step5.py`; Astral 01 tuned library,
+75,867 precursors; timsTOF A01, 44,990), at the same base tolerances k × σ:
+
+| | k | co-elution const / intensity | dropouts | library cosine | off-peak share |
+|---|---|---|---|---|---|
+| Astral 01 | 4 | 0.320 / 0.367 | 35.2 / 27.6% | 0.894 / 0.922 | |
+| | 6 | 0.357 / **0.372** | 29.7 / 26.0% | 0.916 / 0.926 | |
+| | 9 (default) | 0.369 / 0.370 | 27.2 / 24.9% | 0.924 / 0.928 | |
+| | 12 | **0.370** / 0.366 | 26.3 / 23.9% | 0.926 / 0.929 | |
+| timsTOF A01 | 3 | 0.175 / **0.231** | 35.1 / 13.2% | 0.521 / 0.633 | 86.2 / 89.5% |
+| | 4 (default) | 0.201 / 0.221 | 24.9 / 9.5% | 0.547 / 0.638 | 87.1 / 89.9% |
+| | 5 | **0.202** / 0.211 | 18.8 / 7.4% | 0.563 / 0.640 | 87.7 / 90.2% |
+| | 6 | 0.195 / 0.203 | 15.1 / 6.1% | 0.572 / 0.644 | 88.0 / 90.4% |
+
+(Astral's off-peak share is 0 at the median: its tuned-library windows are about as long as ±3 W around the apex.)
+The gain holds in each tertile of DIA-NN's precursor quantity (timsTOF at k = 3: low 0.075 → 0.099, mid 0.113 → 0.159,
+high 0.329 → 0.422; Astral at k = 6: low 0.157 → 0.171, high 0.580 → 0.592). The best co-elution with intensity is
+at a smaller multiple (Astral 6, timsTOF 3) and above the best constant one: +0.5% on Astral, +14% on timsTOF.
+The cost: more noise admitted where weak centroids get the wider window (timsTOF off-peak +3 points), and larger
+output (fewer zeros; full library at the default multiple: timsTOF +14.5%, 22.4 → 25.6 GB; Astral +20%). Time within
+noise (timsTOF extraction 30.9 → 32.3 s, Astral 15.9 → 15.8 s; load 26–54).
+
+Not yet shown: that the better co-elution means more or better identifications (needs a scoring step), and that it
+holds on the other runs (Astral 02/03, timsTOF B01), with the multiple chosen on runs other than the one tested.

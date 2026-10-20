@@ -363,6 +363,15 @@ protected:
     registerDoubleOption_("mz_accuracy_ms1", "<k>", 0.0, "Measured MS1 tolerance = k x the robust width of the MS1 mass errors. "
                           "0: the instrument's (4 for every shipped instrument). Not used with a fixed -mz_tol_ms1.", false, true);
     setMinFloat_("mz_accuracy_ms2", 0.0); setMinFloat_("mz_accuracy_ms1", 0.0);
+    registerStringOption_("rt_window_model", "<model>", "bins", "With -rt_window 0, how the window follows the gradient: bins "
+                          "(the RT scatter and peak width per bin of ~150 anchors, at most 8, linear in between) or running "
+                          "(the run model's running estimates, 40 points; experimental).", false, true);
+    setValidStrings_("rt_window_model", {"bins", "running"});
+    registerStringOption_("mz_tol_model", "<model>", "constant", "Fragment tolerance: constant, or intensity (experimental): "
+                          "-mz_tol_ms2 (given or measured) scaled per centroid by the fragment mass-error width at its intensity "
+                          "relative to the overall width, from the calibration's broad first pass (run model, up to ten intensity "
+                          "bands; factors kept within 0.5-3). Needs the calibration.", false, true);
+    setValidStrings_("mz_tol_model", {"constant", "intensity"});
     registerStringOption_("mz_calibration", "<mode>", "auto", "Mass correction: auto corrects the m/z by the offsets "
                           "measured from the run; off uses -mz_offset_ms2 and -mz_offset_ms1 instead and needs -mz_tol_ms2 "
                           "(and -mz_tol_ms1 unless -no_ms1).", false, true);
@@ -891,6 +900,26 @@ protected:
       if (eopt.ms1_ppm <= 0.0) { OPENMS_LOG_ERROR << "MS1 accuracy could not be measured (too few MS1 centroids); give -mz_tol_ms1 <ppm>." << std::endl; return UNEXPECTED_RESULT; }
       OPENMS_LOG_INFO << "MS1 tolerance: +-" << eopt.ms1_ppm << " ppm (" << sigma_ms1 << " x the measured width)" << std::endl;
     }
+    if (S("mz_tol_model") == "intensity")
+    {
+      // the broad first pass's widths by intensity (not truncated by the narrowed window), else the final pass's
+      const ODIA::MzErrors* src = nullptr;
+      for (const char* search : {"broad", "final"})
+      {
+        for (const auto& e : run_model.mz) { if (!src && e.level == "ms2" && e.search == search && e.scale > 0 && e.scale_by_intensity.size() >= 2) { src = &e; } }
+      }
+      if (!src) { OPENMS_LOG_ERROR << "-mz_tol_model intensity needs the calibration's fragment mass errors by intensity (none measured)." << std::endl; return UNEXPECTED_RESULT; }
+      std::ostringstream os; os.precision(3);
+      for (std::size_t b = 0; b < src->scale_by_intensity.size(); ++b)
+      {
+        eopt.ms2_tol_factor.push_back(static_cast<float>(std::clamp(src->scale_by_intensity[b] / src->scale, 0.5, 3.0)));
+        // band b holds intensities below the midpoint (geometric) between its highest and the next band's lowest
+        eopt.ms2_tol_upper.push_back(b + 1 < src->scale_by_intensity.size() ? static_cast<float>(std::sqrt(src->intensity_hi[b] * src->intensity_lo[b + 1])) : 0.0f);
+        os << (b ? ", " : "") << eopt.ms2_ppm * eopt.ms2_tol_factor.back();
+      }
+      OPENMS_LOG_INFO << "MS2 tolerance by intensity (" << src->search << " pass, weakest to strongest of " << eopt.ms2_tol_factor.size() << " bands): +-" << os.str() << " ppm" << std::endl;
+      sources.push_back({"mz_tol_model", "intensity: " + os.str(), "option"});
+    }
     eopt.ms2_ppm_offset = mass_auto && cal ? cal->ms2_offset_ppm : D("mz_offset_ms2");
     eopt.ms1_ppm_offset = mass_auto && cal ? cal->ms1_offset_ppm : D("mz_offset_ms1");
     if (mass_auto && cal)
@@ -926,6 +955,26 @@ protected:
         eopt.rt_half_window = *std::max_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
         rt_window_text = std::string("ODIA_RT_WINDOW_TABLE ") + table;
         OPENMS_LOG_INFO << "RT window: " << rt_window_text << " (test hook)" << std::endl;
+      }
+      else if (S("rt_window_model") == "running" && !run_model.rt.empty())
+      {
+        // the run model's running estimates (RunModel.h): the same multiples, on its RT grid (5-95% of the anchors' RT);
+        // beyond the grid the curve's maximum -- the estimates there are one-sided, and with the end value continued
+        // the window held 95% of DIA-NN's peaks beyond the grid on one of the ten benchmark configurations (99.95% with
+        // the maximum; results/steps35/rtcov_k7.tsv, docs/15 §8)
+        std::vector<double> h;
+        for (std::size_t j = 0; j < run_model.rt.size(); ++j) { h.push_back(rt_window_sigma * run_model.drt_scale[j] + rt_window_fwhm * run_model.fwhm[j]); }
+        const double hmax = *std::max_element(h.begin(), h.end());
+        eopt.rt_window_at.push_back(run_model.rt.front() - 1e-3); eopt.rt_window_half.push_back(hmax);
+        for (std::size_t j = 0; j < h.size(); ++j) { eopt.rt_window_at.push_back(run_model.rt[j]); eopt.rt_window_half.push_back(h[j]); }
+        eopt.rt_window_at.push_back(run_model.rt.back() + 1e-3); eopt.rt_window_half.push_back(hmax);
+        const auto [mn, mx] = std::minmax_element(eopt.rt_window_half.begin(), eopt.rt_window_half.end());
+        eopt.rt_half_window = *mx;
+        std::ostringstream os; os.precision(3);
+        os << *mn << " to " << *mx << " s along " << std::lround(run_model.rt.front()) << "-" << std::lround(run_model.rt.back()) << " s";
+        rt_window_text = "running: " + os.str();
+        OPENMS_LOG_INFO << "RT window: +-" << *mn << " to +-" << *mx << " s, " << rt_window_sigma << " x the RT scatter + " << rt_window_fwhm
+                        << " x the peak FWHM, running estimates over " << run_model.neighbours << " of " << run_model.anchors << " anchors" << std::endl;
       }
       else if (pts.size() >= 50)
       {

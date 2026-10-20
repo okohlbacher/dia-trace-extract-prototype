@@ -11,6 +11,12 @@ Behaviour changes a user must know about, in plain words. Releases before 0.3.0 
   MS2 and MS1 (`"mz"`), each from the broad first pass (±50 ppm) and from the narrowed final pass, about the mass
   model -- their width along RT and by intensity tenth, with counts, the share beyond the tolerance and the share of
   random centroids. Logged with `-debug 1`. Descriptive, not a coverage guarantee (`docs/15-run-model-plan.md`).
+- **`-mz_tol_model intensity` (advanced, experimental):** the fragment tolerance per centroid scales with the mass-error
+  width at its intensity (weak centroids up to 2×, strong ones down to 0.5×), measured by the calibration. Better
+  fragment co-elution and far fewer dropouts on the benchmark (timsTOF +10% co-elution at the default multiple, +14%
+  at 3σ; Astral about equal at 9σ, +0.5% at 6σ), but 15–20% larger output. Default `constant` (unchanged).
+- **`-rt_window_model running` (advanced, experimental):** the RT window from the run model's running estimates
+  instead of the bins; the same coverage, no narrower. Default `bins` (unchanged).
 
 ## 0.4.0 (2026-10-19)
 

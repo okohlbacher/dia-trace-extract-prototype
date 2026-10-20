@@ -32,6 +32,10 @@ namespace ODIA
       const double f = (rt - rt_window_at[i - 1]) / (rt_window_at[i] - rt_window_at[i - 1]);
       return rt_window_half[i - 1] + f * (rt_window_half[i] - rt_window_half[i - 1]);
     }
+    /// Intensity-dependent MS2 tolerance (experimental; empty = constant): a centroid of intensity I counts when
+    /// |m/z - target| <= ms2_ppm x ms2_tol_factor[b], b = the first band with I < ms2_tol_upper[b] (the last band is
+    /// open-ended, its upper bound ignored).
+    std::vector<float> ms2_tol_upper, ms2_tol_factor;
     bool aggregate_sum = true;        ///< sum all centroids in tolerance (OpenSWATH) or take the max (DIA-NN)
     bool extract_ms1 = true;
     int ms1_isotopes = 2;             ///< isotopes after the monoisotope (M+1 .. M+n)
