@@ -234,7 +234,7 @@ jobs:
                 -DODIA_OPENMS_SHARE="$OPENMS_SRC/share/OpenMS" -DODIA_DEP_DIRS="$DEPS" "${EXTRA[@]}"
       - name: Build the tool
         shell: bash
-        run: cmake --build tool/build --target DIATraceExtractor OpenSwathXicToTraces MzMLToMzPeak
+        run: cmake --build tool/build --target DIATraceExtractor OpenSwathXicToTraces MzMLToMzPeak test_runmodel
       - name: "Runtime DLL path for the tests (Windows: a missing DLL opens a loader dialog that blocks until the test times out)"
         if: runner.os == 'Windows'
         shell: bash
