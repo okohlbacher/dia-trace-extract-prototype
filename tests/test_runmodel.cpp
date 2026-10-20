@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <random>
+#include <stdexcept>
 
 int main()
 {
@@ -35,5 +36,26 @@ int main()
   }
   check("anchors", static_cast<double>(m.anchors), 3000, 0);
   check("too few anchors: empty", static_cast<double>(ODIA::estimateRunModel({1, 2}, {0, 0}, {1, 1}).empty()), 1, 0);
+  // nearest in RT, not by rank: 100 anchors at 0-99 s and 100 at 1000-1099 s; k = 20 around 120 s must take the
+  // anchors at 80-99 s (all within 40 s), none from the far cluster
+  {
+    std::vector<double> t2, r2, f2;
+    for (int i = 0; i < 100; ++i) { t2.push_back(i); r2.push_back(0.0); f2.push_back(1.0); t2.push_back(1000 + i); r2.push_back(100.0); f2.push_back(9.0); }
+    const ODIA::RunModel g = ODIA::estimateRunModel(t2, r2, f2, 40, 0.1, 15, 50);
+    std::size_t j = 0;
+    while (j + 1 < g.rt.size() && g.rt[j] < 120) { ++j; }
+    check("gap: support starts in the near cluster", g.support_lo[j - 1] < 100 ? 1.0 : 0.0, 1, 0);
+    check("gap: bias from the near cluster", g.drt_center[j - 1], 0.0, 0.0);
+  }
+  // invalid input and the missing-curve fallback
+  {
+    bool threw = false;
+    try { ODIA::estimateRunModel(rt, res, fw, 40, 0.0); } catch (const std::invalid_argument&) { threw = true; }
+    check("span 0 rejected", threw ? 1.0 : 0.0, 1, 0);
+    std::vector<double> rtn = rt; rtn[0] = std::nan("");
+    check("non-finite anchor dropped", static_cast<double>(ODIA::estimateRunModel(rtn, res, fw).anchors), 2999, 0);
+    const std::vector<double> other(m.rt.size(), 1.0);
+    check("foreign curve gives NaN", std::isnan(m.at(other, 900.0)) ? 1.0 : 0.0, 1, 0);
+  }
   return bad ? 1 : 0;
 }
