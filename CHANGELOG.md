@@ -3,20 +3,28 @@
 Behaviour changes a user must know about, in plain words. Releases before 0.3.0 are summarised in
 `docs/10-release-report.md` (Appendix A and the repository paragraph).
 
-## Unreleased
+## 0.5.0 (2026-10-20)
 
-- **Run model (metadata only; the traces are unchanged):** the output footer (`odia.run_model`) and `-out_stats`
-  (`"run_model"`) record what the calibration measured about the run, for downstream algorithms: along the gradient,
-  the RT map's local bias, the RT error's robust scale and 99th percentile, and the peak FWHM; and the m/z errors of
-  MS2 and MS1 (`"mz"`), each from the broad first pass (±50 ppm) and from the narrowed final pass, about the mass
-  model -- their width along RT and by intensity tenth, with counts, the share beyond the tolerance and the share of
-  random centroids. Logged with `-debug 1`. Descriptive, not a coverage guarantee (`docs/15-run-model-plan.md`).
-- **`-mz_tol_model intensity` (advanced, experimental):** the fragment tolerance per centroid scales with the mass-error
-  width at its intensity (weak centroids up to 2×, strong ones down to 0.5×), measured by the calibration. Better
-  fragment co-elution and far fewer dropouts on the benchmark (timsTOF +10% co-elution at the default multiple, +14%
-  at 3σ; Astral about equal at 9σ, +0.5% at 6σ), but 15–20% larger output. Default `constant` (unchanged).
-- **`-rt_window_model running` (advanced, experimental):** the RT window from the run model's running estimates
-  instead of the bins; the same coverage, no narrower. Default `bins` (unchanged).
+- **The fragment tolerance depends on the centroid's intensity (default):** the calibration measures the fragment
+  mass-error width in up to ten intensity bands (its first pass, at ±50 ppm), and each centroid is accepted within the
+  tolerance × the width at its intensity / the overall width (`-mz_tol_model intensity`), between 0.5 and the
+  instrument's `mz_tol_intensity_max` (new instrument-file key: 3; 1 for Orbitraps, which only narrows the window). The
+  instrument multiples, the calibration and the RT window are unchanged. timsTOF: fragment co-elution on DIA-NN's IDs
+  +10% (A01, 0.201 → 0.221) and +8% (B01, 0.209 → 0.225), fragments without signal at the apex 25% → 8–10%; output +15%,
+  extraction a few seconds longer. Astral: interference 4.7% → 3.6% at the same capture and shapes (report §4),
+  co-elution +0.1% (run 01) and +0.6% (run 02), output +0.4%. The traces at the defaults change (timsTOF: their agreement
+  with DIA-NN's constant-window traces falls, report §3). `-mz_tol_model constant` gives 0.4.0's traces; without the
+  measured mass correction (`-mz_calibration off`, `-scheme B`) the tolerance stays constant. Not taken: widening on
+  Orbitraps (more interference, lower co-elution), and lower multiples (6 / 3), which co-eluted better but narrow the
+  calibration's mass search with them and so the RT window, below its coverage target on one configuration (98.4%;
+  docs/15 §9).
+- **Run model (footer `odia.run_model`, `-out_stats` `"run_model"`):** what the calibration measured about the run, for
+  downstream algorithms: along the gradient the RT map's local bias, the RT error's robust scale and 99th percentile and
+  the peak FWHM; the m/z errors of MS2 and MS1 from the broad first pass and the narrowed final pass, about the mass
+  model, along RT and by intensity, with counts, the share beyond the tolerance and the share of random centroids.
+  Logged with `-debug 1`. Descriptive, not a coverage guarantee (`docs/15-run-model-plan.md`).
+- Tried and not kept (docs/15 §8): an RT window from the run model (the same coverage, no narrower) and the
+  calibration's whole-run pass split into RT segments (identical anchors, slower).
 
 ## 0.4.0 (2026-10-19)
 

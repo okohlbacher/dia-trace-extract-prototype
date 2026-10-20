@@ -19,7 +19,7 @@ namespace ODIA
     std::string extends;                    ///< the file (stem or name) this one extends; "" for none
     std::vector<std::string> aliases;       ///< further names for -instrument
     std::vector<std::string> keywords;      ///< matched in the run's instrument name (ignoring case)
-    std::map<std::string, double> values;   ///< mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm, priority
+    std::map<std::string, double> values;   ///< mz_accuracy_ms2, mz_accuracy_ms1, rt_window_sigma, rt_window_fwhm, mz_tol_intensity_max, priority
     std::string sha1;                       ///< content hash (provenance only)
     std::string origin;                     ///< "" for a shipped file, else the user directory it came from
   };

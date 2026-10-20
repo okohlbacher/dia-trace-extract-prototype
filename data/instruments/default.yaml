@@ -13,3 +13,8 @@ mz_accuracy_ms1: 4
 # results/rtwin/all/); 4 sigma fell to 94.7%, 6 sigma to 98.1%.
 rt_window_sigma: 7
 rt_window_fwhm: 2
+# Intensity-dependent fragment tolerance (-mz_tol_model intensity, the default since 0.5.0): the largest factor by
+# which a weak centroid's tolerance may exceed the constant one (factors range from 0.5 to this). 3 = as measured: on
+# timsTOF widening for weak fragments raised fragment co-elution 8-10% and cut the fragments without signal at the apex
+# from 25% to 8-10% (docs/15 s8-9).
+mz_tol_intensity_max: 3

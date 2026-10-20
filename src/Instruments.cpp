@@ -102,7 +102,8 @@ namespace ODIA
     {
       static const std::map<std::string, Range> r = {
         {"mz_accuracy_ms2", {0.0, 100.0, true}}, {"mz_accuracy_ms1", {0.0, 100.0, true}},
-        {"rt_window_sigma", {0.0, 100.0, true}}, {"rt_window_fwhm", {0.0, 100.0, false}}, {"priority", {-100.0, 100.0, false}}};
+        {"rt_window_sigma", {0.0, 100.0, true}}, {"rt_window_fwhm", {0.0, 100.0, false}}, {"priority", {-100.0, 100.0, false}},
+        {"mz_tol_intensity_max", {0.5, 3.0, false}}};
       return r;
     }
 
@@ -222,7 +223,7 @@ namespace ODIA
 
   const std::vector<std::string>& instrumentValueKeys()
   {
-    static const std::vector<std::string> keys = {"mz_accuracy_ms2", "mz_accuracy_ms1", "rt_window_sigma", "rt_window_fwhm"};
+    static const std::vector<std::string> keys = {"mz_accuracy_ms2", "mz_accuracy_ms1", "rt_window_sigma", "rt_window_fwhm", "mz_tol_intensity_max"};
     return keys;
   }
 

@@ -6,6 +6,10 @@
 #      with scripts/same_traces.py, compared with DIA-NN and OpenSWATH (cmpA.tsv, cmpB.tsv);
 #   4. timsTOF diaPASEF A01/B01 (§3, §6): all precursors, DIA-NN's IDs at the defaults and at DIA-NN's accuracy,
 #      the MS1 probes; compared with DIA-NN's XICs.
+# The rule emulations (P, A-V0.1, DIA-NN's tolerance, the MS1 probes) keep the constant tolerance (-mz_tol_model
+# constant, the default before V0.5.0).
+# The tolerance screens extract into a directory per binary (the screen reuses extractions it finds; until V0.4.0
+# they ran in one directory, so V0.4.0's screens reused V0.2.11's extractions).
 # usage: [X=binary] [STEPS="1 2 3 4"] cluster_bench_v0211.sh
 set -uo pipefail
 P=/ceph/ibmi/abi/oliver/Claude/ODIA-V3; cd $P
@@ -70,10 +74,10 @@ if [[ " $STEPS " == *" 4 "* ]]; then
     rm -rf $D/${s}_all.parquet $D/${s}_all.axes.parquet
     # DIA-NN's IDs with all library fragments (as archived; top 6 only for the uncorrected-centre MS1 probe)
     log "$s on DIA-NN's IDs"; run idsdef -ids $ids -top_fragments 0
-    run idsP -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 11.8
+    run idsP -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 11.8 -mz_tol_model constant
     if [ $s = A01 ]; then
       run idsconst -ids $ids -top_fragments 0 -calibration:mz_model constant
-      for w in 4 7 20 30; do run ms1_$w -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 $w; done
+      for w in 4 7 20 30; do run ms1_$w -ids $ids -top_fragments 0 -mz_tol_ms2 11.8 -mz_tol_ms1 $w -mz_tol_model constant; done
       for w in 11.8 20; do run ms1raw$w -ids $ids -mz_calibration off -mz_offset_ms2 -4.6 -mz_tol_ms2 10.8 -mz_offset_ms1 0 -mz_tol_ms1 $w; done
     fi
     rm -rf $D/${s}_*.parquet
@@ -83,8 +87,8 @@ if [[ " $STEPS " == *" 5 "* ]]; then
   log "5. Astral rules A-V0.1 and P (the archived runs are from cbad9dd, whose calibration differs; same rules here)"
   G=$SC/out/v0211/rules; mkdir -p $G
   timed $O/astral/odiaAV01 $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 6 -mz_tol_ms1 2.114775 \
-    -calibration:mz_model constant -threads 32 -out $G/odiaAV01.parquet -out_stats $O/astral/odiaAV01.json
-  timed $O/astral/odiaP $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC \
+    -calibration:mz_model constant -mz_tol_model constant -threads 32 -out $G/odiaAV01.parquet -out_stats $O/astral/odiaAV01.json
+  timed $O/astral/odiaP $X -in $MZML -lib $LIBIDS -rt_mode minutes -rt_window 60 -top_fragments 0 -mz_tol_ms2 $ACC -mz_tol_ms1 $ACC -mz_tol_model constant \
     -threads 32 -out $G/odiaP.parquet -out_stats $O/astral/odiaP.json
   for a in AV01 P; do
     $PY scripts/compare_traces.py --odia $G/odia$a.parquet --axes $G/odia$a.axes.parquet --diann results/gallery_v02/diann/diann_xic.parquet \
@@ -96,9 +100,9 @@ if [[ " $STEPS " == *" 6 "* ]]; then
   log "6. tolerance screens"
   mkdir -p $O/tolscreen
   $PY scripts/tolerance_screen.py --extractor $X --run $MZML --lib library/refined/proteobench_entrapment_astral_nce25_v0.11.1_shared_run01.parquet \
-    --ids results/tolscreen/astral_run01_ids.txt --sigma-ms2 0.92 --sigma-ms1 0.40 --rt_mode minutes --out $O/tolscreen/astral_run01 > $O/tolscreen/astral_run01.out 2>&1
+    --ids results/tolscreen/astral_run01_ids.txt --sigma-ms2 0.92 --sigma-ms1 0.40 --rt_mode minutes --scratch $SC/out/tolscreen_$(sha256sum $X | cut -c1-12) --out $O/tolscreen/astral_run01 > $O/tolscreen/astral_run01.out 2>&1
   $PY scripts/tolerance_screen.py --extractor $X --run $SC/input/diapasef/A01.mzpeak --lib library/hye_timstof.parquet --ids results/diapasef/diann_A01_ids.txt \
-    --sigma-ms2 2.66 --sigma-ms1 3.38 --rt_mode auto --out $O/tolscreen/timstof_A01 > $O/tolscreen/timstof_A01.out 2>&1
+    --sigma-ms2 2.66 --sigma-ms1 3.38 --rt_mode auto --scratch $SC/out/tolscreen_$(sha256sum $X | cut -c1-12) --out $O/tolscreen/timstof_A01 > $O/tolscreen/timstof_A01.out 2>&1
   tail -3 $O/tolscreen/*.out
 fi
 log "done"

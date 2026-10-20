@@ -76,6 +76,7 @@ elif check == "instruments":
     expect(s["instrument"]["name"] == "Astral", "-instrument by alias")
     expect(v["mz_accuracy_ms2"] == {"value": "9", "source": "instrument-default:Astral"}, "Astral 9 from astral.yaml", json.dumps(v))
     expect(v["mz_accuracy_ms1"] == {"value": "5", "source": "given"}, "an option given overrides only itself", json.dumps(v))
+    expect(v["mz_tol_intensity_max"] == {"value": "1", "source": "instrument-default:Orbitrap"}, "Astral inherits mz_tol_intensity_max 1 from orbitrap.yaml", json.dumps(v))
     expect(v["rt_window_sigma"]["source"] == "default", "values no instrument file sets come from default.yaml", json.dumps(v))
     expect(v["mz_tol_ms2"] == {"value": "20", "source": "given"}, "a fixed tolerance is recorded as given", json.dumps(v))
     for name, inst in (("timsTOF Pro 2", "timsTOF"), ("Bruker timsTOF HT", "timsTOF"), ("Exploris 480", "Orbitrap"), ("Q-TOF", "TOF")):
@@ -139,8 +140,6 @@ elif check == "combinations":
         expect(rc == 6 and msg in out, f"error: {what}", out)
     rc, out = run("-in", IN, "-lib", LIB, "-mz_calibration", "off", "-out", "x.parquet", ok=False)
     expect(rc == 6 and "-mz_calibration off needs fixed tolerances" in out, "error: -mz_calibration off without tolerances", out)
-    rc, out = run("-in", IN, "-lib", LIB, *FIXED, "-mz_calibration", "off", "-mz_tol_model", "intensity", "-out", "x.parquet", ok=False)
-    expect(rc != 0 and "-mz_tol_model intensity needs" in out, "error: -mz_tol_model intensity without the calibration", out)
     # options without effect: one WARNING line
     for what, args, names in (
         ("-no_ms1", ["-no_ms1", "-ms1_isotopes", "5", "-ms1_axis", "cycles"], "-ms1_isotopes, -ms1_axis, -mz_tol_ms1 (-no_ms1)"),

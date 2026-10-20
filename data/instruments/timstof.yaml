@@ -1,5 +1,6 @@
 # Bruker timsTOF (diaPASEF): measured on the ProteoBench diaPASEF benchmark, runs A01/B01 (report s5: fragment
-# co-elution optimum k = 4-5; DIA-NN's own accuracy there is 4.4 sigma).
+# co-elution optimum k = 4-5; DIA-NN's own accuracy there is 4.4 sigma). With the intensity-dependent tolerance (the
+# default since 0.5.0) k = 3 co-eluted 4-5% better than 4, but changes the calibration's mass search (docs/15 s9).
 name: timsTOF
 extends: tof
 aliases: [timsTOF Pro, timsTOF Pro 2, timsTOF SCP, timsTOF HT, timsTOF Ultra, timsTOF fleX]

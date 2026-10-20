@@ -6,3 +6,8 @@ keywords: [orbitrap, astral, exploris, exactive, lumos, fusion, eclipse, velos, 
 priority: 1
 # The fragment co-elution optimum of the tolerance screen on Astral is k = 8-10 (report s5); applied to the class.
 mz_accuracy_ms2: 9
+# Only narrow the window for strong centroids, never widen it for weak ones: on Astral run 01 (the centroid
+# re-extraction of report s4, against its intensity-dependent truth model) widening raised the interference from 4.7%
+# to 6.3% and lowered the co-elution from 0.521 to 0.490, while narrowing alone lowered the interference to 3.6% at
+# the same capture, co-elution and dropouts (docs/15 s9).
+mz_tol_intensity_max: 1

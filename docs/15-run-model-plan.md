@@ -94,8 +94,8 @@ fewer anchors and finding them faster.
 | 1 | done: run model as metadata, estimator fixes above | none (traces identical) | unit tests (gradient, density gap, invalid input) |
 | 2 | done: m/z terms in the run model (`mz`): width along RT and by intensity tenth (MS1, MS2), from the broad first pass (±50 ppm) and the narrowed final pass, with counts, the share beyond the tolerance and a background share (§7) | metadata only | unit test; traces identical on both instruments |
 | 3 | tried and rejected: stage 1 split into RT segments (§8) | none: identical anchors | identical anchors and traces at 8/32/all threads, but 0.3–0.6 s slower |
-| 4 | done, opt-in: continuous RT window from the run model (`-rt_window_model running`; §8) | window only when chosen | per-run, stratified coverage with uncertainty on the ten configurations and held-out runs, endpoint behaviour, fallback when the model is empty; default only after that |
-| 5 | done, opt-in: intensity-dependent fragment tolerance (`-mz_tol_model intensity`; §8) | traces | signal recovery, interference and quantitative bias by intensity; trace-quality screen; DIA-NN agreement |
+| 4 | tried, not kept: continuous RT window from the run model (§8; the option was removed in 0.5.0) | none | per-run, stratified coverage with uncertainty on the ten configurations and held-out runs, endpoint behaviour, fallback when the model is empty; default only after that |
+| 5 | done, the default since 0.5.0: intensity-dependent fragment tolerance (`-mz_tol_model intensity`; §8, §9) | traces | signal recovery, interference and quantitative bias by intensity; trace-quality screen; DIA-NN agreement |
 | — | dropped: anchor reduction, sequential stopping | | |
 
 Defaults stay as they are; the run model is diagnostics for now and the input for steps 4–5 once validated.
@@ -145,7 +145,7 @@ The whole-run gathering is memory-bound: a tile written by many threads (across 
 the phases cost more than the better balance gains, and more threads only add CPU time. 0.4.0's 32-thread cap is
 right; the code is unchanged.
 
-**Step 4, the RT window from the run model: opt-in, no gain.** `-rt_window_model running`: 7 × `drt_scale(t)` + 2 ×
+**Step 4, the RT window from the run model: no gain, not kept** (it was `-rt_window_model running` before 0.5.0): 7 × `drt_scale(t)` + 2 ×
 `fwhm(t)` on the run model's grid; beyond the grid (the outer 5% of the anchors on each side) the curve's maximum.
 Offline on the ten configurations (`rtcov.py`; DIA-NN's whole peaks, q ≤ 1%; bootstrap 95% intervals over the IDs;
 leave-one-run-out multiple):
@@ -163,7 +163,7 @@ time within noise; Astral 01: same output size. The run model does not narrow th
 scatter, which the bins already follow. Both rules miss in the same RT tenth of Astral run 03 (human library, 94–95%):
 a local error the anchors do not see.
 
-**Step 5, intensity-dependent fragment tolerance: opt-in, better traces.** `-mz_tol_model intensity`: the fragment
+**Step 5, intensity-dependent fragment tolerance: better traces, the default since 0.5.0 (§9).** `-mz_tol_model intensity`: the fragment
 tolerance per centroid = the base tolerance × the width at its intensity / the overall width, from the broad first
 pass's ten intensity bands (factors 0.5–3; Astral 2.0 for the weakest band to 0.63, timsTOF 2.1 to 0.52). Scores of
 the tolerance screen (§5 of the release report) on DIA-NN's identified precursors (`step5.py`; Astral 01 tuned library,
@@ -190,3 +190,38 @@ noise (timsTOF extraction 30.9 → 32.3 s, Astral 15.9 → 15.8 s; load 26–54)
 
 Not yet shown: that the better co-elution means more or better identifications (needs a scoring step), and that it
 holds on the other runs (Astral 02/03, timsTOF B01), with the multiple chosen on runs other than the one tested.
+
+## 9. Step 5 as the default (0.5.0)
+
+The multiples for the intensity-dependent tolerance were chosen on Astral run 01 and timsTOF A01 (§8: best co-elution
+at k = 6 and 3) and checked on run 02 and B01, not used to choose them (`results/steps35/step5_astral02.tsv`,
+`step5_timstofB01.tsv`; Astral 02 with the run-01-tuned library restricted to run 02's IDs, 76,400; B01, 55,665):
+
+| held out | k | co-elution const / intensity | dropouts | library cosine |
+|---|---|---|---|---|
+| Astral 02 | 5 | 0.276 / 0.293 | 45.1 / 41.8% | 0.821 / 0.846 |
+| | 6 | 0.283 / **0.294** | 43.9 / 41.2% | 0.828 / 0.846 |
+| | 7 | 0.287 / 0.294 | 43.1 / 40.7% | 0.831 / 0.845 |
+| | 9 (default) | **0.289** / 0.293 | 42.2 / 40.0% | 0.830 / 0.838 |
+| timsTOF B01 | 2.5 | 0.160 / 0.241 | 41.3 / 13.6% | 0.523 / 0.650 |
+| | 3 | 0.181 / **0.238** | 34.8 / 11.0% | 0.539 / 0.654 |
+| | 3.5 | 0.198 / 0.232 | 29.2 / 9.3% | 0.552 / 0.655 |
+| | 4 (default) | **0.209** / 0.225 | 24.7 / 8.0% | 0.563 / 0.656 |
+
+**The multiples stay 9 / 4.** The lower multiples were first made the default, but the calibration narrows its mass
+search to 3 × the extraction multiple × the width, so they changed the anchors (timsTOF A01: 775 → 828) and narrowed
+the measured RT window: on the ten configurations (`results/v0.5.0/rtcov/`) the lowest coverage fell from 99.41% to
+98.41% (Astral 01, predicted human library; the window there 196 → 174 s on average), below the 99.4% target. With 9 /
+4 the calibration and the window are those of 0.4.0 and the intensity model still gains: against 0.4.0, Astral
+01 +0.2%, 02 +1.3%, timsTOF A01 +10% (0.201 → 0.221), B01 +8% (0.209 → 0.225); dropouts on timsTOF 25% → 8–10%.
+Decoupling the calibration's search multiple from the extraction multiple would allow 6 / 3 (backlog).
+**On Orbitraps the factor is capped at 1** (`mz_tol_intensity_max` in the instrument files: 3 by default, 1 in
+`orbitrap.yaml`). The centroid re-extraction of report §4 (Astral run 01, 3,000 IDs, against its truth model) showed
+that widening for weak centroids raises the interference (4.7% → 6.3%) and lowers the co-elution (0.521 → 0.490),
+while narrowing for strong ones alone lowers the interference to 3.6% at the same capture (99.9%), co-elution (0.522)
+and dropouts (14.7%). With the cap, on DIA-NN's IDs at 9σ: Astral 01 co-elution 0.369 → 0.370, 02 0.289 → 0.291
+(`results/steps35/step5_astral0[12]_capped.tsv`). timsTOF keeps the widening (cap 3): its gain comes from it (dropouts
+25% → 8–10%).
+`-mz_tol_model intensity` is the default; without the measured mass correction (`-mz_calibration off`,
+`-scheme B`) or with too few calibration centroids (a warning) the tolerance is constant. The RT-window option of
+step 4 was removed. Still open: whether the better co-elution gives more identifications (a scoring step).

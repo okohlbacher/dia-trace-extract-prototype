@@ -50,10 +50,12 @@
 - **Generality:** ProteoBench diaPASEF (timsTOF SCP) runs end to end and agrees with DIA-NN 1.7.12 (on our mzML
   export) at equal tolerance as well as on Astral (docs/00-dossier.md §6). The MS1 disagreement (60%) is DIA-NN's
   export rule (uncorrected m/z, MS2 accuracy): 79% when emulated; closed. Mass model: offset + slope × m/z when
-  material (`calibration:mz_model`, 2026-10-12), which timsTOF MS1 needs (+15 ppm/kTh). Open: the
-  intensity dependence of the errors (weak centroids low, strong high, on both instruments) cannot be modelled
-  before extraction; it argues for the ID-screen multiples rather than the anchor width.
-- **Tolerance rule:** the trace-quality screen (dossier §7) gives MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
+  material (`calibration:mz_model`, 2026-10-12), which timsTOF MS1 needs (+15 ppm/kTh). The intensity dependence
+  of the fragment errors is modelled since 0.5.0 (`-mz_tol_model intensity`, docs/15 §8–9); MS1 not yet (timsTOF MS1
+  has too few calibration centroids for intensity bands).
+- **Tolerance rule:** with the intensity-dependent tolerance (0.5.0) the optima are 6σ (Astral) and 3σ (timsTOF),
+  chosen on run 01 / A01 and checked on run 02 / B01 (docs/15 §9); the defaults stay 9 / 4 because the calibration's
+  mass search scales with the same multiple (open: decouple it, then re-check the RT window). Before: the trace-quality screen (dossier §7) gave MS2 optima of 8–10σ (Astral) and 4–5σ (timsTOF),
   MS1 4σ on both; the multiples are set per instrument class (`-mz_accuracy_ms2`). Tried and rejected as a measured
   criterion (2026-10-12, `ODIA_PROFILE=1` prints the curves): the anchors' all-fragment co-elution curve, the same on
   the weaker half of the anchors, on the weak fragments only, and on both -- all rise monotonically to 8σ on
@@ -78,6 +80,10 @@
   Orbitrap Astral and the timsTOF are the only target instruments; no further ones are planned.
 
 ## Open
+- **Calibration search multiple:** the calibration narrows its mass search to 3 × the extraction multiple; decoupling
+  them would allow the intensity model's better multiples (6 / 3; docs/15 §9) without changing the RT window.
+- **Identifications from the intensity-dependent tolerance:** 0.5.0's traces co-elute better (timsTOF +14%); whether
+  that gives more or better IDs needs a scoring step on the traces (not in this tool).
 - **TOPPBase patch upstream:** `patches/openms-toppbase-deprecated-options.patch` (deprecated options, one-line
   unknown-option message, `--helphelp` listing) to be offered to OpenMS; not yet.
 - **Release signing** (waiting on secrets): the macOS `.pkg` is built and tested on every macOS build and published
@@ -90,6 +96,10 @@
 - Share the trace export (`benchmark-data/traces-v0.2.1`, 179 GB) and the results with the group.
 
 ## Done (recent)
+- **0.5.0 (2026-10-20; `docs/15-run-model-plan.md`):** the run model (RT error, peak width, m/z errors along RT and by
+  intensity) in the footer and `-out_stats`; the intensity-dependent fragment tolerance as the default (multiples
+  unchanged; only narrowing on Orbitraps, `mz_tol_intensity_max`); tried and dropped: the RT window from the run model, the calibration's whole-run pass in
+  RT segments.
 - **Laptop benchmark with V0.4.0** (2026-10-20, M4 Max, the Homebrew release, on mains; report §6): 6.3 s at 1 thread,
   0.68 s at 16 (V0.2.7: 6.2 / 0.70 s); the full 7 M library 21.0 s in 4.5 GiB with the measured window.
 - **0.4.0 (2026-10-19; `docs/13-scaling-and-memory.md`):** the scheduler beyond 64 threads (wake one worker instead

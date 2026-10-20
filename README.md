@@ -102,14 +102,18 @@ for output files.
   `$DIATRACEEXTRACTOR_INSTRUMENT_DIR` or the user directory (`~/.config/DIATraceExtractor/instruments`, macOS
   `~/Library/Application Support/DIATraceExtractor/instruments`, Windows `%APPDATA%\DIATraceExtractor\instruments`),
   where it replaces the shipped file of the same name or adds an instrument (keys `name`, `extends`, `aliases`, `keywords`,
-  `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`, `priority` for overlapping keywords; unknown or repeated keys, wrong types and
+  `mz_accuracy_ms2`, `mz_accuracy_ms1`, `rt_window_sigma`, `rt_window_fwhm`, `mz_tol_intensity_max`, `priority` for overlapping keywords; unknown or repeated keys, wrong types and
   values out of range are errors). Per value: the option given > the instrument's file > the files it extends >
   `default.yaml`. The log names the files used; the Parquet footer (`odia.instrument*`, `odia.value_sources`) and
   `-out_stats` record each value used with its source (`given`, `instrument-default:Astral`, `default`, `measured`).
 - **m/z:** the tolerances `-mz_tol_ms2`/`-mz_tol_ms1` (± ppm) are by default measured: `-mz_accuracy_ms2` and
   `-mz_accuracy_ms1` × the robust width of the mass errors (the instrument's multiples: Orbitrap and Astral 9, timsTOF
   and other TOFs 4, others 6 for fragments; 4 for MS1), with the measured offsets (and an m/z-dependent term when the data show one) corrected
-  (`-mz_calibration auto`; `off` uses `-mz_offset_ms2`/`-mz_offset_ms1`). `-scheme B` applies OpenSWATH's rules as one
+  (`-mz_calibration auto`; `off` uses `-mz_offset_ms2`/`-mz_offset_ms1`). The fragment tolerance is scaled per
+  centroid by the mass-error width at its intensity (`-mz_tol_model intensity`, default since 0.5.0, measured by the
+  calibration): strong centroids get down to half the tolerance, weak ones up to `mz_tol_intensity_max` times it (3 by
+  default; 1 for Orbitraps, where widening admitted interference); `-mz_tol_model constant` applies it unscaled (0.4.0's
+  traces). `-scheme B` applies OpenSWATH's rules as one
   preset (sum of the centroids, MS1 isotopes at unit spacing, every window containing the precursor, no mass
   correction). `-no_ms1` extracts fragments only; `-ms1_isotopes` (default 2) after the monoisotopic peak.
 - **Log:** one short line per stage (`Library:`, `Run grid:`, `Instrument:`, `Calibration:`, `Extraction:`,
@@ -118,7 +122,9 @@ for output files.
   calibration search, the scheduler, the files searched, every value with its source).
 - **Output:** `-out` is one Parquet file with one row per trace (MS2 rows on the global cycle axis, MS1 rows on the
   MS1 scans), written by 32 writers in parallel; the axes go to `<out stem>.axes.parquet`. `-out_tsv` writes a long
-  TSV, `-out_stats` a JSON summary, `-out_calibration` the calibration anchors.
+  TSV, `-out_stats` a JSON summary, `-out_calibration` the calibration anchors. The footer (`odia.run_model`) and
+  `-out_stats` also carry the run model: the RT error and peak width along the gradient and the m/z error width along
+  RT and by intensity, as measured by the calibration (`docs/15-run-model-plan.md`).
 
 ```python
 import numpy as np, pyarrow.parquet as pq

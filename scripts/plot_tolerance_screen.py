@@ -2,7 +2,8 @@
 """Plot scripts/tolerance_screen.py results for several instruments on one figure.
 
 usage: plot_tolerance_screen.py OUT_PREFIX LABEL=TSV[:diann_k] [LABEL=TSV[:diann_k] ...]
-  diann_k: DIA-NN's optimised accuracy in multiples of the same sigma (drawn as a marker).
+  diann_k: DIA-NN's optimised accuracy in multiples of the same sigma (drawn as a marker). One colour per instrument
+  (the label's first word); a label containing "constant" is drawn dashed.
 """
 import sys
 import numpy as np, pandas as pd
@@ -24,9 +25,11 @@ panels = [("coelution", "fragment co-elution (median mean pairwise r;\ndropped f
 colors = ["#1f6feb", "#d9480f", "#2a9d8f"]
 fig, axs = plt.subplots(1, len(panels), figsize=(4.0 * len(panels), 4.2))
 for ax, (col, title) in zip(axs, panels):
-    for (label, df, dk), c in zip(runs, colors):
+    inst = list(dict.fromkeys(label.split()[0] for label, _, _ in runs))   # one colour per instrument (first word)
+    for label, df, dk in runs:
+        c = colors[inst.index(label.split()[0]) % len(colors)]
         y = df[col] * (100 if col in ("dropouts", "offpeak") else 1)
-        ax.plot(df.k, y, marker="o", ms=4, lw=1.6, color=c, label=label)
+        ax.plot(df.k, y, marker="o", ms=4, lw=1.6, color=c, label=label, ls="--" if "constant" in label else "-")
         best = df.k.iloc[int(np.nanargmin(y) if col in ("dropouts", "offpeak") else np.nanargmax(y))]
         ax.axvline(6, color="#9aa4b2", lw=0.8, ls=":")
         if dk: ax.axvline(dk, color=c, lw=0.8, ls="--", alpha=0.7)
@@ -35,7 +38,7 @@ for ax, (col, title) in zip(axs, panels):
     ax.set_xscale("log", base=2); ax.set_xticks([1, 1.5, 2, 3, 4, 6, 8, 12]); ax.set_xticklabels(["1", "1.5", "2", "3", "4", "6", "8", "12"])
     ax.set_xlabel("tolerance (multiples of the measured width σ)"); ax.set_title(title, fontsize=9, loc="left"); ax.grid(alpha=0.3, lw=0.5)
     if col in ("dropouts", "offpeak"): ax.set_ylabel("%")
-axs[0].legend(fontsize=8, frameon=False, loc="lower right")
+axs[0].legend(fontsize=8, frameon=False, loc="upper left")
 fig.suptitle("Trace quality vs mass tolerance (MS2 and MS1 at the same k; numbers = MS2 half width in ppm; dotted = 6σ, dashed = DIA-NN's accuracy)",
              fontsize=9.5, x=0.01, ha="left")
 fig.tight_layout()
