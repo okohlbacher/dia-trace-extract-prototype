@@ -86,57 +86,45 @@ first map's window, not the final ones.
 - The timsTOF ingest (mzPeak read and mobility collapse, 19–25 s) is the largest serial-ish block of those runs.
 - A narrower window needs better library RTs (tuning), not a different estimator.
 
-## Two independent estimators along RT: peak width and RT error
+## Independent estimators of ΔRT and FWHM along the gradient
 
-The window combines two quantities that can be estimated separately, each as a function of run RT. From the anchors
-alone, as a running statistic over the 20% of anchors nearest in RT (a window that follows the anchor density;
-`results/rtwin/converge/estimators.py`):
+The two terms of the window, estimated separately and continuously along RT instead of in shared equal-count bins
+(`results/rtwin/estimators/estimators.py`): for each point of a fixed RT grid (5–95% of the anchors' RT), the 20% of
+the anchors nearest in RT (at least 15) give
 
-- **FWHM(RT)**: the median (and 90th percentile) of the anchors' peak FWHM. Measured until now in whole cycles (the
-  cycles of the summed fragment trace above half its apex), which on Astral is 1.65 s steps: the running median sat on
-  one or two values and could not show broadening. The anchors file (`-out_calibration`) now also carries
-  `fwhm_interp_s`, the half-apex crossings interpolated between cycles (in run time); the window itself still uses the
-  whole-cycle value, so no output changes.
-- **ΔRT(RT)**: the robust scatter (1.4826 MAD) and the 95th percentile of |ΔRT| of the anchors' apex RT about the RT
-  map.
+- **ΔRT robust scale**: 1.4826 × MAD of the residuals (apex RT − mapped library RT) about their running median;
+- **ΔRT tail**: the 99th percentile of |residual − running median|, the quantile a window has to cover, directly;
+- **FWHM**: the trimmed mean (25–75%) of the anchors' peak widths (a median steps with the cycle time, 1.65 s on Astral).
 
-Each is checked against an independent reference from DIA-NN's IDs at 1% FDR (45–73 k per configuration, against
-700–2,650 anchors): DIA-NN's peak extent RT.Stop − RT.Start (its boundaries, not a FWHM: compared in shape after one
-scale factor, 2.5–3.9 × the FWHM) and the scatter of DIA-NN's apex RT about our mapped RT.
+![ΔRT and FWHM along the gradient](figures/rt_estimators_curves.png)
 
-![Estimators along RT](figures/rt_estimators_along_rt.png)
+What they show: the peak width depends on RT (Astral: slow broadening, 2.4 → 2.7–3.3 s over the gradient with the
+tuned human library; timsTOF: 3.5 s, then down to 1 s at the gradient's end from 55 min, where ΔRT also falls from 45 to
+18 s); ΔRT is the larger term everywhere (scale 5–7 s with a tuned library, 22–32 s predicted, 18–53 s timsTOF). Among
+the anchors the tail is close to Gaussian (99th percentile = 2.2–2.7 × the robust scale; Gaussian: 2.58), yet the
+window needs 7 × the scale to contain 99.4% of DIA-NN's whole peaks: the identified precursors' RT errors have heavier
+tails than the anchors', which are the clean, high-scoring part of the panel. A window built on the anchors' 99th
+percentile would therefore be too narrow for the IDs, not just for the anchors.
 
-| configuration | FWHM(RT), anchors | DIA-NN extent, scaled | shape deviation | ΔRT σ, anchors vs DIA-NN | 95th percentile, anchors vs DIA-NN |
-|---|---|---|---|---|---|
-| Astral, tuned entrapment libraries | 2.5–3.4 s | 2.8–3.3 s | 3–5% | −6 to −18% | −17 to −28% |
-| Astral, tuned human libraries | 2.6–3.4 s | 2.9 s | 4–7% | −8 to −17% | −18 to −28% |
-| Astral, predicted libraries | 2.2–2.7 s | 2.5–2.6 s | 1–3% | +30 to +36% | −10 to +25% |
-| timsTOF A01/B01 | 1.2–3.7 s | 2.3–3.9 s | 3–4% | −7 to +5% | −13 to −31% |
-
-- **Peak broadening is real but small.** The interpolated FWHM follows DIA-NN's peak extents within 1–7% (median
-  over RT). On timsTOF it changes along the gradient (3.4–3.7 s, dropping to 1.2 s in the last minutes where the
-  gradient steepens); on Astral it varies by about a third, where DIA-NN's extent is nearly flat. Twice the FWHM is
-  2–13% of the window.
-- **The RT error is what matters, and the anchors are a biased sample of it.** With tuned libraries the anchors'
-  scatter is 6–18% below that of DIA-NN's IDs and their 95th percentile 17–31% below; with predicted libraries the
-  scatter is 30–36% above. Anchors are strong, clean peaks; the IDs include weak ones. The 7σ multiple was chosen on
-  the IDs' peaks and absorbs this.
-
-**Convergence** (random subsets of each configuration's anchors, 50 draws per size; deviation = median over RT of
-|estimate(n)/estimate(all) − 1|; median and range over the ten configurations):
+Convergence, random subsets of n anchors against the all-anchor curve on the grid, ten configurations, 100 draws:
 
 ![Estimator convergence](figures/rt_estimators_convergence.png)
 
-| anchors | FWHM median | FWHM 90th pct. | ΔRT σ | ΔRT 95th pct. |
-|---|---|---|---|---|
-| 25 | 6.3% | 9.1% | 23% | 15% |
-| 100 | 5.2% | 6.5% | 19% | 13% |
-| 200 | 3.5% | 4.5% | 14% | 8% |
-| 300 | 2.6% | 3.7% | 10% | 7% |
-| 500 | 1.8% | 2.1% | 7% | 4% |
-| 800 | 1.0% | 1.3% | 4% | 2.5% |
+| anchors | ΔRT robust scale | ΔRT 99th percentile | FWHM |
+|---|---|---|---|
+| 25 | 23% | 17% | 7.0% |
+| 100 | 18% | 12% | 5.6% |
+| 200 | 13% | 6.7% | 3.4% |
+| 300 | 10% | 4.6% | 2.6% |
+| 500 | 6.9% | 3.0% | 1.7% |
 
-The peak width converges about four times faster than the RT error: 100–200 anchors give FWHM(RT) to 5%, while
-ΔRT(RT) needs 500–800 for the same. So the estimators could be fed differently, the width from any well-shaped
-peaks (many more than anchors), the RT error from a sample representative of the IDs rather than of the cleanest
-peaks, but the window's width is the RT error's, and it is the RT error's sample that cannot shrink.
+(median deviation along RT, median configuration; above about half a configuration's anchors the subsets share most
+of the data with the full set, which flatters the agreement, so read n ≤ 300 as the fair range.) The FWHM converges
+fastest (peak widths vary little between peptides); ΔRT needs about 300 anchors for 10% (scale) or 5% (tail) along
+the gradient. The worst cases (90th-percentile draw of the worst configuration: 35–60% at 300 anchors) sit at the ends
+of the RT range, where the neighbourhood is one-sided and, on timsTOF, the width changes fastest.
+
+Consequences for the estimator: the FWHM could be estimated from far fewer anchors (or from every confidently
+detected peak) than ΔRT; ΔRT is the term that sets both the window and the number of anchors needed; and the anchors'
+own tail does not predict the identifications' tail, so the multiple (7) has to be calibrated against identifications
+(as it was, on the ten configurations), not derived from the anchors' distribution.
