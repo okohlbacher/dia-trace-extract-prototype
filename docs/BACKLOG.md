@@ -90,6 +90,8 @@
 - Share the trace export (`benchmark-data/traces-v0.2.1`, 179 GB) and the results with the group.
 
 ## Done (recent)
+- **Laptop benchmark with V0.4.0** (2026-10-20, M4 Max, the Homebrew release, on mains; report §6): 6.3 s at 1 thread,
+  0.68 s at 16 (V0.2.7: 6.2 / 0.70 s); the full 7 M library 21.0 s in 4.5 GiB with the measured window.
 - **0.4.0 (2026-10-19; `docs/13-scaling-and-memory.md`):** the scheduler beyond 64 threads (wake one worker instead
   of all; 192 threads 22.0 → 11.8 s, 384 threads 40.6 → 12.7 s); memory: no library-loading transient remains (the
   library is streamed; the 5.2 GiB peak of the 7 M library is working memory: run grid 1.1, Arrow pool with its 1 GiB
