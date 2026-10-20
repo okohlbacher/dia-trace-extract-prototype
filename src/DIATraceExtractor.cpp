@@ -9,6 +9,7 @@
 #include "Pipeline.h"
 #include "Profile.h"
 #include "RtMap.h"
+#include "RunModel.h"
 #include "RunGrid.h"
 #include "Scheduler.h"
 #include "TraceWriter.h"
@@ -831,6 +832,22 @@ protected:
     else if (mode == "anchors") { rt_map = ODIA::RtMap::fromAnchors(rt_anchors, "lowess"); }
     else { rt_map = std::move(cal->rt_map); }
     OPENMS_LOG_INFO << "RT map: " << rt_map.describe() << std::endl;
+    // The run model: RT error and peak width along the gradient from the anchors, about the map in use (RunModel.h);
+    // kept for downstream algorithms and recorded with the output. It does not change the extraction.
+    ODIA::RunModel run_model;
+    if (cal && rt_needed)
+    {
+      std::vector<double> mrt, mres, mfw;
+      for (const auto& a : cal->anchors) { if (a.used) { mrt.push_back(a.run_rt); mres.push_back(a.run_rt - rt_map(a.library_rt)); mfw.push_back(a.fwhm_s); } }
+      run_model = ODIA::estimateRunModel(mrt, mres, mfw);
+      if (g_debug && !run_model.empty())
+      {
+        const auto range = [](const std::vector<double>& v) { std::ostringstream o; o.precision(3); o << *std::min_element(v.begin(), v.end()) << "-" << *std::max_element(v.begin(), v.end()); return o.str(); };
+        OPENMS_LOG_INFO << "Run model: " << run_model.anchors << " anchors, " << run_model.neighbours << " per estimate; RT error scale "
+                        << range(run_model.drt_scale) << " s, 99th percentile " << range(run_model.drt_tail99) << " s, peak FWHM "
+                        << range(run_model.fwhm) << " s along " << run_model.rt.front() << "-" << run_model.rt.back() << " s" << std::endl;
+      }
+    }
 
     // --- extraction + export
     ODIA::ExtractOptions eopt;
@@ -968,6 +985,7 @@ protected:
                      {"scheme", S("scheme")}, {"aggregation", eopt.aggregate_sum ? "sum" : "max"},
                      {"rt_window_half_s", rt_window_text},
                      {"ms1_mapping", eopt.ms1_scan_axis ? "raw MS1 scans (axes lane -2)" : "linear interpolation of MS1 scans at cycle_rt"},
+                     {"run_model", run_model.empty() ? std::string() : run_model.json()},
                      {"instrument", inst.instrument}, {"instrument_run", grid.instrument}, {"instrument_files", inst.filesProvenance()},
                      {"value_sources", [&] { std::string t; for (const auto& v : sources) { t += (t.empty() ? "" : "; ") + v[0] + "=" + v[1] + " (" + v[2] + ")"; } return t; }()}};
     ODIA::TraceWriter writer(grid, wcfg);
@@ -1099,6 +1117,7 @@ protected:
          << "  \"mz_tol_ms1_ppm\": " << eopt.ms1_ppm << ",\n"
          << "  \"instrument\": {\"name\": \"" << escape(inst.instrument) << "\", \"run_metadata\": \"" << escape(grid.instrument)
          << "\", \"chosen\": \"" << escape(inst.how) << "\", \"files\": \"" << escape(inst.filesProvenance()) << "\"},\n"
+         << "  \"run_model\": " << (run_model.empty() ? std::string("null") : run_model.json()) << ",\n"
          << "  \"values\": {";
       for (std::size_t i = 0; i < sources.size(); ++i)
       {

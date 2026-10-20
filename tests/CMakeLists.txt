@@ -54,3 +54,8 @@ add_test(NAME spans_rt_dependent COMMAND DIATraceExtractor ${SPANS} -out spans_w
 set_tests_properties(spans_rt_dependent PROPERTIES ENVIRONMENT "ODIA_RT_WINDOW_TABLE=30:100,48:10")
 add_test(NAME spans_compare COMMAND ${PY} ${CMAKE_CURRENT_SOURCE_DIR}/check_spans.py spans_window.parquet spans_whole.parquet)
 set_tests_properties(spans_compare PROPERTIES DEPENDS "spans_whole_run;spans_rt_dependent")
+
+# The run model's running estimators on synthetic anchors with a known RT error and peak width along the gradient.
+add_executable(test_runmodel test_runmodel.cpp)
+target_link_libraries(test_runmodel PRIVATE odia_traces)
+add_test(NAME run_model COMMAND test_runmodel)

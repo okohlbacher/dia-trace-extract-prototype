@@ -59,7 +59,8 @@ add_library(odia_traces STATIC
   src/TraceWriter.cpp
   src/ParquetMerge.cpp
   src/Calibration.cpp
-  src/Instruments.cpp)
+  src/Instruments.cpp
+  src/RunModel.cpp)
 target_include_directories(odia_traces PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # mzPeak reader/writer: the mzpeak-openms library (git submodule external/mzpeak, tag partitioned-read-2026-10-11),
 # built here against the same Arrow as OpenMS. It needs Boost >= 1.89 with json and program_options, which the
