@@ -295,6 +295,18 @@ namespace ODIA
                         static_cast<std::uint8_t>(std::min<std::size_t>(present.size(), 255)),
                         static_cast<float>(corr), static_cast<float>(cosine), 0.0f, false};
           out.anchor.fwhm_s = static_cast<float>(out.fwhm_cycles * (C > 1 ? (g.cycle_rt[C - 1] - g.cycle_rt[0]) / static_cast<double>(C - 1) : 0.0));
+          {
+            // sub-cycle width: the half-apex crossings interpolated linearly between the cycles, in run time
+            const double half = 0.5 * sum[c];
+            const auto rtAt = [&](double x) {
+              const std::size_t i = std::min<std::size_t>(static_cast<std::size_t>(x), C - 1), j = std::min<std::size_t>(i + 1, C - 1);
+              return g.cycle_rt[i] + (x - static_cast<double>(i)) * (g.cycle_rt[j] - g.cycle_rt[i]);
+            };
+            double xl = static_cast<double>(l), xr = static_cast<double>(r);
+            if (l > 0 && sum[l] > sum[l - 1]) { xl = static_cast<double>(l - 1) + (half - sum[l - 1]) / (sum[l] - sum[l - 1]); }
+            if (r + 1 < C && sum[r] > sum[r + 1]) { xr = static_cast<double>(r) + (sum[r] - half) / (sum[r] - sum[r + 1]); }
+            out.anchor.fwhm_interp_s = static_cast<float>(rtAt(xr) - rtAt(xl));
+          }
         }
       }
       if (!out.accepted || crit.decoy_shift_th != 0) { return out; }
@@ -942,12 +954,12 @@ namespace ODIA
   {
     std::ofstream out(filename);
     if (!out) { throw std::runtime_error("cannot write " + filename); }
-    out << "library_rt\trun_rt\tprecursor_id\tapex_cycle\tcorrelation\tlibrary_cosine\tresidual\tused\tfwhm_s\n";
+    out << "library_rt\trun_rt\tprecursor_id\tapex_cycle\tcorrelation\tlibrary_cosine\tresidual\tused\tfwhm_s\tfwhm_interp_s\n";
     out.precision(10);
     for (const auto& a : r.anchors)
     {
       out << a.library_rt << '\t' << a.run_rt << '\t' << lib.precursor_id[a.precursor] << '\t' << a.apex_cycle << '\t'
-          << a.correlation << '\t' << a.cosine << '\t' << a.residual << '\t' << (a.used ? 1 : 0) << '\t' << a.fwhm_s << '\n';
+          << a.correlation << '\t' << a.cosine << '\t' << a.residual << '\t' << (a.used ? 1 : 0) << '\t' << a.fwhm_s << '\t' << a.fwhm_interp_s << '\n';
     }
   }
 }
