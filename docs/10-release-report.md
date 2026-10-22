@@ -1,6 +1,6 @@
-# DIATraceExtractor V0.5.0: release report (2026-10-20)
+# DIATraceExtractor V0.5.1: release report (2026-10-22)
 
-**Versions.** This report accompanies release **V0.5.0** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
+**Versions.** This report accompanies release **V0.5.1** of `DIATraceExtractor` (okohlbacher/dia-trace-extract-prototype).
 Until V0.5.0 the extraction had not changed since V0.2 (commit 663dc39 = cb466f0 + the report); V0.2.1–V0.2.7 added the
 `-scheme B` preset, macOS and Windows support, three defect fixes, a faster mzML ingest (V0.2.7: positional reads
 and an unbounded in-order commit, output byte-identical) and this report's corrections; V0.2.8–V0.2.14 changed no
@@ -17,7 +17,8 @@ the extraction wrote past the end of some traces (timsTOF A01; see below). V0.4.
 command-line review (options without effect named in one warning; output-path collisions an error;
 `docs/cli-review-0.3/`), and the option names of 0.2.14 removed (Appendix A, `CHANGELOG.md`). V0.5.0: the fragment
 tolerance depends on the centroid's intensity (§2, §5), and the run model, what the calibration measured about the
-run along the gradient and by intensity, is kept in the output (`docs/15-run-model-plan.md`).
+run along the gradient and by intensity, is kept in the output (`docs/15-run-model-plan.md`). V0.5.1 changes no
+code: the Mac series (§6, a MacBook Pro and a Mac Studio) and the thread-scaling figure with V0.5.0's runs.
 **V0.3.0 changes no measurement here except timsTOF A01:** its traces at the defaults differ from V0.2.16's in 59,948
 of 404,764 (DIA-NN's IDs; the cells V0.2.16 overwrote), with the agreement with DIA-NN unchanged to the fourth decimal;
 B01 and every Astral output are identical to V0.2.16's, and A01's output is now identical across repeats and thread
@@ -506,10 +507,10 @@ costs.
 
 ## Appendix A: repository and installation
 
-**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.5.0`. History: V0.2 (663dc39) the
+**Repository.** https://github.com/okohlbacher/dia-trace-extract-prototype, tag `V0.5.1`. History: V0.2 (663dc39) the
 extraction as benchmarked; V0.2.1 the `-scheme` preset; V0.2.2 macOS portability; V0.2.3 the `--help` and exit-time
 fixes (laptop branch); V0.2.4 the one-thread ingest fix and the laptop results; V0.2.5 the report's version stamp; V0.2.6 release packages for Linux, macOS and Windows (platform layer, release CI); V0.2.7 the mzML ingest with positional reads and an unbounded in-order commit, and the re-measured §6; V0.2.8 release builds for five platforms; V0.2.9 self-contained Windows packages (x86_64, arm64); V0.2.10 a relocatable macOS package; V0.2.11 the first macOS package signed with the project's Developer ID and notarized, and every cluster measurement re-run; V0.2.12 continuous integration on pushes and pull requests, checksums and provenance attestations for the release files; V0.2.13 the disk image's stapling retried, this report published by the workflow; V0.2.14 the macOS package runs when installed through Homebrew (library validation off, as Homebrew re-signs the bundled libraries; the build's absolute rpaths removed, which had loaded Homebrew's libomp next to the bundled one), checked in CI; V0.2.15 the command line reviewed (adversarially, with two other models): the RT map fitted from the run, all cores up to 64 and an RT window measured along the gradient by default, a warning for a wrong RT scale, one Parquet file per run, consistent option names, 13 basic options, parity switches folded into `-scheme B`, and every cluster measurement re-run. V0.2.16 the physical cores by default, the RT-window multiple from all benchmark data (7σ), the 0.2.14 option names accepted again until 0.4, the peptide-decoy experiment, a macOS `.pkg` built and tested (published once signed), the Homebrew tap updated by the workflow (once its deploy key is set). V0.3.0 the instrument defaults as data files (`-instrument`, `-instrument_file`), value sources in the output, a shorter log, the TOPPBase patch (one-line unknown-option message, `-write_ini` on the current names), and the fix of the merge join for RT windows that shrink faster than the RT grows. V0.4.0 the scheduler beyond 64 threads, the TSV output's memory, the user's own instrument files, the second command-line review and the 0.2.14 option names removed. V0.5.0 the intensity-dependent fragment tolerance
-by default and the run model in the output. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
+by default and the run model in the output; V0.5.1 the Mac series and figures of this report. The mzPeak reader is the submodule `external/mzpeak` (okohlbacher/mzpeak-openms, tag
 `partitioned-read-2026-10-11`); the library generator is okohlbacher/DIALibGen (0.11.0, commit 6f26790 on branch
 `compact-parquet-plain-strings`, which also carries the build fix for current OpenMS develop).
 
@@ -522,7 +523,7 @@ The GitHub release carries self-contained folders with the tool, the libraries i
 
 | platform | package | run |
 |---|---|---|
-| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.5.0-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
+| Linux x86_64, aarch64 (glibc ≥ 2.39) | `DIATraceExtractor-0.5.1-linux-<arch>.tar.gz` | `bin/DIATraceExtractor` |
 | macOS Apple silicon | `…-macos-arm64.tar.gz`, `.dmg` | `bin/DIATraceExtractor` |
 | Windows x86_64, arm64 | `…-windows-<arch>.zip` | `bin\DIATraceExtractor.exe` |
 
@@ -545,7 +546,7 @@ it). Python 3 with pyarrow, pandas, numpy and matplotlib (`tools/pyenv` here) fo
 
 ```bash
 git clone https://github.com/okohlbacher/dia-trace-extract-prototype.git && cd dia-trace-extract-prototype
-git checkout V0.5.0
+git checkout V0.5.1
 git submodule update --init
 # OpenMS develop, built with its vcpkg manifest (here at OpenMS/OpenMS-build via `cmake --preset linux-x64-release`)
 O=$PWD/OpenMS/OpenMS-build

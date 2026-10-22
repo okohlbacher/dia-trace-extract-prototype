@@ -9,17 +9,17 @@ OpenSwathWorkflow (extraction + scoring)	8	188.570	567.960	11.105
 OpenSwathWorkflow (extraction + scoring)	16	182.980	708.870	11.513
 OpenSwathWorkflow (extraction + scoring)	32	182.610	1075.380	12.341
 OpenSwathWorkflow (extraction + scoring)	64	182.280	2082.070	14.088
-ours A (V0.2 defaults)	1	12.620	13.070	2.399
-ours A (V0.2 defaults)	2	7.670	14.980	2.402
-ours A (V0.2 defaults)	4	4.130	14.820	2.455
-ours A (V0.2 defaults)	8	2.530	15.510	2.486
-ours A (V0.2 defaults)	16	1.730	16.490	2.530
-ours A (V0.2 defaults)	32	1.370	17.700	2.656
-ours A (V0.2 defaults)	64	1.340	20.240	2.733
-ours B (OpenSWATH rules)	1	12.200	12.580	2.483
-ours B (OpenSWATH rules)	2	7.200	13.950	2.497
-ours B (OpenSWATH rules)	4	3.830	13.500	2.540
-ours B (OpenSWATH rules)	8	2.430	14.660	2.562
-ours B (OpenSWATH rules)	16	1.700	15.880	2.595
-ours B (OpenSWATH rules)	32	1.380	18.920	2.711
-ours B (OpenSWATH rules)	64	1.330	19.850	2.772
+ours A (defaults)	1	12.740	13.130	2.416
+ours A (defaults)	2	7.130	13.830	2.423
+ours A (defaults)	4	4.150	14.890	2.430
+ours A (defaults)	8	2.540	15.550	2.492
+ours A (defaults)	16	1.720	16.740	2.543
+ours A (defaults)	32	1.320	17.680	2.676
+ours A (defaults)	64	1.320	20.060	2.705
+ours B (OpenSWATH rules)	1	12.150	12.480	2.486
+ours B (OpenSWATH rules)	2	6.730	13.050	2.492
+ours B (OpenSWATH rules)	4	3.800	13.470	2.526
+ours B (OpenSWATH rules)	8	2.350	14.220	2.581
+ours B (OpenSWATH rules)	16	1.630	15.550	2.614
+ours B (OpenSWATH rules)	32	1.280	17.080	2.696
+ours B (OpenSWATH rules)	64	1.240	18.750	2.764

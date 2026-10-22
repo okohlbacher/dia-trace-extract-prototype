@@ -3,6 +3,12 @@
 Behaviour changes a user must know about, in plain words. Releases before 0.3.0 are summarised in
 `docs/10-release-report.md` (Appendix A and the repository paragraph).
 
+## 0.5.1 (2026-10-22)
+
+- No change to the tool. The release report adds the Mac series with the V0.5.0 release: MacBook Pro M4 Max (as fast
+  as 0.4.0) and Mac Studio M3 Ultra (0.66 s for the benchmark run at 32 threads, the 7 M library in 11.2 s; the
+  intensity-dependent tolerance costs 0.5% there), and the thread-scaling figure from V0.5.0's runs.
+
 ## 0.5.0 (2026-10-20)
 
 - **The fragment tolerance depends on the centroid's intensity (default):** the calibration measures the fragment

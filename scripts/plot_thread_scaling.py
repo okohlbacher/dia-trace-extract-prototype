@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 bench, out = sys.argv[1], sys.argv[2]
 TOOLS = [("diann/diann", "DIA-NN 1.7.12 (search + XIC export)", "#2a9fd6", "o"),
-         ("odiaA", "ours A (V0.2 defaults)", "#023e8a", "s"),
+         ("odiaA", "ours A (defaults)", "#023e8a", "s"),
          ("odiaB", "ours B (OpenSWATH rules)", "#9c4a00", "D"),
          ("osw", "OpenSwathWorkflow (extraction + scoring)", "#f4a261", "^")]
 
@@ -56,7 +56,8 @@ axs[1].set_title("Scaling: (T(t0)·t0) / (T(t)·t)", loc="left", fontsize=10)
 axs[2].set_ylabel("peak RSS (GiB)"); axs[2].set_ylim(0, None); axs[2].set_title("Peak memory", loc="left", fontsize=10)
 axs[1].legend(fontsize=7.5, frameon=False, loc="lower left")
 fig.suptitle("Trace extraction runtime vs threads: run 01 (5.8 GB mzML), shared tuned library (82,333 precursors, all fragments), "
-             "one run per point, shared node", fontsize=10, x=0.01, ha="left")
+             "one run per point, shared node" + (f"; {os.environ['ODIA_VERSION_NOTE']}" if os.environ.get("ODIA_VERSION_NOTE") else ""),
+             fontsize=10, x=0.01, ha="left")
 fig.tight_layout()
 for ext in ("png", "pdf"): fig.savefig(f"{out}.{ext}", dpi=170)
 with pd.option_context("display.width", 200): print(df.to_string(index=False))

@@ -37,7 +37,7 @@ axs[0].set_yscale("log"); axs[0].set_ylabel("wall time (s, log)"); axs[0].set_ti
 axs[1].set_ylabel("peak RSS (GiB)"); axs[1].set_ylim(0, None); axs[1].set_title("Peak memory", loc="left", fontsize=10)
 axs[0].legend(fontsize=7, frameon=False, loc="center right", bbox_to_anchor=(1.0, 0.42))
 fig.suptitle("Run 01, shared library (82,333 precursors, all fragments): 2 x EPYC 9654 node (solid), MacBook Pro M4 Max (dashed), Mac Studio M3 Ultra (dotted)\n"
-             "node: thread_scaling.tsv; Macs: V0.5.0 from Homebrew, mains power, mean of two repeats; OpenSWATH on the laptop 2026-10-13", fontsize=9, x=0.01, ha="left")
+             "node: V0.5.0 (thread_scaling.tsv); Macs: V0.5.0 from Homebrew, mains power, mean of two repeats; OpenSWATH on the laptop 2026-10-13", fontsize=9, x=0.01, ha="left")
 fig.tight_layout()
 for ext in ("png", "pdf"): fig.savefig(f"{out}.{ext}", dpi=170)
 print(lap.to_string(index=False))
