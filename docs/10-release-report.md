@@ -47,8 +47,8 @@ benchmark's shared settings (Appendix C) its Astral traces are bit-identical to 
 galleries and the §4 rule emulation were computed, and its calibration reproduces the offsets and widths used there,
 so those carry over unchanged. Results that moved since V0.2: the A-V0.1 and P rows of §3 (re-extracted with the
 current calibration, ±0.6 points), the diaPASEF defaults (the m/z-dependent MS1 model, V0.2.2, and the measured RT
-window, V0.2.15, 7σ from V0.2.16; §3), and the speed of the default settings (§6). The laptop series (§6) is V0.4.0's release binary
-(2026-10-20), next to V0.2.7's.
+window, V0.2.15, 7σ from V0.2.16; §3), and the speed of the default settings (§6). The Mac series (§6) are V0.5.0's release binary on a MacBook Pro
+(M4 Max) and a Mac Studio (M3 Ultra), 2026-10-22, next to V0.4.0's on the MacBook.
 
 **What it is.** `DIATraceExtractor` is an OpenMS TOPP tool (C++23, OpenMS develop) that extracts DIA fragment and
 precursor-isotope traces (XICs) from a predicted spectral library and writes them as Parquet or TSV. It calibrates
@@ -431,29 +431,39 @@ extraction 32–36 s (V0.4.0: 28–33 s): the weak centroids' wider window holds
 44 s (extraction 12 s, `results/v0.2.11/diapasef/`). The peak falls in the ingest, while the
 calibration panel is extracted concurrently, and varies between runs (13.5–16.5 GiB over the archived runs).
 
-**On a laptop** (MacBook Pro, Apple M4 Max: 12 performance + 4 efficiency cores, no SMT, 128 GiB, macOS 26.6,
-inputs on the internal SSD; Appendix C; not re-run for V0.5.0, whose speed on the node is V0.4.0's). Same run and shared library, mean of two repeats on mains power: the
-V0.4.0 release installed with Homebrew (2026-10-20, `results/macos-benchmark/v0.4.0/`) and, in parentheses, the V0.2.7
-binary built on the laptop (318e5aa, `results/macos-benchmark/v0.2.7/`); repeats within 2% except 1 thread (10%):
+**On a laptop and a Mac Studio.** MacBook Pro, Apple M4 Max (12 performance + 4 efficiency cores, no SMT, 128 GiB,
+macOS 26.6), and Mac Studio, Apple M3 Ultra (24 + 8 cores, 256 GiB, macOS 27.0; idle: no model loaded in its Ollama, no
+agent turn running), inputs on the internal SSD (Appendix C). Same run and shared library, the V0.5.0 release installed
+with Homebrew, mean of two repeats on mains power (2026-10-22; `results/macos-benchmark/v0.5.0/`,
+`results/macos-benchmark/studio-v0.5.0/`); on the MacBook, in parentheses, V0.4.0 (2026-10-20,
+`results/macos-benchmark/v0.4.0/`); repeats within 5%:
 
 ![Cluster vs laptop](figures/machine_scaling.png)
 
-| threads | ours A, V0.4.0 (V0.2.7) | ours B, V0.4.0 (V0.2.7) | OpenSwathWorkflow |
-|---|---|---|---|
-| 1 | 6.3 s (6.2 s) / 2.0 GiB | 5.8 s (5.9 s) / 2.1 GiB | – |
-| 2 | 3.2 s (3.2 s) | 3.0 s (3.1 s) | – |
-| 4 | 1.7 s (1.7 s) | 1.6 s (1.6 s) | – |
-| 8 | 0.95 s (0.94 s) | 0.90 s (0.89 s) | – |
-| 12 (performance cores) | 0.74 s (0.74 s) | 0.68 s (0.69 s) | – |
-| 16 | 0.68 s (0.70 s) / 2.2 GiB | 0.65 s (0.66 s) / 2.3 GiB | 120 s / 12.8 GiB (2026-10-13) |
+| threads | MacBook, ours A, V0.5.0 (V0.4.0) | MacBook, ours B, V0.5.0 (V0.4.0) | Mac Studio, ours A | Mac Studio, ours B |
+|---|---|---|---|---|
+| 1 | 6.2 s (6.3 s) / 2.0 GiB | 5.7 s (5.8 s) / 2.1 GiB | 7.3 s / 2.0 GiB | 6.7 s / 2.1 GiB |
+| 2 | 3.2 s (3.2 s) | 3.0 s (3.0 s) | 3.7 s | 3.5 s |
+| 4 | 1.7 s (1.7 s) | 1.6 s (1.6 s) | 2.1 s | 2.0 s |
+| 8 | 0.94 s (0.95 s) | 0.88 s (0.90 s) | 1.16 s | 1.09 s |
+| 12 / 16 | 0.73 / 0.69 s (0.74 / 0.68 s) / 2.2 GiB | 0.68 / 0.66 s (0.68 / 0.65 s) / 2.3 GiB | – / 0.74 s | – / 0.70 s |
+| 24 / 32 | – | – | 0.66 / 0.66 s / 2.3 GiB | 0.61 / 0.61 s / 2.4 GiB |
 
-The release binary (signed, its libraries bundled) is as fast as the one built on the laptop at every thread
-count. (A V0.3.0 series on battery, 2026-10-19, `results/macos-benchmark/v0.3.0/`, was up to 25% slower in its first
-repeats.) The full 7.0 M-precursor library takes 20.6–21.3 s at 16 threads in 4.5 GiB with the measured RT window
-(±99–185 s; extraction 16.3 s at 14 active cores), against 14.2–15.3 s in 4.0 GiB with V0.2.7's fixed ±60 s: the wider
-window extracts two to three times as many cycles, as on the node (§6 full libraries). Per core the laptop is the
-faster machine, and in absolute terms it matches the node: 0.68 s at 16 cores against 1.3 s at 64 threads on the
-node (OpenSWATH: 120 s against 183 s); ours A speeds up 9.3× (V0.2.7: 8.9×) from 1 to 16 threads.
+OpenSwathWorkflow took 120 s in 12.8 GiB at 16 threads on the MacBook (2026-10-13). V0.5.0 runs as fast as V0.4.0 on
+the MacBook at every thread count. (A first V0.5.0 series on 2026-10-21 was 3× slower from 4 threads up at the same
+instruction count, with 4.5 instead of 12 cores busy: the laptop was throttled or busy, `results/macos-benchmark/v0.5.0-throttled/`;
+a V0.3.0 series on battery was up to 25% slower.) The M3 Ultra is slower per core than the M4 Max (7.3 s against
+6.2 s at 1 thread) and reaches the same 0.6–0.7 s floor at 24–32 threads, where start-up and the serial parts dominate.
+
+**The full 7.0 M-precursor library** at the physical core count with the measured RT window (±99–185 s): 11.2 s in
+4.8 GiB on the Mac Studio (32 threads), faster than the node at 64 threads (12.4 s); on the MacBook 31.9–33.9 s in 4.4
+GiB (16 threads), against V0.4.0's 20.6–21.3 s. The MacBook runs retired 2% more instructions than V0.4.0's but kept only
+9 cores busy in the extraction (918% CPU, V0.4.0 1402%); on the Studio the intensity-dependent tolerance cost 0.5% in an
+alternating A/B (`-mz_tol_model constant` / `intensity`, three pairs: extraction 8.40–8.45 / 8.47–8.50 s,
+`results/macos-benchmark/studio-v0.5.0/ab_v050_studio.log`), so the MacBook's full-library slowdown is not the new
+rule; an alternating A/B on the MacBook is open. Per core the Macs are the faster machines, and in absolute terms they
+match or beat the node: 0.66–0.69 s at 16–32 cores against 1.3 s at 64 threads on the node (OpenSWATH: 120 s against
+183 s); ours A speeds up 8.9× from 1 to 16 threads on the MacBook and 11× from 1 to 32 on the Studio.
 
 The laptop's V0.2.3 series (3.3 s at 16 threads, 41 s at 1 thread, 19–23 s of system time) exposed what V0.2.7
 fixes (`12-macos-benchmark-note.md`): libc++'s `ifstream::read` refills a 4 KiB buffer with one `read()` per
@@ -704,8 +714,11 @@ $X -in $M -lib $S/input/proteobench_entrapment_astral_nce25_v0.11.1_tuned_run01.
 
 The laptop series (`scripts/bench_macos.sh bench`; `OMP_WAIT_POLICY=PASSIVE`; machine:
 `docs/12-macos-benchmark-note.md`) ran the thread-series commands with `$t` in 1 2 4 8 12 16 and the full library at
-16 threads, on mains power: V0.4.0 as released through Homebrew (`X=$(brew --prefix)/bin/DIATraceExtractor bash
-bench_macos.sh bench`; `results/macos-benchmark/v0.4.0/`, `docs/figures/laptop_m4max_v040_summary.tsv`; V0.3.0 on battery:
+16 threads, on mains power: V0.5.0 as released through Homebrew (`X=$(brew --prefix)/bin/DIATraceExtractor bash
+bench_macos.sh bench`; `results/macos-benchmark/v0.5.0/`, `docs/figures/laptop_m4max_v050_summary.tsv`), the same on
+the Mac Studio with `$t` in 1 2 4 8 16 24 32 and the full library at 32 threads (`CLUSTER=` with the inputs copied from
+the laptop; `results/macos-benchmark/studio-v0.5.0/`, `docs/figures/studio_m3ultra_v050_summary.tsv`, the A/B in
+`ab_v050_studio.log`), V0.4.0 (`v0.4.0/`, `docs/figures/laptop_m4max_v040_summary.tsv`; V0.3.0 on battery:
 `v0.3.0/`, `docs/figures/laptop_m4max_v030_summary.tsv`) and V0.2.7 = 318e5aa built on the laptop (`results/macos-benchmark/v0.2.7/`, `docs/figures/laptop_m4max_summary.tsv`). The
 OpenSwathWorkflow run is from 2026-10-13 (`RUN_OSW=1`).
 
